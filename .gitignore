@@ -1,0 +1,25 @@
+# secrets and credentials
+.env
+.env.*
+*.pem
+*.key
+id_ed25519*
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# build and sim artifacts
+build/
+install/
+log/
+*.log
+slurm-*.out
+slurm-*.err
+out/
+
+# os
+Thumbs.db
+.DS_Store
