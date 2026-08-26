@@ -20,7 +20,9 @@ Day 1, 26 August. Planning is done and the environment is most of the way up. No
 
 **Decided and locked** in [stage-1/decisions.md](stage-1/decisions.md): WSL2 Ubuntu 22.04 with ROS 2 Humble, PX4 v1.15 and Gazebo Classic; the comms layer gates at the ROS 2 application layer; solo entry at 4 to 6 hours a day; 4 vehicles.
 
-**Installed and working:** Ubuntu 22.04.5 under WSL2, user `kartik` with passwordless sudo, ROS 2 Humble desktop, Gazebo Classic 11.10.2. PX4 v1.15.4 was cloning when this was written; the uXRCE-DDS bridge and the px4_msgs workspace come after it.
+**Installed and checked:** Ubuntu 22.04.5 under WSL2, user `kartik` with passwordless sudo, ROS 2 Humble desktop, Gazebo Classic 11.10.2 with `gzserver` and `gzclient` present. PX4 v1.15.4 is cloned and building; the uXRCE-DDS bridge and the px4_msgs workspace come after it.
+
+WSLg works. `DISPLAY=:0` and `WAYLAND_DISPLAY=wayland-0` are both set, so the demo video has a path.
 
 **The plan is now built for the loop.** Five weeks, each ending in gate commands that exit 0 or do not. Config at [.claude/weekly-loop.md](.claude/weekly-loop.md).
 
@@ -59,10 +61,12 @@ Flight is 25% and the tooling hands it to you. Budget one week on flight and two
 
 ## What's not done, in order of risk
 
-1. **Whether Gazebo can run here at all.** Running the `gazebo` binary under WSL2 kills the entire distribution. `gazebo --version` is enough to do it: dmesg shows a dxg ioctl failure, then "Init has exited. Terminating distribution", and every shell in the distro dies. The setup scripts now avoid the binary and ask dpkg instead. But `gzserver`, the headless server PX4 SITL actually drives, has not been tested, and if it goes the same way then W1 has no simulator and the plan gets rebuilt on Docker or another backend. **Test gzserver before anything else.**
-2. **Round 2 of the plan review.** The plan has never been read by anything except its author. Rereading it once already turned up two gate thresholds that were wrong.
-3. **The rest of the environment.** PX4 build and the ROS 2 bridge, both mid-flight.
+1. **Round 2 of the plan review.** The plan has never been read by anything except its author. Rereading it once already turned up two gate thresholds that were wrong, one of which would have failed a correct implementation. Prompt is in [_codex-review-prompt.md](_codex-review-prompt.md); run it before any code gets written.
+2. **The rest of the environment.** The PX4 build and the ROS 2 bridge. Neither has completed once.
+3. **Recording the video.** The `gazebo` GUI binary takes the distro down, so the one thing still blocked is the part that needs a picture. `gzclient` is installed and untested. Deal with it well before 20 September, and keep the headless fallback.
 4. **The organiser email.** Drafted in [stage-1/organiser-email.md](stage-1/organiser-email.md), not sent.
+
+Closed on 26 August: whether Gazebo runs here at all. `gzserver` starts headless, stays up, survives the dxg ioctl failures that fill dmesg, and leaves the distro alone. Only the GUI-side binary is dangerous, so every gate in the plan can run headless.
 
 ## Running it, once there is anything to run
 
@@ -126,8 +130,9 @@ Carried from the Vaani and Adversarial IDS handoffs, same servers:
 
 ## Honest gaps
 
-- **gzserver is untested.** See risk 1. Everything downstream assumes a simulator nobody has proven will start.
 - Steps 04 and 05 of the setup have never completed. The px4_msgs `release/1.15` branch, the XRCE agent tag and the PX4 build itself are documentation rather than observed fact.
+- Nothing has flown. `gzserver` starting on an empty world is a long way from 4 PX4 instances airborne together, which is what the W1 gate actually asks for.
+- Package version checks were treating packages apt merely knows about as installed, so `verify.sh` passed for hours on a machine with no simulator binaries. Every gate from here asserts on artifacts, not on metadata. Assume the same class of mistake is hiding somewhere else.
 - Every threshold in the plan gates was chosen by its author. `coverage_fraction>=0.95` and `time_to_reconnect_s<=30` were never derived from anything, and the reconnect budget has to cover neighbour timeout plus election plus flight time before it means much.
 - WSLg has never produced a display here. Headless carries the work but not the demo video, and that needs sorting before 20 September.
 - Round 2 of the plan cross-check, by Codex, has not run.
