@@ -39,6 +39,21 @@ wait_for_net() {
   die "cannot resolve ${host}. If Docker Desktop just started or stopped, that is the usual cause; wsl --shutdown and try again."
 }
 
+# Always source ROS setup files through this. They read unbound variables by
+# design (AMENT_TRACE_SETUP_FILES and friends), so sourcing one under `set -u`
+# kills the script on the spot. Bit both 05-ros2-bridge.sh and verify.sh.
+source_ros_file() {
+  local f="$1"
+  [ -f "$f" ] || die "expected a ROS setup file at ${f}"
+  local had_u=0
+  case "$-" in *u*) had_u=1 ;; esac
+  set +u
+  # shellcheck disable=SC1090
+  source "$f"
+  [ "$had_u" -eq 1 ] && set -u
+  return 0
+}
+
 require_jammy() {
   . /etc/os-release
   [ "${VERSION_CODENAME:-}" = "jammy" ] || die "expected Ubuntu 22.04 (jammy), found ${VERSION_CODENAME:-unknown}"

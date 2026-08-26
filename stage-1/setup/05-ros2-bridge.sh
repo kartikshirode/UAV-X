@@ -62,10 +62,11 @@ clone_px4_repo px4_msgs px4_msgs
 clone_px4_repo px4_ros_com px4_ros_com
 
 cd "$WS_DIR"
-# shellcheck disable=SC1090
-source "/opt/ros/${ROS_DISTRO_NAME}/setup.bash"
+source_ros_file "/opt/ros/${ROS_DISTRO_NAME}/setup.bash"
 say "colcon build"
 colcon build --symlink-install || die "colcon build failed"
+
+[ -f "$WS_DIR/install/setup.bash" ] || die "colcon reported success but produced no install/setup.bash"
 
 if ! grep -q "source ${WS_DIR}/install/setup.bash" "$HOME/.bashrc"; then
   echo "source ${WS_DIR}/install/setup.bash" >> "$HOME/.bashrc"

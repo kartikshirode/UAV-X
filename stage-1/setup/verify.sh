@@ -47,8 +47,7 @@ check "ubuntu 22.04 jammy" test "${VERSION_CODENAME:-}" = jammy
 
 say "ros 2"
 if [ -f "/opt/ros/${ROS_DISTRO_NAME}/setup.bash" ]; then
-  # shellcheck disable=SC1090
-  source "/opt/ros/${ROS_DISTRO_NAME}/setup.bash"
+  source_ros_file "/opt/ros/${ROS_DISTRO_NAME}/setup.bash"
 fi
 check "ros-${ROS_DISTRO_NAME} installed" test -f "/opt/ros/${ROS_DISTRO_NAME}/setup.bash"
 check "ros2 cli"                          command -v ros2
@@ -82,8 +81,7 @@ say "ros 2 bridge"
 check "MicroXRCEAgent"   command -v MicroXRCEAgent
 check "workspace built"  test -f "$WS_DIR/install/setup.bash"
 if [ -f "$WS_DIR/install/setup.bash" ]; then
-  # shellcheck disable=SC1090
-  source "$WS_DIR/install/setup.bash"
+  source_ros_file "$WS_DIR/install/setup.bash"
   check "px4_msgs on the path" bash -c 'ros2 interface list 2>/dev/null | grep -q px4_msgs'
 fi
 
