@@ -10,10 +10,10 @@ if already_did bridge; then say "bridge already done, skipping"; exit 0; fi
 wait_for_net github.com
 
 if ! command -v MicroXRCEAgent >/dev/null 2>&1; then
-  say "building the Micro XRCE-DDS Agent at ${XRCE_TAG}"
+  say "building the Micro XRCE-DDS Agent at $(lock xrce_agent_tag)"
   SRC="$HOME/src/Micro-XRCE-DDS-Agent"
   mkdir -p "$HOME/src"
-  [ -d "$SRC/.git" ] || git clone -b "$XRCE_TAG" https://github.com/eProsima/Micro-XRCE-DDS-Agent.git "$SRC"
+  checkout_locked https://github.com/eProsima/Micro-XRCE-DDS-Agent.git     "$SRC" "$(lock xrce_agent_sha)" "XRCE agent"
 
   # The agent's superbuild clones Fast DDS and Fast CDR at refs hard-coded in
   # its CMakeLists. eProsima deletes old maintenance branches, so a pin that
@@ -50,18 +50,10 @@ say "ros2 workspace at ${WS_DIR}"
 mkdir -p "$WS_DIR/src"
 cd "$WS_DIR/src"
 
-clone_px4_repo() {
-  local repo="$1" dir="$2"
-  [ -d "$dir/.git" ] && { say "$dir already cloned"; return 0; }
-  # The release branch tracks the matching PX4 version. Fall back to main if it is absent.
-  git clone -b release/1.15 "https://github.com/PX4/${repo}.git" "$dir" 2>/dev/null || {
-    warn "release/1.15 not found for ${repo}, falling back to main. Message definitions may drift from PX4 v1.15."
-    git clone "https://github.com/PX4/${repo}.git" "$dir"
-  }
-}
-
-clone_px4_repo px4_msgs px4_msgs
-clone_px4_repo px4_ros_com px4_ros_com
+# Exact commits, and no fallback to main. A fallback means a fresh install can
+# silently build different message definitions than every result came off.
+checkout_locked https://github.com/PX4/px4_msgs.git "$WS_DIR/src/px4_msgs" "$(lock px4_msgs_sha)" "px4_msgs"
+checkout_locked https://github.com/PX4/px4_ros_com.git "$WS_DIR/src/px4_ros_com" "$(lock px4_ros_com_sha)" "px4_ros_com"
 
 cd "$WS_DIR"
 source_ros_file "/opt/ros/${ROS_DISTRO_NAME}/setup.bash"

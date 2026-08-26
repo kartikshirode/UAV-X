@@ -76,6 +76,13 @@ PYHP
   printf '  agent           %s\n' "$(command -v MicroXRCEAgent || echo MISSING)"
   command -v MicroXRCEAgent >/dev/null 2>&1 || gdie "MicroXRCEAgent missing"
 
+  # Round 3 finding 7: the version verifier existed but no gate ran it, so gates
+  # could run happily after a checkout changed the stack under them.
+  gsay "preflight: stack matches versions.lock"
+  bash "${UAVX_REPO}/stage-1/setup/verify.sh" >/dev/null 2>&1     || gdie "verify.sh failed. The installed stack does not match stage-1/setup/versions.lock. Run it directly to see which pin drifted."
+  printf '  locked
+'
+
   gsay "preflight: no simulator left running from a previous gate"
   for p in gzserver gzclient px4 MicroXRCEAgent; do
     if pgrep -x "$p" >/dev/null 2>&1; then

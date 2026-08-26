@@ -54,6 +54,35 @@ source_ros_file() {
   return 0
 }
 
+# Round 3 finding 7: the installers resolved "newest matching tag" and tracked
+# moving branches, so a fresh install could spend an hour building the wrong
+# commits and only fail afterwards when verify.sh compared them. Read the lock,
+# check out exactly what it names, and fail before building if a ref is gone.
+LOCK_FILE="${LOCK_FILE:-$(dirname "${BASH_SOURCE[0]}")/versions.lock}"
+
+lock() {
+  local key="$1"
+  [ -f "$LOCK_FILE" ] || die "no versions.lock at ${LOCK_FILE}"
+  local v
+  v="$(grep -E "^${key}=" "$LOCK_FILE" | head -1 | cut -d= -f2-)"
+  [ -n "$v" ] || die "versions.lock has no ${key}"
+  printf '%s' "$v"
+}
+
+# Fetch a repo and put it on an exact commit. No branch tracking, no fallback.
+checkout_locked() {
+  local url="$1" dir="$2" sha="$3" label="$4"
+  if [ ! -d "$dir/.git" ]; then
+    say "cloning ${label}"
+    git clone "$url" "$dir" || die "clone failed for ${label}"
+  fi
+  git -C "$dir" fetch --all --tags --quiet || warn "fetch failed for ${label}, trying the local object anyway"
+  git -C "$dir" cat-file -e "${sha}^{commit}" 2>/dev/null     || die "${label} commit ${sha} does not exist upstream any more. versions.lock needs a deliberate update, not a silent fallback."
+  git -C "$dir" checkout --quiet --force "$sha" || die "checkout failed for ${label}"
+  git -C "$dir" submodule update --init --recursive --quiet || die "submodules failed for ${label}"
+  say "${label} at $(git -C "$dir" rev-parse --short HEAD)"
+}
+
 require_jammy() {
   . /etc/os-release
   [ "${VERSION_CODENAME:-}" = "jammy" ] || die "expected Ubuntu 22.04 (jammy), found ${VERSION_CODENAME:-unknown}"

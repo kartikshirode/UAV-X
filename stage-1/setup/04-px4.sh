@@ -8,17 +8,11 @@ if already_did px4; then say "px4 already done, skipping"; exit 0; fi
 
 wait_for_net github.com
 
-if [ ! -d "$PX4_DIR/.git" ]; then
-  say "resolving the newest ${PX4_BRANCH_GLOB} tag"
-  PX4_TAG="${PX4_TAG:-$(git ls-remote --tags --refs https://github.com/PX4/PX4-Autopilot.git "${PX4_BRANCH_GLOB}" \
-    | awk -F/ '{print $NF}' | sort -V | tail -1)}"
-  [ -n "$PX4_TAG" ] || die "no tag matched ${PX4_BRANCH_GLOB}"
-  say "cloning PX4 at ${PX4_TAG} into ${PX4_DIR}"
-  # No --depth here on purpose. PX4's build reads git describe for its version string.
-  git clone https://github.com/PX4/PX4-Autopilot.git --recursive -b "$PX4_TAG" "$PX4_DIR"
-else
-  say "PX4 already cloned at ${PX4_DIR}, leaving it alone"
-fi
+# Exact commit from versions.lock. The old code resolved the newest v1.15.*
+# tag, which means a fresh install in September could build something nobody
+# has ever run and produce results the submission would then be claiming.
+PX4_SHA="$(lock px4_sha)"
+checkout_locked https://github.com/PX4/PX4-Autopilot.git "$PX4_DIR" "$PX4_SHA" "PX4"
 
 cd "$PX4_DIR"
 say "PX4 checkout is $(git describe --tags 2>/dev/null || echo unknown)"
