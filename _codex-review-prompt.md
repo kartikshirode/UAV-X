@@ -41,7 +41,18 @@ Judge everything by that standard: not "is this a reasonable plan for a human" b
 
 **7. What the rubric asks for that the plan does not build.** Go criterion by criterion through the judging table in `context.md`. For each, point at the specific plan artifact that earns those marks. Name any criterion with nothing behind it.
 
-**8. Risk the plan does not name.** The environment is WSL2 on Windows with Docker Desktop installed. The first install run died twice: once on a DNS drop when Docker reconfigured the WSL NAT, once when a long build running off the `/mnt/c` 9P mount lost its connection. Four PX4 instances plus Gazebo plus our nodes have to fit in roughly 11 GB of WSL memory. What else is going to bite that nobody has written down?
+**8. Risk the plan does not name.** The environment is WSL2 on Windows with Docker Desktop installed. Getting the stack up on 26 August took seven failed runs, and the failures are worth reading as a pattern rather than a list, because the plan assumes this environment is now understood:
+
+- DNS dropped when Docker Desktop reconfigured the WSL NAT.
+- A long build running off the `/mnt/c` 9P mount lost its connection and died.
+- WSL terminated the distro whenever no client was attached, killing detached builds.
+- `gazebo --version` crashes the entire WSL distribution through the dxg GPU shim.
+- The osrfoundation apt repo serves Gazebo Garden on jammy, and `gz-tools2` conflicts with `gazebo`, so apt installed the Gazebo Classic libraries and silently skipped the binaries. `verify.sh` passed for hours on a machine with no `gzserver`.
+- The Micro XRCE-DDS Agent version the PX4 docs name pins a Fast DDS branch that no longer exists upstream.
+
+Four of those seven presented as something other than their cause. Two passed a green check while broken. Four PX4 instances plus gzserver plus our nodes then have to fit in roughly 11 GB of WSL memory, which nobody has measured.
+
+Given that record, the question for you is not just "what else will bite". It is: **which gates in this plan would report success on a broken system?** The Gazebo case is the template. A check asserted on package metadata rather than on the artifact, and it passed on a machine that could not have run a simulation. Find the others.
 
 ## What not to do
 
