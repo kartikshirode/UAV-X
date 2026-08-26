@@ -26,7 +26,9 @@ if ! command -v MicroXRCEAgent >/dev/null 2>&1; then
   for spec in "Fast-DDS:${fastdds_ref}.x" "Fast-CDR:${fastcdr_ref}"; do
     repo="${spec%%:*}"; ref="${spec##*:}"
     [ -n "$ref" ] && [ "$ref" != ".x" ] || continue
-    if ! git ls-remote --heads "https://github.com/eProsima/${repo}.git" "$ref" | grep -q .; then
+    # grep -c, not grep -q. See the note in scripts/gate-env.sh: grep -q under
+    # pipefail can SIGPIPE git and report a branch missing when it exists.
+    if [ "$(git ls-remote --heads "https://github.com/eProsima/${repo}.git" "$ref" | grep -c . || true)" -eq 0 ]; then
       die "${repo} branch ${ref} does not exist upstream any more. Agent ${XRCE_TAG} cannot build. Pick a newer XRCE_TAG and recheck its pins."
     fi
     say "  ${repo} ${ref} ok"

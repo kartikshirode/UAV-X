@@ -60,7 +60,9 @@ say "simulator"
 # Still never RUN these binaries: gazebo takes the WSL distro down. See header.
 GZ_PKG_VER="$(dpkg-query -W -f='${Version}' gazebo 2>/dev/null)"
 gz_is_11() { case "$GZ_PKG_VER" in 11.*) return 0 ;; *) return 1 ;; esac; }
-no_garden() { ! dpkg -l 2>/dev/null | grep -q '^ii  gz-garden'; }
+# grep -c. With grep -q this returned "no garden" whenever garden WAS present,
+# because the SIGPIPE exit inverted through the leading bang.
+no_garden() { [ "$(dpkg -l 2>/dev/null | grep -c '^ii  gz-garden' || true)" -eq 0 ]; }
 
 check "gzserver binary"       command -v gzserver
 check "gzclient binary"       command -v gzclient
@@ -82,7 +84,8 @@ check "MicroXRCEAgent"   command -v MicroXRCEAgent
 check "workspace built"  test -f "$WS_DIR/install/setup.bash"
 if [ -f "$WS_DIR/install/setup.bash" ]; then
   source_ros_file "$WS_DIR/install/setup.bash"
-  check "px4_msgs on the path" bash -c 'ros2 interface list 2>/dev/null | grep -q px4_msgs'
+  px4_msgs_present() { [ "$(ros2 interface list 2>/dev/null | grep -c px4_msgs || true)" -gt 0 ]; }
+  check "px4_msgs on the path" px4_msgs_present
 fi
 
 say "display"

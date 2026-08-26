@@ -22,7 +22,10 @@ if [ -f /etc/apt/sources.list.d/gazebo-stable.list ]; then
   sudo apt-get update
 fi
 
-if dpkg -l 2>/dev/null | grep -q '^ii  gz-garden'; then
+# grep -c not grep -q: under pipefail, grep -q closes the pipe on its first
+# match, dpkg takes SIGPIPE and returns 141, and this test reads as "garden not
+# installed" precisely when it IS installed.
+if [ "$(dpkg -l 2>/dev/null | grep -c '^ii  gz-garden' || true)" -gt 0 ]; then
   say "removing the Gazebo Garden stack, it conflicts with Gazebo Classic"
   sudo apt-get remove -y gz-garden gz-tools2 || true
   sudo apt-get autoremove -y || true
