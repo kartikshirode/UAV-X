@@ -8,13 +8,17 @@ PUSHPAK Grand Challenge 2026, Grand Challenge on resilient BVLOS drone swarms. B
 
 Funded by MeitY under the national drone mission, hosted by IIT Bombay, presented by IISERB with IISER Bhopal and VJTI Mumbai. Prize ceiling is INR 25,50,000 across the whole staged programme.
 
-Read [brief.md](brief.md) for the full competition rules, then [stage-1/plan.md](stage-1/plan.md) for the build plan. Shared track rules are in [_shared-timeline.md](_shared-timeline.md), compute notes in [_compute.md](_compute.md), and the first plan review in [_plan-review-round1.md](_plan-review-round1.md).
+Read [brief.md](brief.md) for the full competition rules, then [stage-1/plan.md](stage-1/plan.md) for the build plan. Settled calls and the go/no-go gates are in [stage-1/decisions.md](stage-1/decisions.md), and installing the stack is [stage-1/setup/README.md](stage-1/setup/README.md). Shared track rules are in [_shared-timeline.md](_shared-timeline.md), compute notes in [_compute.md](_compute.md), and the first plan review in [_plan-review-round1.md](_plan-review-round1.md).
 
 Repo: github.com/kartikshirode/UAV-X. This project is its own repository and does not share a session with CycloProp.
 
 ## Where we are
 
-Planning only. No code, no environment, nothing built. Round 1 of the plan cross-check is done and found 8 issues; round 2 by Codex has not happened yet.
+Day 1, 26 August. The three week 1 forks are closed and written down in [stage-1/decisions.md](stage-1/decisions.md): WSL2 Ubuntu 22.04 with ROS 2 Humble, PX4 v1.15 and Gazebo Classic; the comms layer gates at the ROS 2 application layer; solo entry at 4 to 6 hours a day. Every phase now has a date, a pass condition and a fallback.
+
+The Ubuntu 22.04 distro is downloading. Provisioning scripts for the whole stack are written and committed but have not been run yet, so nothing is installed and nothing flies.
+
+Round 1 of the plan cross-check found 8 issues. Findings 1, 4, 5 and 6 are answered. Round 2 by Codex has not happened.
 
 ## Stage 1 deliverables, all in one email
 
@@ -49,13 +53,13 @@ Flight is 25% and the tooling hands it to you. Budget one week on flight and two
 
 ## What's not done, in order of risk
 
-1. **Environment.** Nothing is installed. See the next section, this is the live risk.
-2. **The comms-layer interception decision.** Gate at the ROS 2 application layer, or shape actual UDP between PX4 instances? The first is honest, controllable and explainable; the second is a stronger claim and a bigger time sink. Decide in week 1, not week 3. Round 1 review flags this as unresolved.
-3. **Everything downstream of those two.**
+1. **Environment.** Still the only live risk. Nothing is installed. The scripts exist, they have never run, and the first run is where week 1 gets decided.
+2. **The organiser email.** Drafted in [stage-1/organiser-email.md](stage-1/organiser-email.md), not sent.
+3. **Everything downstream of the environment.**
 
 ## Running it, once there is anything to run
 
-Nothing runs yet. Here is the actual starting state of this machine:
+Nothing runs yet. Machine as it stood on day 1:
 
 | | |
 | --- | --- |
@@ -71,12 +75,9 @@ Nothing runs yet. Here is the actual starting state of this machine:
 
 The machine is comfortably strong enough for 4 to 6 vehicle SITL. The OS is the problem: PX4, ROS 2 and Gazebo are Ubuntu-first and there is no Ubuntu here.
 
-Two routes, pick one before day 1 and stop reconsidering:
+Settled: WSL2 Ubuntu 22.04 native, not Docker, because a container boundary hides the GUI fight rather than ending it. The matched set is Ubuntu 22.04, ROS 2 Humble, PX4 v1.15 and Gazebo Classic 11, pinned together on purpose. Picking the latest of each independently is the most common way week 1 goes wrong.
 
-- **WSL2 Ubuntu 22.04 or 24.04 native.** Best long-term ergonomics, but WSLg for GUI and GPU is where this usually stalls.
-- **Docker.** Already installed. Trades GUI friction for image size and some indirection.
-
-Whichever route, PX4, ROS 2 and Gazebo have to be a **matched version set**. Picking the latest of each independently is the most common way week 1 goes wrong. ROS 2 Humble pairs with Ubuntu 22.04, Jazzy with 24.04.
+Run `bash stage-1/setup/setup-all.sh` inside the Ubuntu shell, then `bash stage-1/setup/verify.sh` in a fresh one. Steps are reentrant, so a failed run resumes at the step that broke.
 
 ## Compute
 
@@ -89,9 +90,10 @@ Where it earns its place is the scenario sweep after the simulation works: swarm
 ## Do these in week 1, before technical work
 
 - Register on techfest.org under Competitions, then PUSHPAK Grand Challenge
-- Confirm the team, up to 5 members
-- **Check no team member is attached to the PUSHPAK project, the Drone Centre, or the organising or host institutions.** This disqualifies an entire team at any stage.
-- Send the organiser email. Ask whether a detailed problem statement document exists for UAV-X, since none is published anywhere findable and the competition page text is currently the whole specification.
+- **Check no attachment to the PUSHPAK project, the Drone Centre, or the organising or host institutions.** This disqualifies an entry at any stage.
+- Send the organiser email, drafted in [stage-1/organiser-email.md](stage-1/organiser-email.md)
+
+Team size is settled: solo entry.
 
 ## Starting points worth reading before writing from scratch
 
@@ -111,8 +113,8 @@ Carried from the Vaani and Adversarial IDS handoffs, same servers:
 
 ## Honest gaps
 
-- The 32-day schedule in the plan assumes a daily worker and does not know the real weekly hours or the team size. If this runs on evenings around coursework, the schedule needs rebuilding before it means anything. This is the single input most likely to invalidate the plan.
-- Round 1 review found no decision gates anywhere. There is still no stated fallback if 4 vehicles are not flying together by end of week 1.
+- The setup scripts have been syntax checked and nothing more. Version pins in them (the ros2-apt-source package, gazebo11 from osrfoundation, the newest v1.15.x PX4 tag, px4_msgs on release/1.15) are written from documentation rather than from a machine where they worked. Expect at least one of them to be wrong.
+- WSLg is untested here. If Gazebo's GUI does not open, the work continues headless but the demo video does not, and that has to be sorted before 20 September.
 - Round 2 of the plan cross-check, by Codex, has not run.
 
 ## Execution notes
