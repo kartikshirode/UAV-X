@@ -8,17 +8,23 @@ PUSHPAK Grand Challenge 2026, Grand Challenge on resilient BVLOS drone swarms. B
 
 Funded by MeitY under the national drone mission, hosted by IIT Bombay, presented by IISERB with IISER Bhopal and VJTI Mumbai. Prize ceiling is INR 25,50,000 across the whole staged programme.
 
-Read [brief.md](brief.md) for the full competition rules, then [stage-1/plan.md](stage-1/plan.md) for the build plan. Settled calls and the go/no-go gates are in [stage-1/decisions.md](stage-1/decisions.md), and installing the stack is [stage-1/setup/README.md](stage-1/setup/README.md). Shared track rules are in [_shared-timeline.md](_shared-timeline.md), compute notes in [_compute.md](_compute.md), and the first plan review in [_plan-review-round1.md](_plan-review-round1.md).
+Read [context.md](context.md) first. It holds the official competition record pulled straight off the Techfest API, and it outranks every other file here, including this one. Then [stage-1/plan.md](stage-1/plan.md) for the five week build plan, [stage-1/decisions.md](stage-1/decisions.md) for the locked calls and the gate per week, and [stage-1/setup/README.md](stage-1/setup/README.md) for installing the stack.
+
+`brief.md` is the older, looser summary and is superseded by context.md wherever the two disagree. Shared track rules are in [_shared-timeline.md](_shared-timeline.md), compute notes in [_compute.md](_compute.md), the first plan review in [_plan-review-round1.md](_plan-review-round1.md), and the reviewer prompt in [_codex-review-prompt.md](_codex-review-prompt.md).
 
 Repo: github.com/kartikshirode/UAV-X. This project is its own repository and does not share a session with CycloProp.
 
 ## Where we are
 
-Day 1, 26 August. The three week 1 forks are closed and written down in [stage-1/decisions.md](stage-1/decisions.md): WSL2 Ubuntu 22.04 with ROS 2 Humble, PX4 v1.15 and Gazebo Classic; the comms layer gates at the ROS 2 application layer; solo entry at 4 to 6 hours a day. Every phase now has a date, a pass condition and a fallback.
+Day 1, 26 August. Planning is done and the environment is most of the way up. No project code has been written, on purpose: the plan goes through Codex first.
 
-The Ubuntu 22.04 distro is downloading. Provisioning scripts for the whole stack are written and committed but have not been run yet, so nothing is installed and nothing flies.
+**Decided and locked** in [stage-1/decisions.md](stage-1/decisions.md): WSL2 Ubuntu 22.04 with ROS 2 Humble, PX4 v1.15 and Gazebo Classic; the comms layer gates at the ROS 2 application layer; solo entry at 4 to 6 hours a day; 4 vehicles.
 
-Round 1 of the plan cross-check found 8 issues. Findings 1, 4, 5 and 6 are answered. Round 2 by Codex has not happened.
+**Installed and working:** Ubuntu 22.04.5 under WSL2, user `kartik` with passwordless sudo, ROS 2 Humble desktop, Gazebo Classic 11.10.2. PX4 v1.15.4 was cloning when this was written; the uXRCE-DDS bridge and the px4_msgs workspace come after it.
+
+**The plan is now built for the loop.** Five weeks, each ending in gate commands that exit 0 or do not. Config at [.claude/weekly-loop.md](.claude/weekly-loop.md).
+
+Round 1 of the plan cross-check found 8 issues; findings 1, 4, 5, 6 and 7 are answered. Round 2 by Codex has not run, and the plan should not be executed before it does. Prompt is ready in [_codex-review-prompt.md](_codex-review-prompt.md).
 
 ## Stage 1 deliverables, all in one email
 
@@ -53,9 +59,10 @@ Flight is 25% and the tooling hands it to you. Budget one week on flight and two
 
 ## What's not done, in order of risk
 
-1. **Environment.** Still the only live risk. Nothing is installed. The scripts exist, they have never run, and the first run is where week 1 gets decided.
-2. **The organiser email.** Drafted in [stage-1/organiser-email.md](stage-1/organiser-email.md), not sent.
-3. **Everything downstream of the environment.**
+1. **Whether Gazebo can run here at all.** Running the `gazebo` binary under WSL2 kills the entire distribution. `gazebo --version` is enough to do it: dmesg shows a dxg ioctl failure, then "Init has exited. Terminating distribution", and every shell in the distro dies. The setup scripts now avoid the binary and ask dpkg instead. But `gzserver`, the headless server PX4 SITL actually drives, has not been tested, and if it goes the same way then W1 has no simulator and the plan gets rebuilt on Docker or another backend. **Test gzserver before anything else.**
+2. **Round 2 of the plan review.** The plan has never been read by anything except its author. Rereading it once already turned up two gate thresholds that were wrong.
+3. **The rest of the environment.** PX4 build and the ROS 2 bridge, both mid-flight.
+4. **The organiser email.** Drafted in [stage-1/organiser-email.md](stage-1/organiser-email.md), not sent.
 
 ## Running it, once there is anything to run
 
@@ -75,9 +82,15 @@ Nothing runs yet. Machine as it stood on day 1:
 
 The machine is comfortably strong enough for 4 to 6 vehicle SITL. The OS is the problem: PX4, ROS 2 and Gazebo are Ubuntu-first and there is no Ubuntu here.
 
-Settled: WSL2 Ubuntu 22.04 native, not Docker, because a container boundary hides the GUI fight rather than ending it. The matched set is Ubuntu 22.04, ROS 2 Humble, PX4 v1.15 and Gazebo Classic 11, pinned together on purpose. Picking the latest of each independently is the most common way week 1 goes wrong.
+Settled: WSL2 Ubuntu 22.04 native, not Docker, because a container boundary hides the GUI fight rather than ending it. The matched set is Ubuntu 22.04, ROS 2 Humble, PX4 v1.15.4 and Gazebo Classic 11.10.2, pinned on purpose. Picking the latest of each independently is the most common way week 1 goes wrong.
 
 Run `bash stage-1/setup/setup-all.sh` inside the Ubuntu shell, then `bash stage-1/setup/verify.sh` in a fresh one. Steps are reentrant, so a failed run resumes at the step that broke.
+
+Three things learned the hard way on the first runs, all handled in the scripts now:
+
+- **Never run anything long off `/mnt/c`.** The 9P bridge to Windows drops and takes the run with it, reporting `Operation canceled @p9io.cpp`. Copy the scripts into the Linux filesystem and run from there. Everything the build touches already lives under `$HOME`.
+- **Keep a client attached.** WSL terminates the distro when nothing is connected, and `setsid nohup` does not rescue a detached build from that.
+- **Leave Docker Desktop alone mid-build.** Starting it reconfigures the WSL NAT and DNS drops for a few seconds. Stopping it runs `wsl --shutdown`, which kills every distro including the one building.
 
 ## Compute
 
@@ -113,8 +126,10 @@ Carried from the Vaani and Adversarial IDS handoffs, same servers:
 
 ## Honest gaps
 
-- The setup scripts have been syntax checked and nothing more. Version pins in them (the ros2-apt-source package, gazebo11 from osrfoundation, the newest v1.15.x PX4 tag, px4_msgs on release/1.15) are written from documentation rather than from a machine where they worked. Expect at least one of them to be wrong.
-- WSLg is untested here. If Gazebo's GUI does not open, the work continues headless but the demo video does not, and that has to be sorted before 20 September.
+- **gzserver is untested.** See risk 1. Everything downstream assumes a simulator nobody has proven will start.
+- Steps 04 and 05 of the setup have never completed. The px4_msgs `release/1.15` branch, the XRCE agent tag and the PX4 build itself are documentation rather than observed fact.
+- Every threshold in the plan gates was chosen by its author. `coverage_fraction>=0.95` and `time_to_reconnect_s<=30` were never derived from anything, and the reconnect budget has to cover neighbour timeout plus election plus flight time before it means much.
+- WSLg has never produced a display here. Headless carries the work but not the demo video, and that needs sorting before 20 September.
 - Round 2 of the plan cross-check, by Codex, has not run.
 
 ## Execution notes
