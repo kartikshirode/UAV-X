@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UAV-X run record",
+  "description": "Provenance contract for runs/*.jsonl. Round 2 finding 5: nothing tied runs/latest.jsonl to the scenario that had just run, so a stale green file survived a crashed simulation and a metrics writer that never saw a vehicle could satisfy a gate. uavx_eval.check validates this block before reading any metric. A metric can only be trusted after its provenance is.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "scenario_path",
+    "scenario_sha256",
+    "seed",
+    "commit_sha",
+    "started_at",
+    "ended_at",
+    "completion",
+    "vehicle_ids_observed",
+    "pose_sample_count",
+    "versions",
+    "metrics"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "minLength": 8,
+      "description": "Unique per run. The filename is runs/<run_id>.jsonl."
+    },
+    "scenario_path": {
+      "type": "string",
+      "description": "Repo-relative path of the scenario. The checker rejects a mismatch against what the gate asked for, which is what stops a previous scenario's record passing a later gate."
+    },
+    "scenario_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Hash of the scenario file as actually read, so an edited scenario cannot reuse an old result."
+    },
+    "seed": {
+      "type": "integer",
+      "description": "RNG seed taken from the scenario. Same seed and same commit must reproduce the run exactly."
+    },
+    "commit_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "Repo HEAD at launch."
+    },
+    "started_at": { "type": "string", "format": "date-time" },
+    "ended_at": { "type": "string", "format": "date-time" },
+    "completion": {
+      "enum": ["complete", "crashed", "timeout", "killed"],
+      "description": "Only 'complete' is accepted. latest.jsonl is published by atomic rename after every process exits cleanly, never by append."
+    },
+    "vehicle_ids_observed": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "Must match the scenario's vehicle list. A run that saw two of four vehicles is not the run the gate asked for."
+    },
+    "pose_sample_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Zero means nothing was ever observed, which is how 'no samples' masquerades as 'no separation violations'."
+    },
+    "app_packets_sent_by_node": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 },
+      "description": "Denominators. A zero denominator makes any ratio meaningless and is rejected rather than treated as 1.0."
+    },
+    "app_packets_delivered_by_node": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "delivered_hops_by_node": {
+      "type": "object",
+      "additionalProperties": { "type": "number" },
+      "description": "Mean hop count of DELIVERED APPLICATION packets only. HELLO and LSA traffic must not be counted; including it lets a swarm with no relaying show a hop count above 1."
+    },
+    "injected_events": {
+      "type": "array",
+      "description": "Every event the scenario asked for, with the time it was actually observed. An event that never fired fails the gate instead of leaving a default reconnect time in place.",
+      "items": {
+        "type": "object",
+        "required": ["type", "target", "requested_t", "observed_t"],
+        "properties": {
+          "type": { "enum": ["kill", "comms_blackout", "gps_degrade"] },
+          "target": { "type": "string" },
+          "requested_t": { "type": "number" },
+          "observed_t": { "type": ["number", "null"] }
+        }
+      }
+    },
+    "versions": {
+      "type": "object",
+      "description": "Contents of stage-1/setup/versions.lock at run time, so a result can never be attributed to a stack it did not come off.",
+      "required": ["px4_sha", "xrce_agent_sha", "px4_msgs_sha", "gazebo_version"],
+      "additionalProperties": true
+    },
+    "metrics": {
+      "type": "object",
+      "description": "The numbers the gates assert on. Present only after every provenance field above has validated.",
+      "additionalProperties": true
+    }
+  }
+}
