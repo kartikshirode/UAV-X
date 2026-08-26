@@ -59,6 +59,12 @@ if not d["delivery"].get("attachment_limit_mb"):
 print(f"  registered {d['registered']['done']}, eligibility declared, delivery budget {d['delivery']['attachment_limit_mb']} MB")
 PYHP
 
+  # Round 3 finding 10: agents were handed files that told them both to use and
+  # never to use the launcher that crashes the distro. Prose drifts because
+  # nothing checks it.
+  gsay "preflight: documents agree"
+  python3 "${UAVX_REPO}/scripts/check_docs.py" || gdie "the documents contradict each other"
+
   gsay "preflight: environment"
   uavx_require_ros
   uavx_require_px4_msgs

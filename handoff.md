@@ -27,7 +27,7 @@ Day 1, 26 August. Planning is done and the environment is most of the way up. No
 | Distro | Ubuntu 22.04.5 LTS under WSL2, user `kartik`, passwordless sudo |
 | ROS 2 | Humble desktop, `ros2` and `colcon` on the path |
 | Simulator | Gazebo Classic 11.10.2 from jammy universe, `gzserver` and `gzclient` present, no Gazebo Garden |
-| PX4 | v1.15.4, SITL binary built, `sitl_multiple_run.sh` present |
+| PX4 | v1.15.4, SITL binary built. Launched by `scripts/sitl_multi.sh`, never by PX4's `sitl_multiple_run.sh` |
 | Bridge | `MicroXRCEAgent` v2.4.3 installed, `ws_uavx` built, `px4_msgs` on the path |
 | Display | `DISPLAY=:0`, `WAYLAND_DISPLAY=wayland-0`, so WSLg works |
 
@@ -81,21 +81,7 @@ Closed on 26 August: whether Gazebo runs here at all, and whether four vehicles 
 
 ## Running it, once there is anything to run
 
-Nothing runs yet. Machine as it stood on day 1:
-
-| | |
-| --- | --- |
-| CPU | i7-13650HX, 14 cores, 20 threads |
-| RAM | 23.7 GB |
-| GPU | RTX 4060 Laptop |
-| OS | Windows 11 |
-| WSL | Installed, but the only distro is `docker-desktop`, which is the Docker backend and not a dev environment |
-| git | present |
-| gh | **not installed** |
-| docker | present |
-| Python | 3.12 |
-
-The machine is comfortably strong enough for 4 to 6 vehicle SITL. The OS is the problem: PX4, ROS 2 and Gazebo are Ubuntu-first and there is no Ubuntu here.
+The environment is up and verified, and the state table above is the current one. This section is how to drive it.
 
 Settled: WSL2 Ubuntu 22.04 native, not Docker, because a container boundary hides the GUI fight rather than ending it. The matched set is Ubuntu 22.04, ROS 2 Humble, PX4 v1.15.4 and Gazebo Classic 11.10.2, pinned on purpose. Picking the latest of each independently is the most common way week 1 goes wrong.
 
@@ -127,7 +113,7 @@ Team size is settled: solo entry.
 
 - **UAVros**, ROS1 and ROS2 kit for PX4 multi-rotor and UGV swarm simulation
 - **Aerostack2**, ROS2 framework for multi-robot aerial systems, plugin architecture
-- PX4 multi-vehicle docs: new Gazebo uses `PX4_GZ_STANDALONE=1` per extra instance with distinct poses and system IDs, plus `MicroXRCEAgent udp4 -p 8888` for the ROS 2 bridge. Gazebo Classic has `sitl_multiple_run.sh`, default 3 vehicles.
+- Multi-vehicle launching is solved and lives in `scripts/sitl_multi.sh`. Do not use PX4's `sitl_multiple_run.sh`: it ignores `HEADLESS`, ends in an unconditional `gzclient` that crashes this distro, and never sets the per-vehicle `PX4_UXRCE_DDS_NS` that gives each vehicle its own ROS namespace.
 - MAVLink `MAV_SYS_ID` caps at 255 vehicles, so nothing near our range is a limit. Use 4 to 6; more drones cost debugging time we do not have.
 
 ## Things that bit earlier cluster projects, so they do not bite this one
@@ -141,13 +127,11 @@ Carried from the Vaani and Adversarial IDS handoffs, same servers:
 
 ## Honest gaps
 
-- Nothing has flown a mission. Vehicles come up and hold; none has armed or taken off.
-- Every gate past W1 calls scripts that do not exist yet, `run_scenario.sh` and `uavx_eval.check` among them. They fail with a clear message, which is correct, but only the W1 path has been exercised end to end.
-- `check_seam.sh` and `check_submission.py` have only been run against an empty repo, where they correctly refuse. Neither has seen real content.
-- Package version checks were treating packages apt merely knows about as installed, so `verify.sh` passed for hours on a machine with no simulator binaries. Every gate from here asserts on artifacts, not on metadata. Assume the same class of mistake is hiding somewhere else.
-- Every threshold in the plan gates was chosen by its author. `coverage_fraction>=0.95` and `time_to_reconnect_s<=30` were never derived from anything, and the reconnect budget has to cover neighbour timeout plus election plus flight time before it means much.
-- WSLg has never produced a display here. Headless carries the work but not the demo video, and that needs sorting before 20 September.
-- Round 2 of the plan cross-check, by Codex, has not run.
+- Nothing has flown a mission. Vehicles come up headless with a namespace each and hold; none has armed or taken off.
+- Only the W1 gate path has run end to end. Every later gate calls scripts that do not exist yet, `run_scenario.sh` and `uavx_eval.check` among them. They fail with a clear message, which is correct, but untested against real work.
+- `check_submission.py` has only ever been run against an empty package, where it correctly refuses. The seam checker has nine fixtures and passes them, but has never seen a real ROS graph.
+- Round 3 found that the previous frozen topology made the relay kill a no-op, and the checker that was supposed to catch it only examined pairs its author had listed. The topology is fixed and the checker now enumerates every pair, but assume that class of mistake, a check that confirms what its author already believed, is hiding somewhere else too.
+- Three findings from round 3 are open, tracked in [_plan-review-round3.md](_plan-review-round3.md): installers still resolve versions instead of reading `versions.lock` (F7), the encounter scenario has no frozen trajectories or negative control (F8), and W3 and W4 are still above a solo week's hours (F9).
 
 ## Execution notes
 

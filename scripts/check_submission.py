@@ -38,6 +38,7 @@ SUB = REPO / "submission"
 MIN_PAGES, MAX_PAGES = 6, 8
 MAX_VIDEO_S = 180          # our assumption, not theirs; see organiser-email.md
 MIN_VIDEO_S = 30
+ORGANISER_EMAIL = "pushpak_gc2026@aero.iitb.ac.in"
 
 # Sections the proposal must actually contain, because "6 to 8 pages" is not
 # evidence that architecture was covered.
@@ -192,20 +193,53 @@ else:
     else:
         ok("carries source, scenarios, scripts and setup")
 
+# ------------------------------------------------------------- source freeze
+# Round 3 finding 3: receipts used to be compared against current HEAD, which
+# cannot work. W4 and W5 necessarily commit after the W3 install, and writing
+# the sent receipt then committing it moves HEAD again, so the receipt
+# invalidates itself on the next run.
+#
+# The fix is that the SOURCE ARCHIVE is the thing being submitted, not the
+# working tree. Everything binds to the frozen commit C recorded in the archive
+# manifest and to the archive's own hash. Later packaging commits move HEAD
+# freely without touching the claim.
+section("source freeze")
+manifest_path = SUB / "source-manifest.json"
+frozen_sha = None
+archive_sha256 = None
+if not manifest_path.is_file():
+    fail("submission/source-manifest.json missing. Freeze the source and build the archive from it.")
+else:
+    man = json.loads(manifest_path.read_text())
+    frozen_sha = man.get("commit_sha")
+    archive_sha256 = man.get("archive_sha256")
+    if not frozen_sha or len(frozen_sha) != 40:
+        fail("source-manifest.json has no valid commit_sha")
+    if not archive_sha256:
+        fail("source-manifest.json has no archive_sha256")
+    else:
+        ok(f"source frozen at {frozen_sha[:12]}")
+
+    # The frozen commit must actually exist in this repo's history.
+    exists = subprocess.run(["git", "-C", str(REPO), "cat-file", "-e", f"{frozen_sha}^{{commit}}"],
+                            capture_output=True).returncode == 0
+    if not exists:
+        fail(f"frozen commit {str(frozen_sha)[:12]} is not in this repository")
+
 # ------------------------------------------------------- fresh install receipt
 section("fresh install receipt")
 receipt = SUB / "fresh-install-receipt.json"
-head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"],
-                      capture_output=True, text=True).stdout.strip()
 if not receipt.is_file():
-    fail("submission/fresh-install-receipt.json missing. Run scripts/fresh_install_test.sh.")
+    fail("submission/fresh-install-receipt.json missing. Run scripts/fresh_install_test.sh against the archive.")
 else:
     r = json.loads(receipt.read_text())
-    if r.get("commit_sha") != head:
-        fail(f"receipt is for {str(r.get('commit_sha'))[:12]}, HEAD is {head[:12]}. "
-             "The install was tested against different source than is being submitted.")
+    # Bound to the archive, not to a moving HEAD.
+    if archive_sha256 and r.get("archive_sha256") != archive_sha256:
+        fail("the fresh install tested a different archive than the one being submitted")
+    elif frozen_sha and r.get("commit_sha") != frozen_sha:
+        fail(f"receipt is for {str(r.get('commit_sha'))[:12]}, frozen source is {str(frozen_sha)[:12]}")
     else:
-        ok(f"fresh install verified at {head[:12]}")
+        ok("fresh install verified against the submitted archive")
     if r.get("result") != "pass":
         fail(f"receipt records result={r.get('result')}")
 
@@ -245,16 +279,19 @@ if not sent.is_file():
 
       submission/sent-receipt.json
       {"sent_at": "2026-09-26T...", "to": "pushpak_gc2026@aero.iitb.ac.in",
-       "message_id": "...", "commit_sha": "%s"}
-""" % head)
+       "message_id": "...", "commit_sha": "<frozen source commit from source-manifest.json>"}
+""")
     sys.exit(2)
 
 s = json.loads(sent.read_text())
 for field in ("sent_at", "to", "message_id", "commit_sha"):
     if not s.get(field):
         fail(f"sent-receipt.json is missing {field}")
-if s.get("commit_sha") != head:
-    fail("sent-receipt records a different commit than HEAD")
+# Bound to the frozen source, so committing this very file does not invalidate it.
+if frozen_sha and s.get("commit_sha") != frozen_sha:
+    fail(f"sent-receipt records {str(s.get('commit_sha'))[:12]}, frozen source is {str(frozen_sha)[:12]}")
+if s.get("to") != ORGANISER_EMAIL:
+    fail(f"sent to {s.get('to')}, must be {ORGANISER_EMAIL}")
 
 if problems:
     sys.exit(1)

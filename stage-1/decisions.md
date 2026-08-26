@@ -14,7 +14,7 @@ Four pieces, pinned as a set:
 | Simulator | Gazebo Classic (gazebo11) |
 | ROS bridge | uXRCE-DDS agent, plus px4_msgs and px4_ros_com |
 
-Why this set instead of the current one. Multi-vehicle on Gazebo Classic runs through `sitl_multiple_run.sh`, which is the best documented path in PX4 and the one every swarm tutorial worth copying is built on. Humble is LTS and has the largest example base behind it. Classic's GUI is far lighter than Harmonic's under WSLg, and WSLg is where week 1 usually dies.
+Why this set instead of the current one. Gazebo Classic is the best documented multi-vehicle path in PX4 and the one every swarm tutorial worth copying is built on. We do not use PX4's own `sitl_multiple_run.sh`: it ignores `HEADLESS` and ends in an unconditional `gzclient`, which takes the WSL distro down. `scripts/sitl_multi.sh` is the launcher, and it also sets the per-vehicle `PX4_UXRCE_DDS_NS` that the PX4 script never sets. Humble is LTS and has the largest example base behind it. Classic's GUI is far lighter than Harmonic's under WSLg, and WSLg is where week 1 usually dies.
 
 The cost is real and I'd rather state it than hide it. Gazebo Classic went end of life in January 2025. For a submission due September 2026 that doesn't matter, and this is a Stage 1 and 2 decision rather than a forever one. If the swarm needs a live simulator past this programme, that's a port, and porting off something that works beats rewriting something that doesn't.
 
@@ -36,7 +36,7 @@ One design constraint comes with the choice. The gate goes behind an interface w
 
 Finding 5 said this was the input most likely to invalidate everything else. Answer: solo, roughly 5 hours daily, with parallel work split across separate working sessions rather than across people.
 
-32 days at 5 hours is about 160 hours. That's enough for the plan, with two consequences. Nothing in the schedule can assume two things happening at once on the same machine, since multi-vehicle SITL will eat the CPU while it runs. And the 5 days budgeted for proposal and video at the end are 5 solo days, so drafting has to start before the simulation is finished.
+32 days at 5 hours is about 160 hours. That's enough for the plan, with two consequences. Nothing in the schedule can assume two things happening at once on the same machine, since multi-vehicle SITL will eat the CPU while it runs. And W5 is 4 days, not 5, so the proposal is drafted a section at a time as each week's metric lands rather than written at the end.
 
 ## D4. Four vehicles
 
@@ -49,7 +49,7 @@ One gate per week. The pass condition is `bash scripts/gate.sh <N>` exiting 0, a
 | Week | Date | Gate | What it proves | If it fails |
 | --- | --- | --- | --- | --- |
 | W1 | 1 Sep | `gate.sh 1` | Four vehicles fly a commanded takeoff and land, and the run harness writes a valid run record | The simulator already runs 4 vehicles headless, so a failure here is our code, not the stack. Fix it; do not drop to 2 vehicles. Two vehicles cannot hold an anchor, a relay and a spare, so W3 and W4 could not run at all. |
-| W2 | 8 Sep | `gate.sh 2` | The swarm covers the frozen survey box, measured from actual poses | Cut run time or vehicle count, never the box. Shrinking the area until the number passes is moving the goal. |
+| W2 | 8 Sep | `gate.sh 2` | The swarm covers the frozen survey box, measured from actual poses | Fix it or halt. Not the box, which is frozen, and not the vehicle count: D4 fixes it at 4, and 3 or fewer cannot hold an anchor, a relay and two survey drones, so W3 and W4 could not run at all. |
 | W3 | 15 Sep | `gate.sh 3` | `uav_4` reaches the GCS only by relay, and cannot reach it at all with forwarding off | Hard stop, because this is the submission. W4 gives up days to it, never the reverse. |
 | W4 | 22 Sep | `gate.sh 4` | The relay dies, the swarm elects a replacement, repositions it and rebuilds the chain, with no separation violations | Fall back to a deterministic priority list fixed at startup instead of a live election. It still recovers and still demos; the proposal describes what it is. |
 | W5 | 26 Sep | `gate.sh 5` | The package is real, and a human has recorded the send | `gate.sh 5` exits 2 while the package is complete but unsent, which is the normal state before a human sends it. Send on 26 Sep regardless; the deadline is the 27th and email gives no upload confirmation. |
