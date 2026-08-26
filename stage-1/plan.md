@@ -2,6 +2,9 @@
 
 **Deadline:** 27 September 2026, by email to pushpak_gc2026@aero.iitb.ac.in
 **Working assumption on starting point:** Python solid, ROS and PX4 at tutorial level, networking conceptual, nothing built yet.
+**Capacity:** one person, 4 to 6 hours a day. Roughly 160 hours across the 32 days.
+
+Week 1 forks are closed. See [decisions.md](decisions.md) for the stack, the comms interception layer, the vehicle count and the go/no-go gate at the end of every phase.
 
 ## What Stage 1 actually wants
 
@@ -50,14 +53,14 @@ That last item is the demonstration. If the video shows a drone dropping out and
 
 ## Technical decisions to lock in week 1
 
-**Gazebo or Gazebo Classic.** PX4 documents multi-vehicle for both. New Gazebo runs the first instance normally and every additional one with `PX4_GZ_STANDALONE=1`, distinct model poses and distinct system IDs, with `MicroXRCEAgent udp4 -p 8888` bridging to ROS 2. Gazebo Classic has `sitl_multiple_run.sh`, which defaults to 3 vehicles. Either works. Pick one on day 2 and stop reconsidering.
+**Gazebo or Gazebo Classic.** Settled on 26 August: Gazebo Classic, on WSL2 Ubuntu 22.04 with ROS 2 Humble and PX4 v1.15. Multi-vehicle goes through `sitl_multiple_run.sh`, and `MicroXRCEAgent udp4 -p 8888` bridges to ROS 2. Reasoning and the version table are in [decisions.md](decisions.md).
 
 **Do not start from zero.** Two open bases worth reading before writing anything:
 
 - **UAVros**, a ROS1 and ROS2 kit for PX4 multi-rotor and UGV swarm simulation
 - **Aerostack2**, a ROS2 framework for multi-robot aerial systems with a plugin architecture
 
-**Vehicle count.** MAVLink `MAV_SYS_ID` caps at 255 vehicles, so nothing near your range is a limit. Use 4 to 6. More drones look impressive and cost you debugging time you do not have.
+**Vehicle count.** Four. One anchored near the GCS, one relay, two surveying. MAVLink `MAV_SYS_ID` caps at 255 so the ceiling is nowhere near us; the limit is debugging hours.
 
 **Where ROS 2 helps.** It runs on DDS, so publish and subscribe is decentralised by default. That is the right substrate for a mesh that has to tolerate losing members, and it is worth saying so explicitly in the proposal.
 
@@ -67,12 +70,14 @@ Dates assume a start of 26 August 2026.
 
 | Days | Dates | Goal | Done when |
 | --- | --- | --- | --- |
-| 1 to 4 | 26 to 29 Aug | Environment only | 4 vehicles airborne at once in SITL, ROS 2 topics visible |
-| 5 to 11 | 30 Aug to 5 Sep | Survey mission | All drones fly a waypoint coverage pattern, telemetry lands in one node |
-| 12 to 18 | 6 to 12 Sep | Comms layer | Range-gated delivery working, GCS reachable only through a multi-hop relay |
-| 19 to 24 | 13 to 18 Sep | Fault recovery | Kill a relay mid-flight, watch the chain rebuild itself |
-| 25 to 29 | 19 to 23 Sep | Proposal and video | 6 to 8 pages written, demo recorded |
-| 30 to 32 | 24 to 26 Sep | Package and submit | Fresh-machine install test passes, email sent 26 Sep |
+| 1 to 6 | 26 to 31 Aug | Environment only | 4 vehicles airborne at once in SITL, ROS 2 topics visible |
+| 7 to 12 | 1 to 6 Sep | Survey mission | All drones fly a waypoint coverage pattern, telemetry lands in one node |
+| 13 to 19 | 7 to 13 Sep | Comms layer | Range-gated delivery working, GCS reachable only through a multi-hop relay |
+| 20 to 25 | 14 to 19 Sep | Fault recovery | Kill a relay mid-flight, watch the chain rebuild itself |
+| 26 to 30 | 20 to 24 Sep | Proposal and video | 6 to 8 pages written, demo recorded |
+| 31 to 32 | 25 to 26 Sep | Package and submit | Fresh-machine install test passes, email sent 26 Sep |
+
+Environment gets 6 days rather than 4. Round 1 finding 1: nothing is installed, the machine is Windows, and every step of the PX4 chain has a known way of going wrong. The survey phase absorbed the difference because that phase is 25% of the rubric and the tooling does most of it.
 
 Submit on 26 September, a day early. Email submission means no upload confirmation and no portal to check, so leave a day of slack.
 
@@ -80,7 +85,7 @@ Submit on 26 September, a day early. Email submission means no upload confirmati
 
 **Environment.** Resist building anything during this week. Multi-vehicle SITL breaks in boring ways, and the only goal is four drones in the air simultaneously with ROS 2 seeing them.
 
-**Comms layer.** This is your actual contribution. Implement it as a ROS 2 layer that gates message delivery on inter-node distance, then add packet loss that rises with range. Keep the model simple and defensible. A clean distance threshold you can explain beats a half-understood propagation model.
+**Comms layer.** This is your actual contribution. A ROS 2 node gates delivery on inter-node distance, with packet loss rising through a band near the threshold. Keep the model simple and defensible; a clean distance threshold you can explain beats a half-understood propagation model. The gate sits behind an interface that a UDP shaper could implement later, so Stage 2 has somewhere to go.
 
 **Fault recovery.** Write failure injection into your own test harness now, not in November. Stage 2 hands you hidden disturbances including UAV failures and comms outages, and a swarm that only works on the happy path scores nothing there. Building the kill switch early means Stage 2 is an extension rather than a rewrite.
 
@@ -91,7 +96,8 @@ Submit on 26 September, a day early. Email submission means no upload confirmati
 ## Open items
 
 - Register on techfest.org under Competitions, then PUSHPAK Grand Challenge
-- Confirm team size, up to 5 members
 - Check nobody on the team is attached to the PUSHPAK project, the Drone Centre or the organising institutions, which is a disqualifier
+
+Team size is settled: solo entry.
 
 Presented by IISERB with IISER Bhopal and VJTI Mumbai. Full rules in `../_shared-timeline.md`, competition detail in `../brief.md`.
