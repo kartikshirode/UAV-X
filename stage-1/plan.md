@@ -54,6 +54,8 @@ Produces:
 - `scripts/run_scenario.sh` and `scripts/run_smoke.sh`
 - The run record writer, to `scenarios/run-record.schema.json`, publishing `latest.jsonl` by atomic rename only after every process has exited cleanly
 - Peak-memory and swap sampling in every run record
+- The generic scenario event injector, moved here from W4. It needs no roles code and W4 has no room for it.
+- The ROS graph snapshot the seam checker reads, captured by the runner while a scenario is up
 
 Gate: `bash scripts/gate.sh 1`
 
@@ -63,10 +65,11 @@ Goal: four vehicles cover a frozen area, and the run reports how much of it they
 
 Produces:
 
-- `uavx_mission`: boustrophedon planner, a partitioner splitting the frozen 400 m box into 4 strips, a mission executor
+- `uavx_mission`: boustrophedon planner, a partitioner splitting the frozen survey box into 4 strips, a mission executor
 - `uavx_eval`: the metrics collector, and `uavx_eval.check`, which validates provenance before reading any metric
 - `scenarios/survey_baseline.yaml` at the coordinates in [architecture.md](architecture.md) section 6
 - Pure link-model unit tests, brought forward from W3 so W3 is only integration
+- Pure routing and election state-machine tests, also brought forward. Neither needs SITL, both are the fiddly part, and W3 and W4 are the two weeks with no slack.
 
 `coverage_fraction` comes from **sampled vehicle poses**, never the planned path. The box is frozen. If coverage cannot reach the gate in 420 s the planner is wrong, and shrinking the box would be moving the goal rather than fixing it.
 
@@ -82,9 +85,11 @@ Produces:
 - `uavx_gcs`: the ground station, with its own `/uavx/gcs/tx` and `/uavx/gcs/rx`
 - `scenarios/relay_required.yaml` and `scenarios/direct_only.yaml`
 
-The control run is the important half. A delivery ratio of 1.0 proves nothing on its own, because that is also what a silently open gate produces. `uav_4` at 981.8 m from the GCS is beyond `r_max`, so with forwarding disabled its delivery must be exactly 0.
+The control run is the important half. A delivery ratio of 1.0 proves nothing on its own, because that is also what a silently open gate produces. `uav_4` is 484.6 m from the GCS, beyond `r_max`, so with forwarding disabled its delivery must be exactly 0.
 
-Also this week, because W5 has no room for them: the fresh-install test runs once end to end, and a 60 second recording dry run proves the video path works.
+Also this week, because W5 has no room for them: a fresh-install **dry run**, and a 60 second recording dry run proving the video path works. Both are in the W3 gate, so the week cannot be accepted without them and hand the bill to W5.
+
+The install that binds the submission is a different thing and happens after code freeze in W5, against the archive rather than the working tree. Round 3 finding 3: an install tested in W3 cannot vouch for source that W4 and W5 have since changed.
 
 Hard stop. This is the submission. If the gate is not green on 15 September, W4 gives up days to it rather than the other way round.
 
@@ -97,17 +102,19 @@ Goal: kill the relay mid-mission and watch the swarm notice, elect, reposition a
 Produces:
 
 - `uavx_roles`: the state machine in [architecture.md](architecture.md) section 4, epochs and leases included
-- Failure injection for `kill` only
+- The integrated mission, `scenarios/mission_integrated.yaml`, which is the run the proposal and the video both point at. Every other scenario proves one subsystem alone; this is the only one that proves the swarm.
 - Altitude deconfliction, the separation monitor, the yield rule
-- `scenarios/relay_kill.yaml` and `scenarios/encounter.yaml`
+- `scenarios/relay_kill.yaml`, `scenarios/encounter.yaml` and its negative control `scenarios/encounter_noyield.yaml`
 
 `comms_blackout` and `gps_degrade` move to Stage 2. Stage 1 needs one failure demonstrated properly more than it needs three demonstrated thinly, and round 2 costed all three at more hours than the week has.
 
-`encounter.yaml` exists because altitude layers alone would keep everything apart and leave the yield rule as dead code that still scored 10%.
+`encounter.yaml` exists because altitude layers alone would keep everything apart and leave the yield rule as dead code that still scored 10%. Its control run, with yielding disabled, must violate separation; without that, a pass is indistinguishable from two vehicles that happened to miss each other.
 
 Gate: `bash scripts/gate.sh 4`
 
-### W5, 23 to 26 September. Final runs, packaging, submit
+### W5, 23 to 26 September. Freeze, package, submit
+
+Four days, not five.
 
 Goal: five deliverables in one email, sent a day early.
 
@@ -115,6 +122,8 @@ By now the proposal is mostly written, because each week drafts its own section 
 
 Produces:
 
+- The source freeze: commit `C`, `submission/uavx-source.zip` built from it, `submission/source-manifest.json` carrying `C` and the archive hash
+- The binding fresh install, run against that archive, receipt bound to the archive hash
 - `submission/proposal.pdf`, 6 to 8 pages
 - `submission/demo.mp4`, opening on the failure and the recovery
 - `submission/INSTALL.md`, `submission/uavx-source.zip`

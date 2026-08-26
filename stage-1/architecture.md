@@ -246,7 +246,7 @@ Common geometry, station-keeping, no survey motion. Routing enabled. 240 s. Each
 
 ### `direct_only.yaml`
 
-Identical to `relay_required.yaml` with forwarding disabled, so only direct links deliver. `uav_4` is 981.8 m from the GCS, beyond `r_max`, so its delivery must be exactly 0. This is the control that proves the relay is doing the work.
+Identical to `relay_required.yaml` with forwarding disabled, so only direct links deliver. `uav_4` is 484.6 m from the GCS, beyond `r_max`, so its delivery must be exactly 0. This is the control that proves the relay is doing the work.
 
 ### `relay_kill.yaml`
 
@@ -265,7 +265,24 @@ Run duration 300 s, leaving 180 s after the kill for recovery and steady state.
 
 ### `encounter.yaml`
 
-`uav_3` and `uav_4` are commanded to the same altitude, 45 m, on paths that cross at (700, 0) at the same time. Without the yield rule they pass within 2 m. With it, `uav_4`, the higher id, holds until the conflict clears. The gate requires at least one logged yield event naming `uav_4`, and zero separation violations.
+Round 3 finding 8: the previous version claimed every coordinate was frozen and then gave none, and its gate asked only for `yield_events>=1`. A logger emitting one event while the flight command carried on unchanged would have satisfied all three assertions. Worse, `collision_contacts==0` passes when no contact monitor was ever attached, which is the same shape as the package check that passed on a machine with no simulator.
+
+So the trajectories are frozen, and there is a negative control.
+
+| Parameter | Value |
+| --- | --- |
+| Both vehicles at | 45 m, deliberately the same altitude, so layering cannot save them |
+| `uav_3` | (250, -120, 45) to (250, 120, 45), starting at `t = 20 s` |
+| `uav_4` | (130, 0, 45) to (370, 0, 45), starting at `t = 20 s` |
+| Speed | 10 m/s both |
+| Crossing point | (250, 0, 45), reached by both at `t = 32 s` |
+| Run duration | 90 s |
+
+Both paths are 240 m and both vehicles start together, so without intervention they arrive at the crossing point simultaneously and pass within 0 m. `uav_4`, the higher system id, must hold until the conflict clears.
+
+**The negative control.** `scenarios/encounter_noyield.yaml` is the same run with the yield rule disabled. It must record a separation violation. Without it, a run where the vehicles happened to miss each other is indistinguishable from one where the rule worked, and the 10% safety row would rest on a coincidence.
+
+The gate requires, on the yield run: at least one yield event **naming `uav_4`**, a non-zero hold duration, `min_pairwise_separation_m` at or above 10, zero contacts, a non-zero contact-monitor sample count so the zero means something, enough pose samples, and both vehicles completing. On the control run it requires a violation.
 
 ## 7. Run record contract
 

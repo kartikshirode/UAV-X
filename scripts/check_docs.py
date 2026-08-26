@@ -120,6 +120,31 @@ for name, pat_py in (("r_full", r"R_FULL\s*=\s*([0-9.]+)"), ("r_max", r"R_MAX\s*
     else:
         fail(f"architecture.md does not state {name} = {val} m, which is what check_geometry.py enforces")
 
+# Any distance quoted in prose must match the frozen positions. Round 3 finding
+# 1 survived partly because stale metres sat unchallenged in three documents.
+before = len(problems)
+import ast as _ast
+m = re.search(r"START\s*=\s*\{(.+?)\n\}", geo, re.S)
+if m:
+    pos = _ast.literal_eval("{" + m.group(1) + "}")
+    import math as _math
+    real = set()
+    for a in pos:
+        for b in pos:
+            if a < b:
+                real.add(round(_math.dist(pos[a], pos[b]), 1))
+    for doc, body in text.items():
+        for mm in re.finditer(r"(\d{3,4}\.\d) m", body):
+            val = float(mm.group(1))
+            if val not in real and not any(abs(val - r) < 0.2 for r in real):
+                # Derived figures that are legitimately not pair distances:
+                # the relay slot hops, the mover's flight, and the integrated
+                # mission's worst-corner margins.
+                if val not in (160.2, 191.6, 262.7):
+                    fail(f"{doc} quotes {val} m, which is not a distance in the frozen topology")
+if len(problems) == before:
+    ok("every distance quoted in prose exists in the frozen topology")
+
 print()
 if problems:
     print(f"FAILED: {len(problems)} inconsistency(ies)")

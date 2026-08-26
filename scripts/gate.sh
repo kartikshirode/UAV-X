@@ -212,11 +212,25 @@ gate_w4() {
     --require "separation_violations==0" \
     --require "collision_contacts==0"
 
+  # Safety, with a negative control. Round 3 finding 8: without the control a
+  # pass is indistinguishable from two vehicles that happened to miss each
+  # other, and zero contacts is indistinguishable from no contact monitor.
   run_scenario scenarios/encounter.yaml
   check_run scenarios/encounter.yaml \
-    --require "yield_events>=1" \
+    --require "yield_events_by_node.uav_4>=1" \
+    --require "yield_hold_seconds>0" \
+    --require "min_pairwise_separation_m>=10" \
     --require "separation_violations==0" \
-    --require "collision_contacts==0"
+    --require "collision_contacts==0" \
+    --require "contact_monitor_samples>0" \
+    --require "pose_sample_count>=1000" \
+    --require "vehicles_completed==2"
+
+  run_scenario scenarios/encounter_noyield.yaml
+  check_run scenarios/encounter_noyield.yaml \
+    --require "separation_violations>=1" \
+    --require "contact_monitor_samples>0"
+  gsay "W4: the control violated separation, so the yield rule caused the safe result"
 }
 
 gate_w5() {
