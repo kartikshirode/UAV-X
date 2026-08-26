@@ -55,16 +55,19 @@ check "ros2 cli"                          command -v ros2
 check "colcon"                            command -v colcon
 
 say "simulator"
-# dpkg, never the binary. See the header.
-# Read the version into a variable rather than inlining dpkg-query into a
-# bash -c string: ${Version} there gets eaten by the outer shell before dpkg
-# ever sees it, and the check fails against a correct install.
+# Assert on binaries, not on package metadata. dpkg-query -W reports a version
+# for a package apt merely knows about, so a version check passed on a machine
+# that had the Gazebo Classic libraries and none of its executables.
+# Still never RUN these binaries: gazebo takes the WSL distro down. See header.
 GZ_PKG_VER="$(dpkg-query -W -f='${Version}' gazebo 2>/dev/null)"
 gz_is_11() { case "$GZ_PKG_VER" in 11.*) return 0 ;; *) return 1 ;; esac; }
+no_garden() { ! dpkg -l 2>/dev/null | grep -q '^ii  gz-garden'; }
 
-check "gazebo classic"      command -v gazebo
-check "gazebo is 11.x"      gz_is_11
-check "gzserver present"    command -v gzserver
+check "gzserver binary"       command -v gzserver
+check "gzclient binary"       command -v gzclient
+check "gazebo binary"         command -v gazebo
+check "gazebo package is 11.x" gz_is_11
+check "no Gazebo Garden"      no_garden
 [ -n "$GZ_PKG_VER" ] && printf '  gazebo package: %s\n' "$GZ_PKG_VER"
 
 say "px4"

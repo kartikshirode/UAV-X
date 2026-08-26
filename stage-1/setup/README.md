@@ -2,7 +2,7 @@
 
 Takes a fresh Windows 11 machine to 4 PX4 vehicles flying together in Gazebo Classic with ROS 2 seeing all of them. Reasoning behind the version choices is in [decisions.md](../decisions.md).
 
-**Status: not yet run end to end.** The scripts are written and syntax checked; the first real run is in progress. This file gets corrected the moment reality disagrees with it.
+**Status: steps 01 to 03 verified on this machine, 26 August. Steps 04 and 05 in progress.** Everything below has been corrected against what actually happened rather than what the documentation promised, and three of the notes at the bottom exist because a run failed on them.
 
 ## What you end up with
 
@@ -58,7 +58,15 @@ It prints ok or FAIL per item and exits non-zero if anything is missing. Nothing
 
 ## Things that go wrong here
 
-**Gazebo Classic gets installed on its own, not by PX4.** `Tools/setup/ubuntu.sh` pulls a different simulator depending on PX4 version and distro, which is exactly the mismatch that eats week 1. Script 03 pins gazebo11 from osrfoundation before PX4 is touched.
+**Gazebo Classic comes from Ubuntu universe, not from osrfoundation.** This is the one that cost the most. Gazebo Classic went end of life in January 2025, and `packages.osrfoundation.org/gazebo/ubuntu-stable` now serves Gazebo Garden for jammy. Adding that repo pulls in `gz-garden` and `gz-tools2`, `gz-tools2` conflicts with the `gazebo` package, and apt resolves the conflict quietly: you end up with the Classic *libraries* installed and none of the Classic *binaries*. No `gzserver`, no `gzclient`, which are the two things PX4 SITL actually runs.
+
+It looks fine from the outside. `apt` says "gazebo is already the newest version", `dpkg-query -W` reports 11.10.2, and nothing fails until PX4 tries to launch and says "You need to have gazebo simulator installed!" after a 20 minute build.
+
+jammy universe carries gazebo 11.10.2+dfsg-1 with binaries included. Script 03 installs from there, removes the osrfoundation repo and the Garden stack if a previous run added them, and then checks that `gzserver`, `gzclient` and `gazebo` all exist as executables.
+
+**Check for binaries, never for package versions.** `dpkg-query -W -f='${Version}' gazebo` returns a version for a package apt merely knows about. A version check passes on a machine with nothing installed. `command -v gzserver` does not.
+
+**PX4 builds and launches from the same command.** `make px4_sitl gazebo-classic` is the documented way to fly it, and it ends by running `sitl_run.sh`, which starts gzserver and gzclient and fails the build if the sim will not come up. For provisioning you want `make px4_sitl_default` and then `make px4_sitl_default sitl_gazebo-classic`, which build without launching anything.
 
 **The ROS signing key expired in 2025.** Old install guides tell you to drop a keyring into `/usr/share/keyrings` by hand and those instructions now fail. Script 02 installs the `ros2-apt-source` package instead, which handles rotation.
 
@@ -68,7 +76,7 @@ It prints ok or FAIL per item and exits non-zero if anything is missing. Nothing
 
 So no script here ever invokes `gazebo`. Step 03 and `verify.sh` both ask `dpkg-query` instead, which answers the only question they have. If you need the version at a prompt, use `dpkg-query -W -f='${Version}' gazebo`.
 
-`gzserver`, the headless server, is the binary PX4 SITL actually needs and it is a separate question. Test it on its own before trusting it, and expect to lose the distro if it goes the same way.
+`gzserver`, the headless server PX4 SITL actually drives, is fine. Tested 26 August: it starts, stays up, survives the dxg ioctl failures in dmesg, and leaves the distro alone. Only the GUI-side binary is dangerous. So headless work is safe and the risk is confined to recording the demo video.
 
 **GUI under WSLg.** If `verify.sh` reports no DISPLAY and no WAYLAND_DISPLAY, WSLg isn't giving you a display and Gazebo's GUI won't open. That isn't a blocker for the work; run SITL with `HEADLESS=1` and everything except the picture still happens. It does block recording the demo video, so it has to be fixed before 20 September.
 

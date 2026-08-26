@@ -29,8 +29,17 @@ if ! already_did px4-deps; then
   done_with px4-deps
 fi
 
-say "building px4_sitl gazebo-classic, this takes a while on first run"
-make px4_sitl gazebo-classic || die "PX4 SITL build failed. Read the last 40 lines above before rerunning."
+# `make px4_sitl gazebo-classic` builds AND LAUNCHES the simulator. That is the
+# documented way to fly it, and the wrong thing for a provisioning script: it
+# ends by running sitl_run.sh, which starts gzserver and gzclient and then fails
+# the build if the sim will not come up. Build the two targets separately.
+say "building the PX4 SITL binary, slow on a first run"
+make px4_sitl_default || die "PX4 SITL build failed. Read the last 40 lines above before rerunning."
+
+say "building the gazebo-classic plugins"
+make px4_sitl_default sitl_gazebo-classic || die "sitl_gazebo-classic build failed."
+
+[ -x "$PX4_DIR/build/px4_sitl_default/bin/px4" ] || die "px4 binary missing after a build that reported success"
 
 done_with px4
 say "px4 done"
