@@ -2,7 +2,9 @@
 
 Takes a fresh Windows 11 machine to 4 PX4 vehicles flying together in Gazebo Classic with ROS 2 seeing all of them. Reasoning behind the version choices is in [decisions.md](../decisions.md).
 
-**Status: steps 01 to 03 verified on this machine, 26 August. Steps 04 and 05 in progress.** Everything below has been corrected against what actually happened rather than what the documentation promised, and three of the notes at the bottom exist because a run failed on them.
+**Status: all five steps run and verified on this machine, 26 August 2026.** `verify.sh` passes every check and exits 0. Everything below is corrected against what actually happened rather than what the documentation promised, and every note in the failure list exists because a run died on it.
+
+What that does and does not prove: the stack is installed and the pieces are where they should be. Nothing has flown. Four vehicles airborne together is the W1 gate, and it is a separate question from this file.
 
 ## What you end up with
 
