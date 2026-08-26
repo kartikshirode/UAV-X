@@ -21,7 +21,10 @@ sudo apt-get install -y gazebo libgazebo-dev
 sudo apt-get install -y "ros-${ROS_DISTRO_NAME}-gazebo-ros-pkgs" || \
   warn "gazebo_ros_pkgs not installed. Not needed for PX4 SITL, only if a ROS-side gazebo plugin is wanted later."
 
-gazebo --version | head -1 || die "gazebo did not run"
+# sed rather than head: head closes the pipe after one line, gazebo takes
+# SIGPIPE, and pipefail turns a working install into a failed step.
+command -v gazebo >/dev/null 2>&1 || die "gazebo is not on PATH"
+gazebo --version 2>&1 | sed -n '1p'
 
 done_with gazebo
 say "gazebo done"
