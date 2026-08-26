@@ -29,6 +29,36 @@ uavx_load_env
 # ---------------------------------------------------------------- preflight
 # Runs before every week. Proves the shell the gate is standing in is real.
 gate_preflight() {
+  # Round 3 finding 4: registration and eligibility were filed as open items,
+  # not blocking. An unregistered or ineligible entrant has no valid submission
+  # however good the simulation is, and eligibility disqualifies at any stage.
+  # Five weeks of work behind an invalid entry is the worst available outcome,
+  # so the loop refuses to start without a receipt. See stage-1/human-preflight.md.
+  gsay "preflight: human dependencies"
+  local hp="${UAVX_REPO}/submission/human-preflight.json"
+  if [ ! -f "$hp" ]; then
+    gdie "no ${hp}. Registration, eligibility, the clarification channel, the organiser questions and the delivery method are human steps and none of them can be done by an agent. See stage-1/human-preflight.md."
+  fi
+  python3 - "$hp" <<'PYHP' || gdie "human preflight receipt is incomplete"
+import json, sys
+need = ["registered", "eligibility", "clarification_channel", "organiser_email", "delivery"]
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+missing = [k for k in need if not d.get(k)]
+if missing:
+    print(f"  missing: {', '.join(missing)}")
+    sys.exit(1)
+if not d["registered"].get("done"):
+    print("  registration has no date")
+    sys.exit(1)
+if not d["eligibility"].get("declaration"):
+    print("  eligibility has no declaration")
+    sys.exit(1)
+if not d["delivery"].get("attachment_limit_mb"):
+    print("  delivery has no attachment budget, so W5 cannot check the package fits")
+    sys.exit(1)
+print(f"  registered {d['registered']['done']}, eligibility declared, delivery budget {d['delivery']['attachment_limit_mb']} MB")
+PYHP
+
   gsay "preflight: environment"
   uavx_require_ros
   uavx_require_px4_msgs
