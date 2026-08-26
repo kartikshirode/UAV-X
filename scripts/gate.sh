@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+# The single definition of every week's gate.
+#
+# Round 2 finding 2: the gates were written out in stage-1/plan.md,
+# stage-1/decisions.md and .claude/weekly-loop.md, and the three had already
+# drifted apart. One of them would have failed a correct implementation. Prose
+# cannot be the source of truth for something a machine enforces, so this script
+# is the source of truth and those three files describe it instead.
+#
+# Usage:  bash scripts/gate.sh <week>     week is 1..5
+#         bash scripts/gate.sh preflight  environment only
+#
+# Exit 0 means the week passes. Anything else means it does not.
+#
+# Read the exit code from wsl.exe itself, never from a $? inside a quoted
+# command. `wsl.exe -- bash -lc 'cmd; echo $?'` prints 0 whatever happened.
+
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/gate-env.sh
+source "${HERE}/gate-env.sh"
+
+WEEK="${1:-}"
+[ -n "$WEEK" ] || gdie "usage: gate.sh <1..5|preflight>"
+
+uavx_load_env
+
+# ---------------------------------------------------------------- preflight
+# Runs before every week. Proves the shell the gate is standing in is real.
+gate_preflight() {
+  gsay "preflight: environment"
+  uavx_require_ros
+  uavx_require_px4_msgs
+  uavx_require_sim
+  printf '  ros2            %s\n' "$(command -v ros2)"
+  printf '  colcon          %s\n' "$(command -v colcon)"
+  printf '  gzserver        %s\n' "$(command -v gzserver)"
+  printf '  px4             %s\n' "${UAVX_PX4_DIR}/build/px4_sitl_default/bin/px4"
+  printf '  agent           %s\n' "$(command -v MicroXRCEAgent || echo MISSING)"
+  command -v MicroXRCEAgent >/dev/null 2>&1 || gdie "MicroXRCEAgent missing"
+
+  gsay "preflight: no simulator left running from a previous gate"
+  for p in gzserver gzclient px4 MicroXRCEAgent; do
+    if pgrep -x "$p" >/dev/null 2>&1; then
+      gdie "$p is already running. A previous gate did not clean up; kill it before trusting any result."
+    fi
+  done
+  printf '  clean\n'
+}
+
+# Builds our packages once the workspace exists. Before W1 creates it there is
+# nothing to build and that is not a failure.
+gate_build() {
+  if [ ! -d "${UAVX_WS_SRC}/src" ]; then
+    gsay "build: ${UAVX_WS_SRC}/src does not exist yet, nothing to build"
+    return 0
+  fi
+  gsay "build: colcon, output on ext4 not on /mnt/c"
+  colcon build \
+    --base-paths "${UAVX_WS_SRC}" \
+    --build-base "${UAVX_BUILD_BASE}" \
+    --install-base "${UAVX_INSTALL_BASE}" \
+    --symlink-install \
+    || gdie "colcon build failed"
+  [ -f "${UAVX_INSTALL_BASE}/setup.bash" ] \
+    || gdie "colcon reported success and produced no install/setup.bash"
+  uavx_source "${UAVX_INSTALL_BASE}/setup.bash" || gdie "cannot source the overlay just built"
+}
+
+# colcon test exits 0 with failing tests. test-result is what actually reports.
+gate_test() {
+  gsay "test: $*"
+  colcon test \
+    --base-paths "${UAVX_WS_SRC}" \
+    --build-base "${UAVX_BUILD_BASE}" \
+    --install-base "${UAVX_INSTALL_BASE}" \
+    --packages-select "$@" \
+    --return-code-on-test-failure \
+  || gdie "colcon test failed for: $*"
+  colcon test-result --test-result-base "${UAVX_BUILD_BASE}" --verbose \
+    || gdie "colcon test-result reported failures for: $*"
+}
+
+run_scenario() {
+  local scenario="$1"
+  [ -f "${UAVX_REPO}/${scenario}" ] || gdie "scenario not found: ${scenario}"
+  uavx_invalidate_latest
+  gsay "scenario: ${scenario}"
+  bash "${UAVX_REPO}/scripts/run_scenario.sh" "${scenario}" \
+    || gdie "scenario run failed: ${scenario}"
+  [ -f "${UAVX_RUNS_DIR}/latest.jsonl" ] \
+    || gdie "scenario finished and produced no runs/latest.jsonl"
+}
+
+# The checker verifies provenance before it looks at any metric, so a stale or
+# hand-written file cannot satisfy a gate. See uavx_eval/check.py.
+check_run() {
+  local scenario="$1"; shift
+  python3 -m uavx_eval.check "${UAVX_RUNS_DIR}/latest.jsonl" \
+    --expect-scenario "${scenario}" \
+    "$@" \
+    || gdie "metric check failed for ${scenario}"
+}
+
+# -------------------------------------------------------------------- weeks
+gate_w1() {
+  gsay "W1: four vehicles airborne together, headless"
+  bash "${UAVX_REPO}/scripts/run_smoke.sh" --vehicles 4 \
+    || gdie "smoke run failed"
+}
+
+gate_w2() {
+  uavx_require_overlay
+  uavx_require_module uavx_eval
+  gate_test uavx_mission uavx_eval
+  run_scenario scenarios/survey_baseline.yaml
+  check_run scenarios/survey_baseline.yaml \
+    --require "coverage_fraction>=0.95" \
+    --require "coverage_source==pose_samples"
+}
+
+gate_w3() {
+  uavx_require_overlay
+  gate_test uavx_comms uavx_msgs
+  gsay "W3: the seam holds"
+  bash "${UAVX_REPO}/scripts/check_seam.sh" || gdie "tx/rx seam violated"
+
+  run_scenario scenarios/relay_required.yaml
+  check_run scenarios/relay_required.yaml \
+    --require "delivery_ratio>=0.95" \
+    --require "delivery_ratio_by_node.uav_4>=0.95" \
+    --require "delivered_hops_by_node.uav_4>=2" \
+    --require "app_packets_sent_by_node.uav_4>=100"
+
+  run_scenario scenarios/direct_only.yaml
+  check_run scenarios/direct_only.yaml \
+    --require "delivery_ratio_by_node.uav_4==0" \
+    --require "app_packets_sent_by_node.uav_4>=100"
+}
+
+gate_w4() {
+  uavx_require_overlay
+  gate_test uavx_roles uavx_sim
+  run_scenario scenarios/relay_kill.yaml
+  check_run scenarios/relay_kill.yaml \
+    --require "injected_event_observed==true" \
+    --require "time_to_reconnect_s<=${UAVX_RECONNECT_BUDGET_S:-45}" \
+    --require "delivery_ratio_after_recovery>=0.90" \
+    --require "relay_role_moved==true" \
+    --require "pose_sample_count>=1000" \
+    --require "min_pairwise_separation_m>=10" \
+    --require "separation_violations==0" \
+    --require "collision_contacts==0"
+
+  run_scenario scenarios/encounter.yaml
+  check_run scenarios/encounter.yaml \
+    --require "yield_events>=1" \
+    --require "separation_violations==0" \
+    --require "collision_contacts==0"
+}
+
+gate_w5() {
+  gsay "W5: submission package"
+  python3 "${UAVX_REPO}/scripts/check_submission.py" \
+    || gdie "submission package incomplete"
+  gsay "W5 machine gate passed. Sending the email is a human step; the loop halts here."
+}
+
+# ------------------------------------------------------------------ dispatch
+case "$WEEK" in
+  preflight) gate_preflight ;;
+  1) gate_preflight; gate_build; gate_w1 ;;
+  2) gate_preflight; gate_build; gate_w2 ;;
+  3) gate_preflight; gate_build; gate_w3 ;;
+  4) gate_preflight; gate_build; gate_w4 ;;
+  5) gate_preflight; gate_build; gate_w5 ;;
+  *) gdie "unknown week: ${WEEK}" ;;
+esac
+
+gsay "gate ${WEEK} PASSED"
