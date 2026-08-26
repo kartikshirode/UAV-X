@@ -88,6 +88,32 @@ if [ -f "$WS_DIR/install/setup.bash" ]; then
   check "px4_msgs on the path" px4_msgs_present
 fi
 
+say "version lock"
+# Round 2 finding 11: the scripts resolved "newest v1.15.*" and tracked moving
+# release branches, so a fresh install in September could build a different
+# stack from the one every result in this repo came off. Compare, do not assume.
+LOCK="$(dirname "$0")/versions.lock"
+if [ ! -f "$LOCK" ]; then
+  printf '  FAIL  versions.lock missing\n'
+  FAILS=$((FAILS + 1))
+else
+  lock_get() { grep -E "^$1=" "$LOCK" | head -1 | cut -d= -f2-; }
+  cmp_ver() {
+    local label="$1" want="$2" got="$3"
+    if [ "$want" = "$got" ]; then
+      printf '  ok    %-22s %s\n' "$label" "$got"
+    else
+      printf '  FAIL  %-22s locked %s, found %s\n' "$label" "$want" "$got"
+      FAILS=$((FAILS + 1))
+    fi
+  }
+  cmp_ver "px4 sha"      "$(lock_get px4_sha)"      "$(git -C "$PX4_DIR" rev-parse HEAD 2>/dev/null)"
+  cmp_ver "xrce agent sha" "$(lock_get xrce_agent_sha)" "$(git -C "$HOME/src/Micro-XRCE-DDS-Agent" rev-parse HEAD 2>/dev/null)"
+  cmp_ver "px4_msgs sha"  "$(lock_get px4_msgs_sha)"  "$(git -C "$WS_DIR/src/px4_msgs" rev-parse HEAD 2>/dev/null)"
+  cmp_ver "px4_ros_com sha" "$(lock_get px4_ros_com_sha)" "$(git -C "$WS_DIR/src/px4_ros_com" rev-parse HEAD 2>/dev/null)"
+  cmp_ver "gazebo"        "$(lock_get gazebo_version)" "$GZ_PKG_VER"
+fi
+
 say "display"
 if [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
   printf '  DISPLAY=%s WAYLAND_DISPLAY=%s\n' "${DISPLAY:-unset}" "${WAYLAND_DISPLAY:-unset}"

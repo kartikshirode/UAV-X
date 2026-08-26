@@ -8,13 +8,16 @@ What that does and does not prove: the stack is installed and the pieces are whe
 
 ## What you end up with
 
+Exact commit SHAs are in [versions.lock](versions.lock), and `verify.sh` compares against it. The table below is the readable version; the lock file is the authority.
+
+
 | Piece | Version |
 | --- | --- |
 | Distro | Ubuntu 22.04 LTS under WSL2 |
 | ROS 2 | Humble Hawksbill, desktop |
 | Simulator | Gazebo Classic 11 |
-| PX4 | newest v1.15.x tag |
-| Bridge | Micro XRCE-DDS Agent v2.4.2, px4_msgs, px4_ros_com |
+| PX4 | v1.15.4 |
+| Bridge | Micro XRCE-DDS Agent v2.4.3, px4_msgs, px4_ros_com |
 
 ## Before you start
 
@@ -47,7 +50,7 @@ Steps in order:
 | `01-base.sh` | apt update, build tooling, locale, universe repo |
 | `02-ros2-humble.sh` | ROS 2 Humble desktop, colcon, rosdep |
 | `03-gazebo-classic.sh` | gazebo11 from the osrfoundation repo |
-| `04-px4.sh` | clones PX4 at the newest v1.15.x tag, runs its dependency script, builds `px4_sitl gazebo-classic` |
+| `04-px4.sh` | clones PX4 at the tag in versions.lock, runs its dependency script, builds the SITL binary and the gazebo-classic plugins as separate targets |
 | `05-ros2-bridge.sh` | Micro XRCE-DDS Agent, then a colcon workspace holding px4_msgs and px4_ros_com |
 
 Then open a fresh shell so the `.bashrc` lines take effect, and check:
