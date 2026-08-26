@@ -44,16 +44,17 @@ One node anchored near the GCS, one relay, two out surveying. Smallest set that 
 
 ## Decision gates
 
-Round 1 finding 6: no gates anywhere, no stated fallback. Here they are. Each one is a date, a pass condition and what happens if it isn't met.
+Round 1 finding 6: no gates anywhere, no stated fallback. Here they are, one per `/loop` week. Each is a date, a pass condition and what happens if it is missed. The pass conditions are commands, written out in full in [plan.md](plan.md); a week is done when they exit 0.
 
-| Date | Gate | Passes when | If it fails |
-| --- | --- | --- | --- |
-| 31 Aug | Environment | 4 PX4 SITL instances airborne together in Gazebo Classic, `ros2 topic list` showing a namespace per vehicle | Drop to 2 vehicles and carry on. If WSLg or the GPU is the blocker rather than PX4, run headless with `HEADLESS=1` and keep one scripted GUI run at the end for the video. Do not spend day 7 here. |
-| 6 Sep | Survey mission | All 4 fly a waypoint coverage pattern, telemetry from all of them arriving at one node | Cut the pattern to a straight lawnmower over a smaller box. Mission completion is 25% and the comms work is 60%. |
-| 13 Sep | Comms layer | Range gate delivering, GCS reachable from the far drone only through a relay hop | Hard stop, because this is the submission. If it isn't working by 13 Sep, reduce fault recovery to a single scripted failure and give those days back to comms. |
-| 19 Sep | Fault recovery | Relay killed mid-flight, role reassigned, chain rebuilt, nobody touching anything | Fall back to a kill at a known time with hand-tuned reassignment. It still reads on video. |
-| 24 Sep | Proposal and video | 6 to 8 pages written, demo recorded | Video first and proposal second. Without footage there's nothing for an evaluator to look at. |
-| 26 Sep | Submit | Fresh-machine install test passes, email sent | Send on 26 Sep regardless, with whatever exists. Deadline is 27 Sep and email gives no upload confirmation. |
+| Week | Date | Gate | Passes when | If it fails |
+| --- | --- | --- | --- | --- |
+| W1 | 1 Sep | Environment | `verify.sh` and `run_smoke.sh --vehicles 4` both exit 0 | Drop to 2 vehicles and carry on unchanged. If WSLg is the blocker rather than PX4, stay headless and book one GUI run in W5 for the video. Do not spend W2 here. |
+| W2 | 8 Sep | Survey mission | `coverage_fraction >= 0.95` on the baseline scenario | Shrink the area, keep the metric. A small box covered fully beats a big one covered partly, because the number is what gets reported. |
+| W3 | 15 Sep | Comms layer | `delivery_ratio >= 0.95` and `mean_hop_count > 1.0` on the relay scenario, and `delivery_ratio < 0.5` on the direct-only control | Hard stop, because this is the submission. W4 gives up days to it, never the reverse. |
+| W4 | 22 Sep | Fault recovery and safety | `time_to_reconnect_s <= 30`, `role_changes >= 1`, `separation_violations == 0` after a relay kill | Fall back to a deterministic priority list computed at startup instead of live election. It still recovers and still demos; the proposal describes what it is. |
+| W5 | 26 Sep | Submit | `check_submission.py` exits 0, email sent | Send on 26 Sep regardless, with whatever exists. Deadline is 27 Sep and email gives no upload confirmation. |
+
+The control run in W3 is the one worth defending. A delivery ratio of 1.0 on its own proves nothing, because that is also what an accidentally open gate produces. The pair of runs together is the evidence.
 
 ## Still open
 
