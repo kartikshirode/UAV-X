@@ -58,23 +58,23 @@ For an ordered pair at 3D distance `d`:
 
 | Parameter | Value |
 | --- | --- |
-| `r_full` | 400 m |
-| `r_max` | 500 m |
+| `r_full` | 200 m |
+| `r_max` | 250 m |
 | per-hop latency | 20 ms |
 | RNG | seeded per run from the scenario file |
 
 Links are evaluated per direction and per message, from ground-truth positions sampled at 20 Hz.
 
-**Why 400 and 500 rather than 300 and 500.** Round 2 did the arithmetic the plan had not. In a fade band, two lossy hops need `p^2 >= 0.95`, so each hop needs `p >= 0.9747`. With a 200 m band that puts every usable link within 5 m of `r_full`, which no moving vehicle can hold. A 100 m band plus the rule below keeps every link the routing depends on out of the fade region entirely, so end-to-end delivery is deterministic and a failure means the code is wrong rather than the geometry unlucky.
+**How the numbers were chosen.** Two constraints, in order. First, a fade band cannot carry a link the gates depend on: two lossy hops need `p^2 >= 0.95`, so each hop needs `p >= 0.9747`, which lands within a few metres of `r_full` and no moving vehicle holds that. So every asserted link sits in the full band and the fade band exists only to be exercised and reported. Second, the whole geometry scales with the radio, and a smaller radio means shorter recovery flights and a shorter demo. 200 and 250 keep the topology in section 6 and put the relay flight at 191.6 m, which is 19.2 s rather than 38.
 
 ### The placement rule
 
 Every scenario obeys both:
 
-- A link the routing **must** use is at most **350 m**, so it sits 50 m inside `r_full`.
-- A link that **must not** exist is at least **600 m**, so it sits 100 m beyond `r_max`.
+- A link the routing **must** use is at most **175 m**, so it sits 25 m inside `r_full`.
+- A link that **must not** exist is at least **300 m**, so it sits 50 m beyond `r_max`.
 
-Nothing a gate asserts on may sit in the fade band. The fade band exists to be exercised and reported, not to be depended on.
+No pair may fall between those two figures. A pair in the gap makes a code failure and an unlucky draw produce the same result, which is untestable. `scripts/check_geometry.py` enumerates every pair and enforces it.
 
 ## 3. Routing
 
@@ -99,28 +99,35 @@ Hysteresis and the symmetry rule exist to stop route flapping when a link sits n
 
 Three roles: `SURVEY`, `RELAY`, `GCS_ANCHOR`. Round 2 finding 8 is right that "the swarm elects" is not a specification, so here is the machine.
 
-### Coordinator
+### Who elects
 
-The node with the **lowest id that currently has a route to `gcs`** is the coordinator. It is the only node that may open an election. A node with no route to `gcs` never coordinates, which resolves the split-view problem: the disconnected side cannot elect anything, and does not need to.
+Round 3 finding 1 broke the previous rule. It made the coordinator "the lowest id with a route to `gcs`", but in the frozen topology the only node left with a route after the relay dies is the anchor, and the anchor is never eligible to move. Nobody could have opened an election.
+
+**The disconnected component elects its own relay.** That is also the more honest reading of "reconfigures itself as drones fail": the part of the swarm that lost contact is the part that has to solve it.
+
+1. A node whose route to `gcs` has been absent for `neighbour_timeout` marks itself `DISCONNECTED` and floods that state within its own component.
+2. The component's coordinator is its **lowest id member**. Every member computes the same one because they all see the same component.
+3. The **attachment node** is the last node the component could reach that still had a route to `gcs`, taken from the last link-state view before the split. In the frozen scenario that is `uav_1`.
+4. Eligible movers are `SURVEY` members of the component. A `GCS_ANCHOR` is never eligible.
+5. The mover is the eligible member **nearest the attachment node**, ties broken by lowest id.
 
 ### Relay slots
 
-A relay slot is a **computed midpoint**, not a free choice. When the coordinator sees that node `X` has no route to `gcs`, it computes the slot as the midpoint between `X`'s last known position and the position of the connected node nearest to `X`. If that midpoint is further than 350 m from either end, the topology needs two relays and the coordinator reports `RELAY_INFEASIBLE` rather than sending someone to an impossible place.
+The slot is the midpoint between the **attachment node** and the **member that stays**, both of which are stationary at the moment of computation. The previous rule said "nearest connected node", which in this topology resolved to the moving candidate itself and was circular.
 
-Positions travel in `HELLO` and in role messages. LSAs carry neighbour tables only, so the plan's earlier claim that a node could score repositioning distance from LSAs was wrong.
+If either half of that midpoint exceeds 175 m the component reports `RELAY_INFEASIBLE` rather than sending someone to an impossible place. Positions travel in `HELLO` and in role messages; LSAs carry neighbour tables only.
 
 ### Election
 
-1. Coordinator opens epoch `e = e + 1`, broadcasting `ELECTION(e, slot_position, disconnected_id)`.
-2. Eligible candidates are `SURVEY` nodes with a live route to the coordinator. `GCS_ANCHOR` is never eligible; losing the anchor loses everyone.
-3. Each candidate replies `BID(e, own_id, distance_to_slot)`.
-4. Coordinator waits `election_window` = 1.0 s, then picks the lowest `distance_to_slot`, breaking ties by lowest id.
-5. Coordinator sends `ASSIGN(e, winner_id, slot_position)`. The winner acknowledges with `ROLE_ACK(e)`.
-6. Winner switches to `RELAY` and flies to the slot. Its survey area is marked unassigned.
-7. The role is held on a **lease** of 30 s, renewed by the coordinator each `LSA` period. A relay whose lease expires reverts to `SURVEY`, so a dead coordinator cannot strand a vehicle.
-8. Recovery is complete when the disconnected node has had a route to `gcs` for `stability_window` = 3.0 s continuously.
+1. Coordinator opens epoch `e = e + 1`, broadcasting `ELECTION(e, attachment_id, slot_position)`.
+2. Each eligible member replies `BID(e, own_id, distance_to_attachment)`.
+3. Coordinator waits `election_window` = 1.0 s, then picks the lowest distance, ties by lowest id.
+4. Coordinator sends `ASSIGN(e, winner_id, slot_position)`; the winner replies `ROLE_ACK(e)`.
+5. The winner becomes `RELAY` and flies to the slot. **Its survey strip is handed to the members that stay, not abandoned.**
+6. The role is held on a 30 s lease, renewed each `LSA` period. An expired lease reverts the node to `SURVEY`, so a dead coordinator cannot strand a vehicle.
+7. Recovery is complete when the component has had a route to `gcs` for `stability_window` = 3.0 s continuously.
 
-Elections for the same epoch are idempotent. A node ignores `ASSIGN` for an epoch older than the one it has seen.
+Elections are idempotent per epoch, and a node ignores `ASSIGN` for an epoch older than the highest it has seen.
 
 ### Derived reconnect budget
 
@@ -131,12 +138,12 @@ Round 2 finding 6 is right that 30 s was asserted, not derived. For the frozen `
 | Detect the loss | 3.0 s | `neighbour_timeout` |
 | LSA convergence | 2.0 s | one `LSA` period |
 | Election | 1.0 s | `election_window` |
-| Fly to slot | 20.1 s | 200.6 m at 10 m/s |
-| Accelerate and settle | 4.0 s | measured allowance |
+| Fly to slot | 19.2 s | 191.6 m at 10 m/s |
+| Accelerate and settle | 4.0 s | allowance |
 | Stability window | 3.0 s | `stability_window` |
-| **Total** | **33.1 s** | |
+| **Total** | **32.2 s** | |
 
-The gate is **45 s**, which is the derived total plus roughly 35% margin. It is not 30 s, because 30 s fails a correct implementation.
+The gate is **45 s**, the derived total plus 40% margin. It is not 30 s, because 30 s fails a correct implementation. `scripts/check_geometry.py` recomputes every term from the frozen coordinates, so the table cannot drift away from the geometry it describes.
 
 ## 5. Safety
 
@@ -159,44 +166,79 @@ All positions in metres, GCS at the origin. Distances chosen against the placeme
 
 ### Common
 
+All positions metres, GCS at the origin. Every figure below is recomputed by `scripts/check_geometry.py`, which enumerates all ten pairs rather than the handful an author thought to list. Round 3 finding 1 exists because the previous version did the latter and missed two full-band links that made the whole relay-kill scenario meaningless.
+
 | Node | Role at start | Position | Cruise altitude |
 | --- | --- | --- | --- |
 | `gcs` | ground station | (0, 0, 0) | fixed |
-| `uav_1` | `GCS_ANCHOR` | (330, 0, 30) | 30 |
-| `uav_2` | `RELAY` | (660, 0, 40) | 40 |
-| `uav_3` | `SURVEY` | (640, 200, 50) | 50 |
-| `uav_4` | `SURVEY` | (980, 0, 60) | 60 |
+| `uav_1` | `GCS_ANCHOR` | (165, 0, 30) | 30 |
+| `uav_2` | `RELAY` | (330, 0, 40) | 40 |
+| `uav_3` | `SURVEY` | (475, 75, 50) | 50 |
+| `uav_4` | `SURVEY` | (475, -75, 60) | 60 |
 
-Resulting link distances:
+The complete distance matrix, all ten pairs:
 
-| Pair | Distance | Band | Used by routing |
+| Pair | Distance | Band | Link |
 | --- | --- | --- | --- |
-| `gcs` to `uav_1` | 331.4 m | full | yes |
-| `uav_1` to `uav_2` | 330.2 m | full | yes |
-| `uav_2` to `uav_4` | 320.6 m | full | yes |
-| `uav_2` to `uav_3` | 201.2 m | full | yes |
-| `gcs` to `uav_2` | 661.2 m | out | no |
-| `gcs` to `uav_3` | 672.4 m | out | no |
-| `gcs` to `uav_4` | 981.8 m | out | no |
-| `uav_1` to `uav_4` | 650.7 m | out | no |
+| `gcs` to `uav_1` | 167.7 m | full | yes |
+| `uav_1` to `uav_2` | 165.3 m | full | yes |
+| `uav_2` to `uav_3` | 163.6 m | full | yes |
+| `uav_2` to `uav_4` | 164.5 m | full | yes |
+| `uav_3` to `uav_4` | 150.3 m | full | yes |
+| `gcs` to `uav_2` | 332.4 m | out | no |
+| `uav_1` to `uav_3` | 319.6 m | out | no |
+| `uav_1` to `uav_4` | 320.4 m | out | no |
+| `gcs` to `uav_3` | 483.5 m | out | no |
+| `gcs` to `uav_4` | 484.6 m | out | no |
 
-So `uav_4` reaches the GCS only as `uav_4 -> uav_2 -> uav_1 -> gcs`, three hops, every hop deterministic. With no relay it cannot reach the GCS at all. That is what makes the W3 gate pair meaningful.
+So the graph is a chain, `gcs - uav_1 - uav_2 - {uav_3, uav_4}`, with `uav_3` and `uav_4` also linked to each other. Both survey drones reach the GCS **only** through `uav_2`, which is what makes killing it an actual event.
+
+The `uav_3` to `uav_4` link is load-bearing in a way that is easy to miss: it is what lets the disconnected side run an election at all. Without it the two survey drones could not agree on anything after the split.
 
 ### `survey_baseline.yaml`
 
 | Parameter | Value |
 | --- | --- |
-| Survey area | 400 m by 400 m, south-west corner at (400, -200) |
-| Grid cell | 20 m by 20 m, so 400 cells |
-| Sensor footprint | 25 m radius, disc, centred under the vehicle |
-| Vehicles surveying | 4, area split into 4 vertical strips of 100 m |
+| Survey area | 200 m by 200 m, south-west corner at (375, -100) |
+| Grid cell | 10 m by 10 m, so 400 cells |
+| Sensor footprint | 12 m radius disc, centred under the vehicle |
+| Vehicles surveying | 4, area split into 4 vertical strips of 50 m |
 | Cruise speed | 10 m/s |
 | Run duration | 420 s |
 | Coverage source | **sampled vehicle poses at 20 Hz**, never the planned path |
 
-`coverage_fraction` is cells whose centre fell inside the footprint of any pose sample, over 400. Comms are disabled in this scenario so it measures the mission and nothing else.
+`coverage_fraction` is cells whose centre fell inside the footprint of any pose sample, over 400. Communications are disabled here so the scenario measures the mission and nothing else.
 
-Round 2 is right that "shrink the box until it passes" is moving the goal. The box is frozen here. If coverage cannot reach 0.95 in 420 s, the mission planner is wrong and that is the finding.
+The box is frozen. If coverage cannot reach the gate in 420 s the planner is wrong, and shrinking the box would be moving the goal rather than fixing the code.
+
+### `mission_integrated.yaml`
+
+Round 3 finding 5: every other scenario proves one subsystem in isolation, and the official task couples them. A demo of stationary dots recovering a synthetic packet stream is not a disaster-response swarm. This is the scenario the proposal and the video both point at, and it is the proof of concept the five deliverables describe.
+
+It runs the whole task at once: survey, relay the observations home, lose the relay, reconfigure, finish the mission.
+
+| Parameter | Value |
+| --- | --- |
+| Survey area | 50 m by 210 m, south-west corner at (405, -105) |
+| Grid cell | 10 m by 10 m, so 105 cells |
+| Surveying vehicles | `uav_3` and `uav_4`, two strips of 25 m |
+| Static roles | `uav_1` anchor, `uav_2` relay, both station-keeping |
+| Observation packets | 5 Hz per surveying vehicle |
+| Kill | `uav_2` at `t = 150 s` |
+| Run duration | 480 s |
+
+The box is not a free choice, it is the largest area that satisfies two hard constraints at once, computed rather than picked: every point must stay within 175 m of `uav_2` so observations have a live route home before the kill, and at least 250 m from `uav_1` so the kill actually disconnects the surveyors. At the worst corner those come out at 164.5 m and 262.7 m, leaving about 10 m of margin on each.
+
+That box is small, and saying why is worth a paragraph of the proposal. **The area a swarm can survey behind a relay is bounded by radio geometry, not by battery or flight time.** That is the actual engineering trade-off this challenge is about, and a submission that states it with numbers is making the point the rubric rewards rather than hiding a limitation.
+
+After the kill the surveyors are disconnected exactly as in `relay_kill`, `uav_3` becomes the relay and flies to the slot, and `uav_4` inherits `uav_3`'s strip. Observations generated during the outage are **buffered and delivered once the route returns**, which is what a real BVLOS mission does, and it is why the gate asserts delivery by end of run rather than instantaneously.
+
+What this scenario has to show, and what its gate asserts:
+
+- the survey completes despite losing a vehicle to the relay role
+- observations generated during the outage arrive after recovery, none silently dropped
+- reconnection happens inside the derived budget
+- no separation violation across the whole 480 s
 
 ### `relay_required.yaml`
 
@@ -208,12 +250,18 @@ Identical to `relay_required.yaml` with forwarding disabled, so only direct link
 
 ### `relay_kill.yaml`
 
-Common geometry. At `t = 120 s`, `uav_2`, the relay, is killed. `uav_3` is the only eligible `SURVEY` node with a route to the coordinator, and the computed slot is the midpoint of `uav_1` at (330, 0, 30) and `uav_4` at (980, 0, 60), which is **(655, 0, 45)**.
+Common geometry. At `t = 120 s`, `uav_2` is killed. Both survey drones lose their route; `uav_1` keeps the GCS link.
 
-- `uav_3` flies (640, 200, 50) to (655, 0, 45): **200.6 m**, 20.1 s at 10 m/s.
-- New chain: `uav_4 -> uav_3 -> uav_1 -> gcs`, hops of 325.3 m each, both inside `r_full`.
+The component `{uav_3, uav_4}` elects. Distances to the attachment node `uav_1` are 319.6 m and 320.4 m, so `uav_3` wins by 0.8 m. That margin is small but it is deterministic and reproducible, not a coin flip; the tie-break by lowest id would pick `uav_3` regardless.
 
-Run duration 300 s, so there are 180 s after the kill to observe recovery and steady state.
+The slot is the midpoint of `uav_1` at (165, 0, 30) and `uav_4`, the member that stays, at (475, -75, 60), which is **(320, -37.5, 45)**.
+
+- `uav_3` flies (475, 75, 50) to (320, -37.5, 45): **191.6 m**, 19.2 s at 10 m/s.
+- Both new hops are 160.2 m, inside `r_full`.
+- Restored path: `uav_4 -> uav_3 -> uav_1 -> gcs`.
+- `uav_3`'s survey strip is reassigned to `uav_4`, not abandoned.
+
+Run duration 300 s, leaving 180 s after the kill for recovery and steady state.
 
 ### `encounter.yaml`
 

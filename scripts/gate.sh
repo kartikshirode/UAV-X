@@ -123,10 +123,24 @@ gate_w2() {
 gate_w3() {
   uavx_require_overlay
   gate_test uavx_comms uavx_msgs
-  gsay "W3: the seam holds"
-  bash "${UAVX_REPO}/scripts/check_seam.sh" || gdie "tx/rx seam violated"
+
+  # Geometry first. It needs no simulator and costs a second, so a topology that
+  # cannot demonstrate what the scenario claims fails immediately rather than
+  # after a full SITL run.
+  gsay "W3: frozen topology"
+  python3 "${UAVX_REPO}/scripts/check_geometry.py" || gdie "frozen geometry does not hold"
+
+  # The static seam pass runs here. The LIVE pass cannot: preflight has just
+  # proved nothing is running, so ros2 node list would find no graph and W3
+  # could never pass. The scenario runner captures a graph snapshot while each
+  # scenario is up, and --from-snapshot reads it afterwards.
+  gsay "W3: seam, static pass"
+  bash "${UAVX_REPO}/scripts/check_seam.sh" --static-only || gdie "tx/rx seam violated in source"
 
   run_scenario scenarios/relay_required.yaml
+  gsay "W3: seam, live graph captured during relay_required"
+  bash "${UAVX_REPO}/scripts/check_seam.sh" --from-snapshot \
+    "${UAVX_RUNS_DIR}/latest-graph.json" || gdie "tx/rx seam violated at runtime"
   check_run scenarios/relay_required.yaml \
     --require "delivery_ratio>=0.95" \
     --require "delivery_ratio_by_node.uav_4>=0.95" \
@@ -141,11 +155,13 @@ gate_w3() {
 
 gate_w4() {
   uavx_require_overlay
+  gsay "W4: frozen topology"
+  python3 "${UAVX_REPO}/scripts/check_geometry.py" || gdie "frozen geometry does not hold"
   gate_test uavx_roles uavx_sim
   run_scenario scenarios/relay_kill.yaml
   check_run scenarios/relay_kill.yaml \
     --require "injected_event_observed==true" \
-    --require "time_to_reconnect_s<=${UAVX_RECONNECT_BUDGET_S:-45}" \
+    --require "time_to_reconnect_s<=45" \
     --require "delivery_ratio_after_recovery>=0.90" \
     --require "relay_role_moved==true" \
     --require "pose_sample_count>=1000" \
@@ -162,9 +178,20 @@ gate_w4() {
 
 gate_w5() {
   gsay "W5: submission package"
-  python3 "${UAVX_REPO}/scripts/check_submission.py" \
-    || gdie "submission package incomplete"
-  gsay "W5 machine gate passed. Sending the email is a human step; the loop halts here."
+  # Do NOT wrap this in `|| gdie`. The checker exits 2 for "package complete,
+  # waiting for a human to send it", which is a different state from "package
+  # broken". Collapsing both into 1 leaves the supervisor unable to tell a
+  # finished week from a failed one, which is round 3 finding 3.
+  set +e
+  python3 "${UAVX_REPO}/scripts/check_submission.py"
+  rc=$?
+  set -e
+  case "$rc" in
+    0) gsay "W5: submitted and recorded" ;;
+    2) gsay "W5: package complete, awaiting the human send. Halting here by design."
+       exit 2 ;;
+    *) gdie "submission package incomplete" ;;
+  esac
 }
 
 # ------------------------------------------------------------------ dispatch
