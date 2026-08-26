@@ -1,6 +1,6 @@
 # weekly-loop config, UAV-X
 
-Per-repo config for the `weekly-loop` skill. One tick runs one plan week. The supervisor never implements; it reads state, spawns a week-agent, then runs every gate below in its own shell.
+Per-repo config for the `weekly-loop` skill. One tick runs one plan week. The supervisor never implements; it reads state, spawns a week-agent, then runs the gate in its own shell.
 
 ## Paths
 
@@ -9,10 +9,9 @@ Per-repo config for the `weekly-loop` skill. One tick runs one plan week. The su
 | `repo_path` | `c:/Users/Kartik/Documents/Kartik/EDU/Local/Projects/Techfest/PUSHPAK-Grand-Challenge/UAV-X` |
 | `plan` | `stage-1/plan.md` |
 | `context` | `context.md` |
+| `architecture` | `stage-1/architecture.md` |
 | `decisions_locked` | `stage-1/decisions.md` |
-| `progress_dir` | `docs/progress/` |
 | `progress_file` | `docs/progress/week-<N>.md` |
-| `audit_dir` | `docs/audits/` |
 | `audit_file` | `docs/audits/week-<N>.md` |
 | `decisions_log` | `docs/decisions.md` |
 | `journal` | `docs/journal.md` |
@@ -30,94 +29,51 @@ Literal strings the supervisor greps for. No judgment reads.
 | audit complete | audit file | `AUDIT-COMPLETE` |
 | next week | handoff | `NEXT-WEEK: <N+1>` |
 
-## Shell
+## The gate
 
-Every gate runs inside WSL, because none of this stack exists on Windows. The supervisor runs each gate as:
-
-```
-wsl.exe -d Ubuntu-22.04 -- bash -lc 'cd /mnt/c/Users/Kartik/Documents/Kartik/EDU/Local/Projects/Techfest/PUSHPAK-Grand-Challenge/UAV-X && <gate>'
-```
-
-Sourcing is the week-agent's job, not the gate's. `~/.bashrc` already sources `/opt/ros/humble/setup.bash` and `~/ws_uavx/install/setup.bash`, and `bash -lc` picks both up.
-
-**Read the exit code from `wsl.exe` itself, never from a `$?` inside the quoted command.** `wsl.exe -d Ubuntu-22.04 -- bash -lc 'cmd; echo $?'` does not report what you think: the inner `$?` gets lost in the quoting and prints 0 no matter what happened. A gate checked that way passes forever. Verified on 26 August against a script that genuinely exits 1.
-
-Anything a gate sources must tolerate `set -u` being off. ROS setup files read unbound variables by design, so a gate script that runs `set -u` and then sources `/opt/ros/humble/setup.bash` dies partway through with most of its checks unrun.
-
-Scenario gates run headless. `HEADLESS=1` is set inside `run_scenario.sh`, so no gate needs a display.
-
-## Gates
-
-Two apply every week, then the week's own.
-
-**Every week:**
+There is one gate command per week and it is a script, not a list:
 
 ```
-bash stage-1/setup/verify.sh
-colcon build --symlink-install --base-paths uavx_ws
+wsl.exe -d Ubuntu-22.04 -- bash -lc "cd '<repo_path_in_wsl>' && bash scripts/gate.sh <N>"
 ```
 
-**W1**
+where `<repo_path_in_wsl>` is `/mnt/c/Users/Kartik/Documents/Kartik/EDU/Local/Projects/Techfest/PUSHPAK-Grand-Challenge/UAV-X`.
 
-```
-bash scripts/run_smoke.sh --vehicles 4
-```
+`scripts/gate.sh` is the only definition of what each week must satisfy. It runs preflight, builds the workspace, then the week's own checks. Round 2 finding 2: these commands used to be written out here, in the plan and in decisions.md, and the three had already drifted apart, with one version failing a correct implementation. Nothing in this file restates a threshold any more.
 
-**W2**
+Three things about running it that are easy to get wrong, all confirmed on this machine:
 
-```
-colcon test --packages-select uavx_mission uavx_eval && colcon test-result --verbose
-bash scripts/run_scenario.sh scenarios/survey_baseline.yaml
-python3 -m uavx_eval.check runs/latest.jsonl --require "coverage_fraction>=0.95"
-```
+- **Read the exit code from `wsl.exe` itself.** `wsl.exe -- bash -lc 'cmd; echo $?'` prints 0 no matter what happened. A gate checked that way passes forever.
+- **Do not rely on `bash -lc` for the ROS environment.** Ubuntu's `.bashrc` returns on its second line for a non-interactive shell, so `ros2` is not on `PATH` and `AMENT_PREFIX_PATH` is unset. `gate-env.sh` loads it explicitly and asserts it landed.
+- **Gates run headless.** PX4's own `sitl_multiple_run.sh` ignores `HEADLESS` and ends in an unconditional `gzclient`, which takes the whole WSL distro down. `scripts/sitl_multi.sh` is the launcher; the PX4 one must not be used.
 
-**W3**
-
-```
-colcon test --packages-select uavx_comms uavx_msgs && colcon test-result --verbose
-bash scripts/run_scenario.sh scenarios/relay_required.yaml
-python3 -m uavx_eval.check runs/latest.jsonl --require "delivery_ratio>=0.95" --require "mean_hop_count>1.0"
-bash scripts/run_scenario.sh scenarios/direct_only.yaml
-python3 -m uavx_eval.check runs/latest.jsonl --require "delivery_ratio<0.5"
-```
-
-**W4**
-
-```
-colcon test --packages-select uavx_roles uavx_sim && colcon test-result --verbose
-bash scripts/run_scenario.sh scenarios/relay_kill.yaml
-python3 -m uavx_eval.check runs/latest.jsonl --require "time_to_reconnect_s<=30" --require "delivery_ratio_after_recovery>=0.90" --require "separation_violations==0" --require "role_changes>=1"
-```
-
-**W5**
-
-```
-python3 scripts/check_submission.py
-```
-
-`colcon test` alone exits 0 even when tests fail, which is why `colcon test-result --verbose` follows it every time. Dropping that turns the test gate into decoration.
+Preflight refuses to run if a simulator is already up, because a gate inheriting someone else's gzserver is not measuring what it thinks.
 
 ## Rules digest
 
-Handed to every week-agent. These are the repo's non-negotiables.
+Handed to every week-agent. The repo's non-negotiables.
 
-1. **The tx/rx seam is the submission.** Swarm nodes publish only to `/uavx/<id>/tx` and subscribe only to `/uavx/<id>/rx`. No swarm node ever subscribes to another vehicle's topics. A test enforces this. Breaking it silently voids 25% of the rubric and nothing else in the repo will notice.
-2. **Never quote a metric that no run produced.** Every number in a doc traces to a JSONL under `runs/`. No estimating, no "roughly", no carrying a figure forward from an earlier week without rerunning.
-3. **Every run is seeded from its scenario file and replays exactly.** A result nobody can reproduce is not evidence.
-4. Git: commit on `main`, never push, never amend, never force, never branch, never tag. No AI attribution, no `Co-Authored-By`, no emoji. Messages read as kartikshirode wrote them.
-5. Prose written to any file follows the `humanizer` skill, and em dashes and en dashes never appear in file prose.
-6. Third-party code stays in `~/ws_uavx` and out of the repo. Our packages live in `uavx_ws/src/` and get committed.
-7. Fallbacks are in [stage-1/decisions.md](../stage-1/decisions.md). Take a stated fallback rather than inventing a new direction mid-week.
+1. **The tx/rx seam is the submission.** Swarm nodes publish only to `/uavx/<own>/tx` and subscribe only to `/uavx/<own>/rx`. The allowlist is [stage-1/architecture.md](../stage-1/architecture.md) section 1 and `scripts/check_seam.sh` enforces it both statically and against the live graph. Breaking it silently voids 25% of the rubric and nothing else notices.
+2. **Never change a frozen value to pass a gate.** Every parameter in `architecture.md` and every threshold in `scripts/gate.sh` is fixed. Changing one so a run goes green is moving the goal. If a number is unreachable, stop and report BLOCKED with the arithmetic.
+3. **Never quote a metric no run produced.** Every number in a doc traces to a JSONL under `runs/` that validates against `scenarios/run-record.schema.json`. No estimating, no carrying a figure forward without rerunning.
+4. **Every run is seeded from its scenario and replays exactly.** A result nobody can reproduce is not evidence.
+5. Assert on artifacts, not on metadata. `dpkg-query` reports a version for a package apt has merely heard of, and that let this repo pass a green check for hours on a machine with no simulator binaries. Check the file exists.
+6. `grep -c`, never `grep -q`, inside a pipeline under `pipefail`. `grep -q` closes the pipe on its first match, the producer takes SIGPIPE, and the check inverts. It has bitten this repo five times.
+7. Git: commit on `main`, never push, amend, force, branch or tag. No AI attribution, no `Co-Authored-By`, no emoji.
+8. Prose in files follows the `humanizer` skill. Em dashes and en dashes never appear.
+9. Third-party code stays in `~/ws_uavx`. Our packages live in `uavx_ws/src/` and are committed. Build output goes to ext4, never `/mnt/c`.
+10. Each week drafts its own proposal section as its metric lands. W5 has no room to write six pages.
 
 ## Blocked triggers
 
 Report BLOCKED rather than working around any of these:
 
-- A gate needs a display and WSLg is not providing one. Headless is the documented path; a gate that genuinely cannot run headless is a plan bug, not something to fake.
-- Registering on techfest.org, joining the WhatsApp group, or sending the organiser email. All need the human.
-- Anything requiring the Baramati HPC. It is off-LAN and `srun` is broken there. Stage 1 does not depend on it.
+- Sending the submission email, registering on techfest.org, or joining the WhatsApp group. All need the human. `check_submission.py` exits 2 for exactly this and the loop halts.
+- A frozen parameter that appears unreachable. Report the arithmetic; do not retune it.
+- A gate that cannot run headless. Headless is the documented path and the GUI binary crashes the distro.
+- Anything needing the Baramati HPC. It is off-LAN and Stage 1 does not depend on it.
 - `gh` is not installed, so anything needing the GitHub CLI stops until the human installs it.
-- A PX4, ROS or Gazebo version bump. The set is pinned in decisions.md on purpose; changing it is a human call.
+- A PX4, ROS or Gazebo version change. The set is pinned by SHA in `stage-1/setup/versions.lock` on purpose.
 
 ## Checkpoint
 
@@ -125,4 +81,4 @@ Report BLOCKED rather than working around any of these:
 checkpoint_every: 1
 ```
 
-Five weeks total and W3 carries the submission, so a human read between every week is worth the pause. Drop this to 2 only if the first two ticks come back clean.
+Five weeks and W3 carries the submission, so a human read between every week is worth the pause. Drop to 2 only if the first two ticks come back clean.

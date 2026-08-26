@@ -44,17 +44,19 @@ One node anchored near the GCS, one relay, two out surveying. Smallest set that 
 
 ## Decision gates
 
-Round 1 finding 6: no gates anywhere, no stated fallback. Here they are, one per `/loop` week. Each is a date, a pass condition and what happens if it is missed. The pass conditions are commands, written out in full in [plan.md](plan.md); a week is done when they exit 0.
+One gate per week. The pass condition is `bash scripts/gate.sh <N>` exiting 0, and that script is the only place any threshold is written down. Round 2 finding 2: these were spelled out here, in the plan and in the loop config, and the three had already drifted, with the W3 control in two of them failing a correct implementation. So this table says what each gate is for and what to do when it fails, and never what number it asserts.
 
-| Week | Date | Gate | Passes when | If it fails |
+| Week | Date | Gate | What it proves | If it fails |
 | --- | --- | --- | --- | --- |
-| W1 | 1 Sep | Environment | `verify.sh` and `run_smoke.sh --vehicles 4` both exit 0 | Drop to 2 vehicles and carry on unchanged. If WSLg is the blocker rather than PX4, stay headless and book one GUI run in W5 for the video. Do not spend W2 here. |
-| W2 | 8 Sep | Survey mission | `coverage_fraction >= 0.95` on the baseline scenario | Shrink the area, keep the metric. A small box covered fully beats a big one covered partly, because the number is what gets reported. |
-| W3 | 15 Sep | Comms layer | `delivery_ratio >= 0.95` and `mean_hop_count > 1.0` on the relay scenario, and `delivery_ratio < 0.5` on the direct-only control | Hard stop, because this is the submission. W4 gives up days to it, never the reverse. |
-| W4 | 22 Sep | Fault recovery and safety | `time_to_reconnect_s <= 30`, `role_changes >= 1`, `separation_violations == 0` after a relay kill | Fall back to a deterministic priority list computed at startup instead of live election. It still recovers and still demos; the proposal describes what it is. |
-| W5 | 26 Sep | Submit | `check_submission.py` exits 0, email sent | Send on 26 Sep regardless, with whatever exists. Deadline is 27 Sep and email gives no upload confirmation. |
+| W1 | 1 Sep | `gate.sh 1` | Four vehicles fly a commanded takeoff and land, and the run harness writes a valid run record | The simulator already runs 4 vehicles headless, so a failure here is our code, not the stack. Fix it; do not drop to 2 vehicles. Two vehicles cannot hold an anchor, a relay and a spare, so W3 and W4 could not run at all. |
+| W2 | 8 Sep | `gate.sh 2` | The swarm covers the frozen survey box, measured from actual poses | Cut run time or vehicle count, never the box. Shrinking the area until the number passes is moving the goal. |
+| W3 | 15 Sep | `gate.sh 3` | `uav_4` reaches the GCS only by relay, and cannot reach it at all with forwarding off | Hard stop, because this is the submission. W4 gives up days to it, never the reverse. |
+| W4 | 22 Sep | `gate.sh 4` | The relay dies, the swarm elects a replacement, repositions it and rebuilds the chain, with no separation violations | Fall back to a deterministic priority list fixed at startup instead of a live election. It still recovers and still demos; the proposal describes what it is. |
+| W5 | 26 Sep | `gate.sh 5` | The package is real, and a human has recorded the send | `gate.sh 5` exits 2 while the package is complete but unsent, which is the normal state before a human sends it. Send on 26 Sep regardless; the deadline is the 27th and email gives no upload confirmation. |
 
-The control run in W3 is the one worth defending. A delivery ratio of 1.0 on its own proves nothing, because that is also what an accidentally open gate produces. The pair of runs together is the evidence.
+The W3 control run is the one worth defending. A delivery ratio of 1.0 proves nothing by itself, because that is also what a silently open gate produces. The pair of runs together is the evidence.
+
+Every threshold behind these gates is derived in [architecture.md](architecture.md), and `scripts/check_geometry.py` re-derives the geometry and the reconnect budget so they cannot rot in prose.
 
 ## Still open
 
