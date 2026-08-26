@@ -6,6 +6,8 @@ require_jammy
 
 if already_did px4; then say "px4 already done, skipping"; exit 0; fi
 
+wait_for_net github.com
+
 if [ ! -d "$PX4_DIR/.git" ]; then
   say "resolving the newest ${PX4_BRANCH_GLOB} tag"
   PX4_TAG="${PX4_TAG:-$(git ls-remote --tags --refs https://github.com/PX4/PX4-Autopilot.git "${PX4_BRANCH_GLOB}" \

@@ -7,6 +7,8 @@ require_jammy
 
 if already_did bridge; then say "bridge already done, skipping"; exit 0; fi
 
+wait_for_net github.com
+
 if ! command -v MicroXRCEAgent >/dev/null 2>&1; then
   say "building the Micro XRCE-DDS Agent at ${XRCE_TAG}"
   SRC="$HOME/src/Micro-XRCE-DDS-Agent"

@@ -9,12 +9,13 @@ require_jammy
 if already_did ros2; then say "ros2 already done, skipping"; exit 0; fi
 
 say "adding the ROS 2 apt source"
+wait_for_net api.github.com
 . /etc/os-release
-ROS_APT_SOURCE_VERSION="$(curl -fsSL https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest \
+ROS_APT_SOURCE_VERSION="$($CURL https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest \
   | grep -F '"tag_name"' | awk -F'"' '{print $4}')"
 [ -n "$ROS_APT_SOURCE_VERSION" ] || die "could not resolve the ros-apt-source release tag"
 
-curl -fsSL -o /tmp/ros2-apt-source.deb \
+$CURL -o /tmp/ros2-apt-source.deb \
   "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.${VERSION_CODENAME}_all.deb"
 sudo apt-get install -y /tmp/ros2-apt-source.deb
 sudo apt-get update

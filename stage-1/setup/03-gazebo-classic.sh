@@ -9,7 +9,8 @@ require_jammy
 if already_did gazebo; then say "gazebo already done, skipping"; exit 0; fi
 
 say "adding the osrfoundation repo"
-sudo curl -fsSL https://packages.osrfoundation.org/gazebo.gpg \
+wait_for_net packages.osrfoundation.org
+sudo $CURL https://packages.osrfoundation.org/gazebo.gpg \
   -o /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" \
   | sudo tee /etc/apt/sources.list.d/gazebo-stable.list > /dev/null
