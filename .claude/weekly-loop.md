@@ -40,6 +40,10 @@ wsl.exe -d Ubuntu-22.04 -- bash -lc 'cd /mnt/c/Users/Kartik/Documents/Kartik/EDU
 
 Sourcing is the week-agent's job, not the gate's. `~/.bashrc` already sources `/opt/ros/humble/setup.bash` and `~/ws_uavx/install/setup.bash`, and `bash -lc` picks both up.
 
+**Read the exit code from `wsl.exe` itself, never from a `$?` inside the quoted command.** `wsl.exe -d Ubuntu-22.04 -- bash -lc 'cmd; echo $?'` does not report what you think: the inner `$?` gets lost in the quoting and prints 0 no matter what happened. A gate checked that way passes forever. Verified on 26 August against a script that genuinely exits 1.
+
+Anything a gate sources must tolerate `set -u` being off. ROS setup files read unbound variables by design, so a gate script that runs `set -u` and then sources `/opt/ros/humble/setup.bash` dies partway through with most of its checks unrun.
+
 Scenario gates run headless. `HEADLESS=1` is set inside `run_scenario.sh`, so no gate needs a display.
 
 ## Gates

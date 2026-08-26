@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
-# Checks the stack is actually there. Does not fly anything.
-# Exits non-zero if any check fails, so it can gate the run scripts.
+# Checks the stack is actually there. Does not fly anything and does not
+# start a simulator. Exits non-zero if any check fails or if it does not
+# reach the end, so it can gate the run scripts.
+#
+# Two things this script must never do:
+#   - run the gazebo binary. On WSL2 that kills the whole distribution.
+#   - source a ROS setup file under `set -u`. Those files read unbound
+#     variables by design and the shell dies mid-script, which used to make
+#     this exit 0 having checked almost nothing.
 
 . "$(dirname "$0")/00-common.sh"
 set +e
+set +u
 
 FAILS=0
+REACHED_END=0
+
 check() {
   local label="$1"; shift
   if "$@" >/dev/null 2>&1; then
@@ -15,6 +25,20 @@ check() {
     FAILS=$((FAILS + 1))
   fi
 }
+
+# The trap has to re-exit with the captured status. A bash EXIT trap that
+# returns normally clobbers the exit code, which made this script report 0
+# with four checks failing, turning every gate that used it into decoration.
+finish() {
+  local rc=$?
+  if [ "$REACHED_END" -ne 1 ]; then
+    printf '\n=== verify.sh exited early, before finishing its checks.\n'
+    printf '    Whatever it printed above is incomplete. Treat this as a failure.\n'
+    exit 2
+  fi
+  exit "$rc"
+}
+trap finish EXIT
 
 say "distro"
 . /etc/os-release
@@ -31,27 +55,29 @@ check "ros2 cli"                          command -v ros2
 check "colcon"                            command -v colcon
 
 say "simulator"
-# Never invoke the gazebo binary from a check. On WSL2 it crashes the whole
-# distribution through the dxg GPU shim, which kills this script and every
-# other shell in the distro. dpkg answers the same question safely.
+# dpkg, never the binary. See the header.
+# Read the version into a variable rather than inlining dpkg-query into a
+# bash -c string: ${Version} there gets eaten by the outer shell before dpkg
+# ever sees it, and the check fails against a correct install.
+GZ_PKG_VER="$(dpkg-query -W -f='${Version}' gazebo 2>/dev/null)"
+gz_is_11() { case "$GZ_PKG_VER" in 11.*) return 0 ;; *) return 1 ;; esac; }
+
 check "gazebo classic"      command -v gazebo
-check "gazebo is 11.x"      bash -c 'dpkg-query -W -f="\${Version}" gazebo 2>/dev/null | grep -q "^11\."'
-if command -v gzserver >/dev/null 2>&1; then
-  printf '  gzserver present. Headless server is the one that has to run; the\n'
-  printf '  gazebo GUI client is known to take this distro down under WSL2.\n'
-fi
+check "gazebo is 11.x"      gz_is_11
+check "gzserver present"    command -v gzserver
+[ -n "$GZ_PKG_VER" ] && printf '  gazebo package: %s\n' "$GZ_PKG_VER"
 
 say "px4"
-check "px4 source tree"     test -d "$PX4_DIR/.git"
-check "sitl binary built"   test -x "$PX4_DIR/build/px4_sitl_default/bin/px4"
+check "px4 source tree"      test -d "$PX4_DIR/.git"
+check "sitl binary built"    test -x "$PX4_DIR/build/px4_sitl_default/bin/px4"
 check "multi-vehicle script" test -f "$PX4_DIR/Tools/simulation/gazebo-classic/sitl_multiple_run.sh"
 if [ -d "$PX4_DIR/.git" ]; then
   printf '  px4 checkout: %s\n' "$(git -C "$PX4_DIR" describe --tags 2>/dev/null || echo unknown)"
 fi
 
 say "ros 2 bridge"
-check "MicroXRCEAgent"      command -v MicroXRCEAgent
-check "workspace built"     test -f "$WS_DIR/install/setup.bash"
+check "MicroXRCEAgent"   command -v MicroXRCEAgent
+check "workspace built"  test -f "$WS_DIR/install/setup.bash"
 if [ -f "$WS_DIR/install/setup.bash" ]; then
   # shellcheck disable=SC1090
   source "$WS_DIR/install/setup.bash"
@@ -65,6 +91,7 @@ else
   printf '  no DISPLAY and no WAYLAND_DISPLAY. Headless only, run with HEADLESS=1.\n'
 fi
 
+REACHED_END=1
 printf '\n'
 if [ "$FAILS" -eq 0 ]; then
   say "all checks passed"
