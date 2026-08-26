@@ -80,4 +80,10 @@ So no script here ever invokes `gazebo`. Step 03 and `verify.sh` both ask `dpkg-
 
 **GUI under WSLg.** If `verify.sh` reports no DISPLAY and no WAYLAND_DISPLAY, WSLg isn't giving you a display and Gazebo's GUI won't open. That isn't a blocker for the work; run SITL with `HEADLESS=1` and everything except the picture still happens. It does block recording the demo video, so it has to be fixed before 20 September.
 
+**The XRCE agent tag in the PX4 docs no longer builds.** PX4 v1.15 names Micro XRCE-DDS Agent v2.4.2. Its superbuild clones Fast DDS at branch `2.12.x`, eProsima has deleted that branch, and cmake fails with `Failed to checkout tag: '2.12.x'` after building most of the dependency tree. Nothing about the error suggests the cause is upstream.
+
+v2.4.3 pins Fast DDS `2.14.x` and Fast CDR `2.2.x`, both of which still exist, and that is what `00-common.sh` sets. Since those can vanish too, step 05 now reads the refs out of the agent's own CMakeLists and asks GitHub whether they are still there before starting the build, so a deleted branch fails in seconds naming the repo and ref.
+
+If it ever does fail that way: list the tags with `git ls-remote --tags --refs https://github.com/eProsima/Micro-XRCE-DDS-Agent.git`, pick a newer one, set `XRCE_TAG`, rerun. The guard will tell you straight away whether the new pin is good.
+
 **PX4's dependency script wants a lot of apt.** `--no-nuttx` is passed because nothing here targets real flight hardware. If you ever do want to flash a board, rerun it without that flag.
