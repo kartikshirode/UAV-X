@@ -21,10 +21,19 @@ sudo apt-get install -y gazebo libgazebo-dev
 sudo apt-get install -y "ros-${ROS_DISTRO_NAME}-gazebo-ros-pkgs" || \
   warn "gazebo_ros_pkgs not installed. Not needed for PX4 SITL, only if a ROS-side gazebo plugin is wanted later."
 
-# sed rather than head: head closes the pipe after one line, gazebo takes
-# SIGPIPE, and pipefail turns a working install into a failed step.
+# Do NOT run the gazebo binary here. Under WSL2 `gazebo --version` touches the
+# dxg GPU shim and takes the whole distribution down with it: the process is
+# killed mid-command, init exits, and every other shell in the distro dies too.
+# dmesg shows "dxgk: dxgkio_query_adapter_info: Ioctl failed" then "Init has
+# exited. Terminating distribution". Ask dpkg instead; it answers the only
+# question this step has, which is whether the package landed.
 command -v gazebo >/dev/null 2>&1 || die "gazebo is not on PATH"
-gazebo --version 2>&1 | sed -n '1p'
+GZ_VER="$(dpkg-query -W -f='${Version}' gazebo 2>/dev/null || true)"
+[ -n "$GZ_VER" ] || die "gazebo package not installed"
+case "$GZ_VER" in
+  11.*) say "gazebo ${GZ_VER}" ;;
+  *)    die "expected gazebo 11.x, got ${GZ_VER}" ;;
+esac
 
 done_with gazebo
 say "gazebo done"

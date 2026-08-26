@@ -64,6 +64,12 @@ It prints ok or FAIL per item and exits non-zero if anything is missing. Nothing
 
 **No `--depth 1` on the PX4 clone.** PX4's build reads `git describe` for its version string and a shallow clone breaks it.
 
+**Running the gazebo binary kills the whole distro.** Confirmed on this machine, 26 August. `gazebo --version` is enough to do it: the process is killed mid-command, `dmesg` shows `dxgk: dxgkio_query_adapter_info: Ioctl failed` followed by `Init has exited. Terminating distribution`, and every other shell in the distro dies with it. It took three install runs to find, because the symptom looks like a script bug rather than a crashed VM.
+
+So no script here ever invokes `gazebo`. Step 03 and `verify.sh` both ask `dpkg-query` instead, which answers the only question they have. If you need the version at a prompt, use `dpkg-query -W -f='${Version}' gazebo`.
+
+`gzserver`, the headless server, is the binary PX4 SITL actually needs and it is a separate question. Test it on its own before trusting it, and expect to lose the distro if it goes the same way.
+
 **GUI under WSLg.** If `verify.sh` reports no DISPLAY and no WAYLAND_DISPLAY, WSLg isn't giving you a display and Gazebo's GUI won't open. That isn't a blocker for the work; run SITL with `HEADLESS=1` and everything except the picture still happens. It does block recording the demo video, so it has to be fixed before 20 September.
 
 **PX4's dependency script wants a lot of apt.** `--no-nuttx` is passed because nothing here targets real flight hardware. If you ever do want to flash a board, rerun it without that flag.

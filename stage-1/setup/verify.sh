@@ -31,8 +31,15 @@ check "ros2 cli"                          command -v ros2
 check "colcon"                            command -v colcon
 
 say "simulator"
+# Never invoke the gazebo binary from a check. On WSL2 it crashes the whole
+# distribution through the dxg GPU shim, which kills this script and every
+# other shell in the distro. dpkg answers the same question safely.
 check "gazebo classic"      command -v gazebo
-check "gazebo is 11.x"      bash -c 'gazebo --version 2>/dev/null | grep -qE "version 11\."'
+check "gazebo is 11.x"      bash -c 'dpkg-query -W -f="\${Version}" gazebo 2>/dev/null | grep -q "^11\."'
+if command -v gzserver >/dev/null 2>&1; then
+  printf '  gzserver present. Headless server is the one that has to run; the\n'
+  printf '  gazebo GUI client is known to take this distro down under WSL2.\n'
+fi
 
 say "px4"
 check "px4 source tree"     test -d "$PX4_DIR/.git"
