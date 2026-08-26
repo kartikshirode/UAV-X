@@ -14,6 +14,24 @@ if ! command -v MicroXRCEAgent >/dev/null 2>&1; then
   SRC="$HOME/src/Micro-XRCE-DDS-Agent"
   mkdir -p "$HOME/src"
   [ -d "$SRC/.git" ] || git clone -b "$XRCE_TAG" https://github.com/eProsima/Micro-XRCE-DDS-Agent.git "$SRC"
+
+  # The agent's superbuild clones Fast DDS and Fast CDR at refs hard-coded in
+  # its CMakeLists. eProsima deletes old maintenance branches, so a pin that
+  # worked last year fails halfway through a long build with an unhelpful
+  # "Failed to checkout tag". Check the refs exist first and say which one is
+  # gone, rather than spending ten minutes to find out.
+  say "checking the refs this tag depends on still exist upstream"
+  fastdds_ref="$(grep -oP 'set\(_fastdds_version \K[0-9.]+' "$SRC/CMakeLists.txt" | tail -1)"
+  fastcdr_ref="$(grep -oP 'set\(_fastcdr_tag \K[0-9.x]+' "$SRC/CMakeLists.txt" | tail -1)"
+  for spec in "Fast-DDS:${fastdds_ref}.x" "Fast-CDR:${fastcdr_ref}"; do
+    repo="${spec%%:*}"; ref="${spec##*:}"
+    [ -n "$ref" ] && [ "$ref" != ".x" ] || continue
+    if ! git ls-remote --heads "https://github.com/eProsima/${repo}.git" "$ref" | grep -q .; then
+      die "${repo} branch ${ref} does not exist upstream any more. Agent ${XRCE_TAG} cannot build. Pick a newer XRCE_TAG and recheck its pins."
+    fi
+    say "  ${repo} ${ref} ok"
+  done
+
   mkdir -p "$SRC/build"
   cd "$SRC/build"
   cmake ..

@@ -7,7 +7,12 @@ ROS_DISTRO_NAME="${ROS_DISTRO_NAME:-humble}"
 PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot}"
 PX4_BRANCH_GLOB="${PX4_BRANCH_GLOB:-v1.15.*}"
 WS_DIR="${WS_DIR:-$HOME/ws_uavx}"
-XRCE_TAG="${XRCE_TAG:-v2.4.2}"
+# v2.4.2 is what the PX4 v1.15 docs name, and it no longer builds: its
+# superbuild checks out Fast DDS branch 2.12.x, which eProsima has deleted, and
+# cmake dies with "Failed to checkout tag: 2.12.x" after building half the
+# dependency tree. v2.4.3 pins Fast DDS 2.14.x and Fast CDR 2.2.x, both of which
+# still exist. Checked 26 August 2026.
+XRCE_TAG="${XRCE_TAG:-v2.4.3}"
 STAMP_DIR="${STAMP_DIR:-$HOME/.uavx-setup}"
 
 mkdir -p "$STAMP_DIR"
