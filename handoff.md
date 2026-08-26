@@ -35,9 +35,9 @@ It took seven failed runs. Four of them presented as something other than their 
 
 What this does not prove: nothing has flown. Four vehicles airborne together is the W1 gate and is still ahead.
 
-**The plan is now built for the loop.** Five weeks, each ending in gate commands that exit 0 or do not. Config at [.claude/weekly-loop.md](.claude/weekly-loop.md).
+**The plan is built for the loop and the harness exists.** Five weeks, each ending in `bash scripts/gate.sh <N>`. That script is the only definition of any threshold; the plan, decisions and loop config describe it and never restate it. The frozen design is [stage-1/architecture.md](stage-1/architecture.md).
 
-Round 1 of the plan cross-check found 8 issues; findings 1, 4, 5, 6 and 7 are answered. Round 2 by Codex has not run, and the plan should not be executed before it does. Prompt is ready in [_codex-review-prompt.md](_codex-review-prompt.md).
+**Reviews.** Round 1 found 8 issues, all answered. Round 2 by Codex returned NOT READY with 11 findings, and it was right: the four spot-checked before starting were all real, including gate drift that would have failed a correct implementation. All 11 are now fixed, and the fixes are tested rather than asserted. Round 3 has not run.
 
 ## Stage 1 deliverables, all in one email
 
@@ -72,12 +72,12 @@ Flight is 25% and the tooling hands it to you. Budget one week on flight and two
 
 ## What's not done, in order of risk
 
-1. **Round 2 of the plan review.** The plan has never been read by anything except its author. Rereading it once already turned up two gate thresholds that were wrong, one of which would have failed a correct implementation. Prompt is in [_codex-review-prompt.md](_codex-review-prompt.md); run it before any code gets written.
-2. **Nothing has flown.** The W1 gate wants 4 PX4 instances airborne at once with a ROS 2 namespace each. `sitl_multiple_run.sh` exists and has never been run, and how it assigns uXRCE-DDS namespaces per instance is unverified.
+1. **Round 3 of the plan review.** Round 2's fixes have not been read by anything but their author, which is the position that produced 11 findings last time. Prompt is in [_codex-review-prompt.md](_codex-review-prompt.md).
+2. **Nothing has flown a mission.** Four vehicles come up headless with a ROS namespace each and hold, which is measured. Arming, taking off and flying a pattern is W1 and has not been done.
 3. **Recording the video.** The `gazebo` GUI binary takes the distro down, so the one thing still blocked is the part that needs a picture. `gzclient` is installed and untested. Deal with it well before 20 September, and keep the headless fallback.
 4. **The organiser email.** Drafted in [stage-1/organiser-email.md](stage-1/organiser-email.md), not sent.
 
-Closed on 26 August: whether Gazebo runs here at all. `gzserver` starts headless, stays up, survives the dxg ioctl failures that fill dmesg, and leaves the distro alone. Only the GUI-side binary is dangerous, so every gate in the plan can run headless.
+Closed on 26 August: whether Gazebo runs here at all, and whether four vehicles fit. `gzserver` starts headless and leaves the distro alone; only the GUI binary is dangerous. `scripts/sitl_multi.sh` brings up 4 PX4 instances with a ROS namespace each and 43 topics apiece, and the whole stack costs under 800 MB of the 11.5 GB available.
 
 ## Running it, once there is anything to run
 
@@ -141,7 +141,9 @@ Carried from the Vaani and Adversarial IDS handoffs, same servers:
 
 ## Honest gaps
 
-- Nothing has flown. `gzserver` starting on an empty world is a long way from 4 PX4 instances airborne together, which is what the W1 gate actually asks for.
+- Nothing has flown a mission. Vehicles come up and hold; none has armed or taken off.
+- Every gate past W1 calls scripts that do not exist yet, `run_scenario.sh` and `uavx_eval.check` among them. They fail with a clear message, which is correct, but only the W1 path has been exercised end to end.
+- `check_seam.sh` and `check_submission.py` have only been run against an empty repo, where they correctly refuse. Neither has seen real content.
 - Package version checks were treating packages apt merely knows about as installed, so `verify.sh` passed for hours on a machine with no simulator binaries. Every gate from here asserts on artifacts, not on metadata. Assume the same class of mistake is hiding somewhere else.
 - Every threshold in the plan gates was chosen by its author. `coverage_fraction>=0.95` and `time_to_reconnect_s<=30` were never derived from anything, and the reconnect budget has to cover neighbour timeout plus election plus flight time before it means much.
 - WSLg has never produced a display here. Headless carries the work but not the demo video, and that needs sorting before 20 September.
