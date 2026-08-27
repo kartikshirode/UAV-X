@@ -98,20 +98,52 @@ if [ ! -f "$LOCK" ]; then
   FAILS=$((FAILS + 1))
 else
   lock_get() { grep -E "^$1=" "$LOCK" | head -1 | cut -d= -f2-; }
+  CHECKED=""
   cmp_ver() {
-    local label="$1" want="$2" got="$3"
+    local key="$1" got="$2" want
+    want="$(lock_get "$key")"
+    CHECKED="${CHECKED} ${key}"
     if [ "$want" = "$got" ]; then
-      printf '  ok    %-22s %s\n' "$label" "$got"
+      printf '  ok    %-30s %s\n' "$key" "$got"
     else
-      printf '  FAIL  %-22s locked %s, found %s\n' "$label" "$want" "$got"
+      printf '  FAIL  %-30s locked %s, found %s\n' "$key" "$want" "$got"
       FAILS=$((FAILS + 1))
     fi
   }
-  cmp_ver "px4 sha"      "$(lock_get px4_sha)"      "$(git -C "$PX4_DIR" rev-parse HEAD 2>/dev/null)"
-  cmp_ver "xrce agent sha" "$(lock_get xrce_agent_sha)" "$(git -C "$HOME/src/Micro-XRCE-DDS-Agent" rev-parse HEAD 2>/dev/null)"
-  cmp_ver "px4_msgs sha"  "$(lock_get px4_msgs_sha)"  "$(git -C "$WS_DIR/src/px4_msgs" rev-parse HEAD 2>/dev/null)"
-  cmp_ver "px4_ros_com sha" "$(lock_get px4_ros_com_sha)" "$(git -C "$WS_DIR/src/px4_ros_com" rev-parse HEAD 2>/dev/null)"
-  cmp_ver "gazebo"        "$(lock_get gazebo_version)" "$GZ_PKG_VER"
+  pkg_ver() { dpkg-query -W -f='${Version}' "$1" 2>/dev/null || echo MISSING; }
+
+  . /etc/os-release
+  cmp_ver ubuntu_version "${VERSION_ID:-unknown}"
+  cmp_ver ros_distro     "$ROS_DISTRO_NAME"
+
+  # Round 4 finding 8: ROS floated entirely. The middleware version is the one
+  # that matters most here, since rmw_fastrtps carries every message this
+  # project measures.
+  cmp_ver ros_desktop_version           "$(pkg_ver "ros-${ROS_DISTRO_NAME}-desktop")"
+  cmp_ver ros_core_version              "$(pkg_ver "ros-${ROS_DISTRO_NAME}-ros-core")"
+  cmp_ver ros_rclpy_version             "$(pkg_ver "ros-${ROS_DISTRO_NAME}-rclpy")"
+  cmp_ver ros_rclcpp_version            "$(pkg_ver "ros-${ROS_DISTRO_NAME}-rclcpp")"
+  cmp_ver ros_rmw_fastrtps_cpp_version  "$(pkg_ver "ros-${ROS_DISTRO_NAME}-rmw-fastrtps-cpp")"
+
+  cmp_ver gazebo_package "$(lock_get gazebo_package)"
+  cmp_ver gazebo_version "$GZ_PKG_VER"
+
+  cmp_ver px4_sha         "$(git -C "$PX4_DIR" rev-parse HEAD 2>/dev/null)"
+  cmp_ver xrce_agent_sha  "$(git -C "$HOME/src/Micro-XRCE-DDS-Agent" rev-parse HEAD 2>/dev/null)"
+  cmp_ver px4_msgs_sha    "$(git -C "$WS_DIR/src/px4_msgs" rev-parse HEAD 2>/dev/null)"
+  cmp_ver px4_ros_com_sha "$(git -C "$WS_DIR/src/px4_ros_com" rev-parse HEAD 2>/dev/null)"
+
+  # And the check that stops finding 8 coming back: an enforced key nobody
+  # compares is a pin in name only, so adding one without a comparison is a
+  # failure here rather than a discovery in September.
+  for key in $(grep -oE '^[a-z0-9_]+=' "$LOCK" | tr -d '='); do
+    case "$key" in observed_*) continue ;; esac
+    case " $CHECKED " in
+      *" $key "*) ;;
+      *) printf '  FAIL  versions.lock has enforced key %s and verify.sh never compares it\n' "$key"
+         FAILS=$((FAILS + 1)) ;;
+    esac
+  done
 fi
 
 say "display"

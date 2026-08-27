@@ -10,7 +10,7 @@ if already_did bridge; then say "bridge already done, skipping"; exit 0; fi
 wait_for_net github.com
 
 if ! command -v MicroXRCEAgent >/dev/null 2>&1; then
-  say "building the Micro XRCE-DDS Agent at $(lock xrce_agent_tag)"
+  say "building the Micro XRCE-DDS Agent at $(lock observed_xrce_agent_tag)"
   SRC="$HOME/src/Micro-XRCE-DDS-Agent"
   mkdir -p "$HOME/src"
   checkout_locked https://github.com/eProsima/Micro-XRCE-DDS-Agent.git     "$SRC" "$(lock xrce_agent_sha)" "XRCE agent"

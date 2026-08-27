@@ -48,8 +48,8 @@ Steps in order:
 | Script | Does |
 | --- | --- |
 | `01-base.sh` | apt update, build tooling, locale, universe repo |
-| `02-ros2-humble.sh` | ROS 2 Humble desktop, colcon, rosdep |
-| `03-gazebo-classic.sh` | gazebo11 from the osrfoundation repo |
+| `02-ros2-humble.sh` | ROS 2 Humble desktop at the version in versions.lock, colcon, rosdep, then compares what landed against the lock |
+| `03-gazebo-classic.sh` | gazebo11 from Ubuntu universe. Not the osrfoundation repo, which serves Garden on jammy and left this machine with the Classic libraries and none of its binaries |
 | `04-px4.sh` | clones PX4 at the tag in versions.lock, runs its dependency script, builds the SITL binary and the gazebo-classic plugins as separate targets |
 | `05-ros2-bridge.sh` | Micro XRCE-DDS Agent, then a colcon workspace holding px4_msgs and px4_ros_com |
 

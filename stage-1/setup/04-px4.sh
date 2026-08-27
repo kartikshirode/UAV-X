@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# PX4 Autopilot, newest v1.15.x tag, built for SITL against Gazebo Classic.
+# PX4 Autopilot at the commit in versions.lock, built for SITL against Gazebo
+# Classic. It used to resolve the newest v1.15.x tag, which meant a fresh
+# install in September could build something nobody had ever run.
 
 . "$(dirname "$0")/00-common.sh"
 require_jammy

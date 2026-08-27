@@ -1,5 +1,5 @@
 # Exact versions of the stack that produced every result in this repo.
-# Captured from the working machine on 26 August 2026.
+# Captured from the working machine on 27 August 2026.
 #
 # Round 2 finding 11: the setup scripts resolved "newest v1.15.*" and tracked
 # moving release/1.15 branches, with a fallback to main. A fresh install on
@@ -7,27 +7,48 @@
 # came off, and the submission would be claiming results for software nobody
 # ran. These are commit SHAs, not branch names, for exactly that reason.
 #
-# verify.sh compares against this file. To move a pin deliberately, change it
-# here, rerun the install, rerun every scenario, and commit the new numbers with
-# the results they produced. Never edit this to make a check pass.
+# Round 4 finding 8: the four git checkouts and Gazebo were pinned and checked,
+# and ROS was not. 02-ros2-humble.sh installed unversioned Humble packages, and
+# verify.sh compared none of them, so a fresh install could run different ROS
+# binaries and still pass every gate. The middleware version in particular is
+# not cosmetic: rmw_fastrtps is what carries every message this project
+# measures.
+#
+# Two kinds of entry, and the prefix is the whole difference:
+#
+#   <name>=            ENFORCED. verify.sh compares it and fails on a mismatch.
+#   observed_<name>=   RECORDED. Context for a human, never a pass condition.
+#
+# verify.sh also fails if this file grows an enforced key it does not compare,
+# so a new pin cannot be added and quietly go unchecked.
+#
+# To move a pin deliberately: change it here, rerun the install, rerun every
+# scenario, and commit the new numbers with the results they produced. Never
+# edit this to make a check pass.
 
 ubuntu_version=22.04
-kernel=6.6.87.2-microsoft-standard-WSL2
 
 ros_distro=humble
+ros_desktop_version=0.10.0-1jammy.20260804.223343
 ros_core_version=0.10.0-1jammy.20260726.123022
+ros_rclpy_version=3.3.21-1jammy.20260724.022150
+ros_rclcpp_version=16.0.19-1jammy.20260724.021311
+ros_rmw_fastrtps_cpp_version=6.2.10-1jammy.20260724.002510
 
 gazebo_package=gazebo
 gazebo_version=11.10.2+dfsg-1
 
-px4_tag=v1.15.4
 px4_sha=99c40407ffd7ac184e2d7b4b293f36f10fe561ef
-
-xrce_agent_tag=v2.4.3
 xrce_agent_sha=73622810d984349b80bbac0ef55fc0b694d62222
-
-px4_msgs_branch=release/1.15
 px4_msgs_sha=a1045ec4feb6d709bdecaf3895f1d5b43a5dabb8
-
-px4_ros_com_branch=release/1.15
 px4_ros_com_sha=86e9aeb20e55a4673fa8a9f1c29ea06a6c5ad1af
+
+# --- recorded, not enforced ------------------------------------------------
+# The SHA above each of these is the authority. A tag or a branch name is where
+# the SHA came from, which is useful to a reader and proves nothing on its own.
+observed_kernel=6.6.87.2-microsoft-standard-WSL2
+observed_ubuntu_codename=jammy
+observed_px4_tag=v1.15.4
+observed_xrce_agent_tag=v2.4.3
+observed_px4_msgs_branch=release/1.15
+observed_px4_ros_com_branch=release/1.15
