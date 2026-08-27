@@ -34,30 +34,13 @@ gate_preflight() {
   # however good the simulation is, and eligibility disqualifies at any stage.
   # Five weeks of work behind an invalid entry is the worst available outcome,
   # so the loop refuses to start without a receipt. See stage-1/human-preflight.md.
+  # Round 4 finding 7: this used to check three fields by hand and accept any
+  # truthy object for the rest, so a half-written receipt passed. It now runs
+  # against submission/human-preflight.schema.json, which is also what W5 reads
+  # the delivery budget out of.
   gsay "preflight: human dependencies"
-  local hp="${UAVX_REPO}/submission/human-preflight.json"
-  if [ ! -f "$hp" ]; then
-    gdie "no ${hp}. Registration, eligibility, the clarification channel, the organiser questions and the delivery method are human steps and none of them can be done by an agent. See stage-1/human-preflight.md."
-  fi
-  python3 - "$hp" <<'PYHP' || gdie "human preflight receipt is incomplete"
-import json, sys
-need = ["registered", "eligibility", "clarification_channel", "organiser_email", "delivery"]
-d = json.load(open(sys.argv[1], encoding="utf-8"))
-missing = [k for k in need if not d.get(k)]
-if missing:
-    print(f"  missing: {', '.join(missing)}")
-    sys.exit(1)
-if not d["registered"].get("done"):
-    print("  registration has no date")
-    sys.exit(1)
-if not d["eligibility"].get("declaration"):
-    print("  eligibility has no declaration")
-    sys.exit(1)
-if not d["delivery"].get("attachment_limit_mb"):
-    print("  delivery has no attachment budget, so W5 cannot check the package fits")
-    sys.exit(1)
-print(f"  registered {d['registered']['done']}, eligibility declared, delivery budget {d['delivery']['attachment_limit_mb']} MB")
-PYHP
+  python3 "${UAVX_REPO}/scripts/check_human_preflight.py" \
+    || gdie "human preflight is incomplete. See stage-1/human-preflight.md."
 
   # Round 3 finding 10: agents were handed files that told them both to use and
   # never to use the launcher that crashes the distro. Prose drifts because
@@ -176,14 +159,15 @@ gate_w3() {
   # The static seam pass runs here. The LIVE pass cannot: preflight has just
   # proved nothing is running, so ros2 node list would find no graph and W3
   # could never pass. The scenario runner captures a graph snapshot while each
-  # scenario is up, and --from-snapshot reads it afterwards.
+  # scenario is up, and --snapshot reads it afterwards.
   gsay "W3: seam, static pass"
   bash "${UAVX_REPO}/scripts/check_seam.sh" --static-only || gdie "tx/rx seam violated in source"
 
   run_scenario scenarios/relay_required.yaml
-  gsay "W3: seam, live graph captured during relay_required"
-  bash "${UAVX_REPO}/scripts/check_seam.sh" --from-snapshot \
-    "${UAVX_RUNS_DIR}/latest-graph.json" || gdie "tx/rx seam violated at runtime"
+  gsay "W3: seam, graph captured during relay_required"
+  bash "${UAVX_REPO}/scripts/check_seam.sh" --snapshot \
+    "${UAVX_RUNS_DIR}/latest-graph.json" --scenario relay_required \
+    || gdie "tx/rx seam violated at runtime"
   check_run scenarios/relay_required.yaml \
     --require "delivery_ratio>=0.95" \
     --require "delivery_ratio_by_node.uav_4>=0.95" \
@@ -194,6 +178,14 @@ gate_w3() {
   check_run scenarios/direct_only.yaml \
     --require "delivery_ratio_by_node.uav_4==0" \
     --require "app_packets_sent_by_node.uav_4>=100"
+
+  # Round 4 finding 1: the plan promises both of these in W3 so W5 does not
+  # inherit them, and the gate asked for neither, which meant the promise was
+  # decoration. The recording one matters most: the gazebo GUI binary has taken
+  # this distro down three times, and the video is a deliverable.
+  gsay "W3: the two rehearsals W5 has no room for"
+  python3 "${UAVX_REPO}/scripts/check_dryruns.py" \
+    || gdie "the fresh install and the 60 second recording rehearsals are part of W3"
 }
 
 gate_w4() {
@@ -231,6 +223,42 @@ gate_w4() {
     --require "separation_violations>=1" \
     --require "contact_monitor_samples>0"
   gsay "W4: the control violated separation, so the yield rule caused the safe result"
+
+  # Round 4 finding 1: W4 ran three scenarios that each prove one subsystem and
+  # never ran the one that proves they compose, while the plan called that run
+  # the proof of concept and pointed the proposal and the video at it. A week
+  # can go green without its own headline result only if nothing checks.
+  run_scenario scenarios/mission_integrated.yaml
+
+  # And the seam again, on the W4 graph. W3 accepted the seam over a graph with
+  # no role managers in it, because uavx_roles did not exist yet. Without this
+  # the newest code in the swarm is the only code the seam check never sees.
+  gsay "W4: seam, static pass now that uavx_roles exists"
+  bash "${UAVX_REPO}/scripts/check_seam.sh" --static-only || gdie "tx/rx seam violated in source"
+  gsay "W4: seam, graph captured during the integrated mission"
+  bash "${UAVX_REPO}/scripts/check_seam.sh" --snapshot \
+    "${UAVX_RUNS_DIR}/latest-graph.json" --scenario mission_integrated \
+    || gdie "tx/rx seam violated at runtime, with roles running"
+
+  check_run scenarios/mission_integrated.yaml \
+    --require "coverage_fraction>=0.95" \
+    --require "coverage_source==pose_samples" \
+    --require "coverage_fraction_at_kill<=0.80" \
+    --require "injected_event_observed==true" \
+    --require "observations_generated_during_outage>=100" \
+    --require "observations_evicted==0" \
+    --require "observations_undelivered==0" \
+    --require "relay_role_moved==true" \
+    --require "relay_role_holder==uav_3" \
+    --require "strip_reassigned_to==uav_4" \
+    --require "time_to_reconnect_s<=45" \
+    --require "delivered_hops_by_node.uav_4>=2" \
+    --require "min_pairwise_separation_m>=10" \
+    --require "separation_violations==0" \
+    --require "collision_contacts==0" \
+    --require "contact_monitor_samples>0" \
+    --require "pose_sample_count>=1000"
+  gsay "W4: the swarm surveyed, lost its relay, elected, repositioned and finished"
 }
 
 gate_w5() {
