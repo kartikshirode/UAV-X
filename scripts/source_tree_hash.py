@@ -61,17 +61,34 @@ def from_ref(ref: str) -> dict:
 
 
 def from_worktree() -> dict:
-    out = subprocess.run(
+    """Hash the files on disk, letting git apply its own filters.
+
+    Not by reading the bytes and hashing them. This repo forces LF in the
+    object database and the working copy on Windows holds CRLF, so hashing raw
+    bytes made a clean checkout disagree with the commit it came from. Every
+    W5 run record would then have failed to match the frozen source, and the
+    submission would have been blocked by a checker that was wrong.
+
+    `git hash-object` runs the same clean filters git uses on the way in, so a
+    clean tree and its commit produce identical ids. One process for the whole
+    list rather than one per file.
+    """
+    listing = subprocess.run(
         ["git", "-C", str(REPO), "ls-files", "-z"],
         capture_output=True, text=True, check=True).stdout
-    files = {}
-    for path in out.split("\0"):
-        if not path or not in_scope(path):
-            continue
-        p = REPO / path
-        if p.is_file():
-            files[path] = blob_id(p.read_bytes())
-    return files
+    paths = [p for p in listing.split("\0")
+             if p and in_scope(p) and (REPO / p).is_file()]
+    if not paths:
+        return {}
+    hashed = subprocess.run(
+        ["git", "-C", str(REPO), "hash-object", "--stdin-paths"],
+        input="\n".join(paths) + "\n", capture_output=True, text=True,
+        check=True).stdout.split()
+    if len(hashed) != len(paths):
+        raise RuntimeError(
+            f"git hash-object returned {len(hashed)} ids for {len(paths)} "
+            f"paths; refusing to guess which is which")
+    return dict(zip(paths, hashed))
 
 
 def digest(files: dict) -> str:

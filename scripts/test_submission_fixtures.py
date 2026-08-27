@@ -291,6 +291,29 @@ def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="uavx-sub-"))
     failures = 0
 
+    # The source hash has to mean the same thing computed from a working tree
+    # and from the commit that tree came from, or W5 rejects every run record
+    # it is given and the submission is blocked by a checker that is wrong.
+    # Hashing raw bytes did exactly that: this repo forces LF in the object
+    # database and the working copy on Windows holds CRLF, so seven files
+    # disagreed with themselves. Compared over the files git reports as
+    # unmodified, so this runs on a dirty tree too rather than skipping.
+    print("--- source hash agrees between the working tree and its commit")
+    sys.path.insert(0, str(REPO / "scripts"))
+    import source_tree_hash as sth                            # noqa: PLC0415
+    dirty = {line[3:].strip().strip('"') for line in
+             git("status", "--porcelain").splitlines()}
+    w, r = sth.from_worktree(), sth.from_ref("HEAD")
+    disagree = sorted(p for p in set(w) & set(r)
+                      if w[p] != r[p] and p not in dirty)
+    if disagree:
+        failures += 1
+        print(f"  FAIL  {len(disagree)} unmodified file(s) hash differently "
+              f"from the commit: {disagree[:4]}")
+    else:
+        print(f"  ok    {len(set(w) & set(r)) - len(dirty & set(w))} unmodified "
+              f"files agree")
+
     # The untouched package still fails, because there is no proposal and no
     # video yet. What matters is that it does not fail for any of the reasons
     # below, which is what makes each fixture's message meaningful.
@@ -329,9 +352,9 @@ def main() -> int:
 
     print()
     if failures:
-        print(f"FAILED: {failures} of {len(CASES)} submission fixtures behaved wrongly")
+        print(f"FAILED: {failures} of {len(CASES) + 1} submission checks behaved wrongly")
         return 1
-    print(f"all {len(CASES)} submission fixtures behaved as specified")
+    print(f"all {len(CASES) + 1} submission checks behaved as specified")
     return 0
 
 
