@@ -37,7 +37,9 @@ What this does not prove: nothing has flown. Four vehicles airborne together is 
 
 **The plan is built for the loop and the harness exists.** Five weeks, each ending in `bash scripts/gate.sh <N>`. That script is the only definition of any threshold; the plan, decisions and loop config describe it and never restate it. The frozen design is [stage-1/architecture.md](stage-1/architecture.md).
 
-**Reviews.** Round 1 found 8 issues, all answered. Round 2 by Codex returned NOT READY with 11 findings, and it was right: the four spot-checked before starting were all real, including gate drift that would have failed a correct implementation. All 11 are now fixed, and the fixes are tested rather than asserted. Round 3 has not run.
+**Reviews.** The plan goes through Codex, gets fixed, and goes back. Which round has run, what it found and what is left is in `.claude/review-status.json`, and nowhere else. `scripts/check_docs.py` fails any document that writes that state into prose, because four documents were carrying four different versions of it and the loop hands those files to a week-agent that cannot tell which sentence is current.
+
+Every round so far has come back NOT READY and has been right. Round 2's four spot-checked findings were all real. Round 3 found the frozen topology made the relay kill a no-op. Round 4 found the same class of thing one level up, and both of those are worth reading before trusting anything here.
 
 ## Stage 1 deliverables, all in one email
 
@@ -72,7 +74,7 @@ Flight is 25% and the tooling hands it to you. Budget one week on flight and two
 
 ## What's not done, in order of risk
 
-1. **Round 3 of the plan review.** Round 2's fixes have not been read by anything but their author, which is the position that produced 11 findings last time. Prompt is in [_codex-review-prompt.md](_codex-review-prompt.md).
+1. **The next round of the plan review.** Each round's fixes get read only by their author until Codex sees them, which is the position that produced 11 findings the first time and 9 the last. Prompt is in [_codex-review-prompt.md](_codex-review-prompt.md); current position in `.claude/review-status.json`.
 2. **Nothing has flown a mission.** Four vehicles come up headless with a ROS namespace each and hold, which is measured. Arming, taking off and flying a pattern is W1 and has not been done.
 3. **Recording the video.** The `gazebo` GUI binary takes the distro down, so the one thing still blocked is the part that needs a picture. `gzclient` is installed and untested. Deal with it well before 20 September, and keep the headless fallback.
 4. **The organiser email.** Drafted in [stage-1/organiser-email.md](stage-1/organiser-email.md), not sent.
@@ -114,7 +116,7 @@ Team size is settled: solo entry.
 - **UAVros**, ROS1 and ROS2 kit for PX4 multi-rotor and UGV swarm simulation
 - **Aerostack2**, ROS2 framework for multi-robot aerial systems, plugin architecture
 - Multi-vehicle launching is solved and lives in `scripts/sitl_multi.sh`. Do not use PX4's `sitl_multiple_run.sh`: it ignores `HEADLESS`, ends in an unconditional `gzclient` that crashes this distro, and never sets the per-vehicle `PX4_UXRCE_DDS_NS` that gives each vehicle its own ROS namespace.
-- MAVLink `MAV_SYS_ID` caps at 255 vehicles, so nothing near our range is a limit. Use 4 to 6; more drones cost debugging time we do not have.
+- MAVLink `MAV_SYS_ID` caps at 255 vehicles, so the protocol is nowhere near a limit here. The count is 4, fixed by D4 and by every coordinate in the frozen geometry. Adding a fifth is not a knob, it is a redesign.
 
 ## Things that bit earlier cluster projects, so they do not bite this one
 
@@ -130,8 +132,8 @@ Carried from the Vaani and Adversarial IDS handoffs, same servers:
 - Nothing has flown a mission. Vehicles come up headless with a namespace each and hold; none has armed or taken off.
 - Only the W1 gate path has run end to end. Every later gate calls scripts that do not exist yet, `run_scenario.sh` and `uavx_eval.check` among them. They fail with a clear message, which is correct, but untested against real work.
 - `check_submission.py` has only ever been run against an empty package, where it correctly refuses. The seam checker has nine fixtures and passes them, but has never seen a real ROS graph.
-- Round 3 found that the previous frozen topology made the relay kill a no-op, and the checker that was supposed to catch it only examined pairs its author had listed. The topology is fixed and the checker now enumerates every pair, but assume that class of mistake, a check that confirms what its author already believed, is hiding somewhere else too.
-- Three findings from round 3 are open, tracked in [_plan-review-round3.md](_plan-review-round3.md): installers still resolve versions instead of reading `versions.lock` (F7), the encounter scenario has no frozen trajectories or negative control (F8), and W3 and W4 are still above a solo week's hours (F9).
+- The same mistake has now been caught twice: a checker that only examines what its author thought to list, confirming what its author already believed. First the frozen topology, where the relay kill turned out to be a no-op. Then the integrated mission, where the survey box sat 240.8 m from the anchor while the design claimed 250. `check_geometry.py` now walks every pair at every sampled instant of every trajectory. Assume that class of mistake is hiding somewhere else too, and that the next place it turns up will also look thoroughly checked.
+- Three checkers found bugs in themselves while being written, which is the argument for writing the fixtures. The seam suite exposed a `grep` under `pipefail` that killed the static pass mid-scan: it printed its header, exited 1 and checked nothing, and nobody had noticed because `uavx_ws/src` does not exist yet so the guard above it always fired first.
 
 ## Execution notes
 

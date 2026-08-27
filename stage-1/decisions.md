@@ -58,11 +58,12 @@ The W3 control run is the one worth defending. A delivery ratio of 1.0 proves no
 
 Every threshold behind these gates is derived in [architecture.md](architecture.md), and `scripts/check_geometry.py` re-derives the geometry and the reconnect budget so they cannot rot in prose.
 
-## Still open
+## What is not a decision
 
-Not decisions, just things nobody has done yet.
+Two things that keep getting written down here and do not belong in a decisions file, because both are state and state rots in prose.
 
-- Register on techfest.org under Competitions, then PUSHPAK Grand Challenge
-- Send the organiser email, including the question about whether a detailed problem statement exists for UAV-X
-- `gh` is not installed on this machine, which blocks the GitHub repo step (finding 8)
-- Round 2 of the plan cross-check, by Codex
+The human dependencies, meaning registration, eligibility, the clarification channel, the organiser questions and the delivery method, are in [human-preflight.md](human-preflight.md) and gate.sh preflight blocks on them. They are not backlog.
+
+Review state, meaning which round has run and what it found, is in `.claude/review-status.json`. `scripts/check_docs.py` fails any document that states it in prose, this one included.
+
+`gh` is still not installed on this machine. Nothing in Stage 1 needs it: the submission goes by email and there is no portal, so a GitHub repository is a convenience for the source-delivery answer and not a dependency.

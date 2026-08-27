@@ -1,0 +1,17 @@
+{
+  "_why": "Round 4 finding 9. Review state was written into prose in four documents, and prose does not update itself. handoff.md said round 3 had not run after round 3 had run and been fixed, and listed three of its findings as still open. decisions.md still had round 2 outstanding. The autonomous loop hands those files to a week-agent, which has no way to tell which sentence is current. So the state lives here, in one place, and check_docs.py fails any document that states it in prose.",
+
+  "latest_round": 4,
+  "reviewer": "Codex",
+  "verdict": "NOT READY",
+  "findings": 9,
+  "findings_addressed": 9,
+  "state": "round 4 fixes applied, round 5 not yet run",
+  "review_files": [
+    "_plan-review-round1.md",
+    "_plan-review-round2.md",
+    "_plan-review-round3.md",
+    "_plan-review-round4.md"
+  ],
+  "open_findings": []
+}

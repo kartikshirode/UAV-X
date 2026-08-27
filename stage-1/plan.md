@@ -55,7 +55,7 @@ Produces:
 - The run record writer, to `scenarios/run-record.schema.json`, publishing `latest.jsonl` by atomic rename only after every process has exited cleanly
 - Peak-memory and swap sampling in every run record
 - The generic scenario event injector, moved here from W4. It needs no roles code and W4 has no room for it.
-- The ROS graph snapshot the seam checker reads, captured by the runner while a scenario is up
+- The ROS graph snapshot the seam checker reads, captured by the runner while a scenario is up. Every endpoint carries its message **type** as well as its topic. Round 4 finding 4: types were being thrown away, and without them the rule banning swarm payload outside the seam cannot be enforced at all. `scripts/seam_graph.py` refuses a snapshot that lacks them rather than checking what is left.
 
 Gate: `bash scripts/gate.sh 1`
 
@@ -87,7 +87,9 @@ Produces:
 
 The control run is the important half. A delivery ratio of 1.0 proves nothing on its own, because that is also what a silently open gate produces. `uav_4` is 484.6 m from the GCS, beyond `r_max`, so with forwarding disabled its delivery must be exactly 0.
 
-Also this week, because W5 has no room for them: a fresh-install **dry run**, and a 60 second recording dry run proving the video path works. Both are in the W3 gate, so the week cannot be accepted without them and hand the bill to W5.
+Also this week, because W5 has no room for them: a fresh-install **dry run** writing `submission/dryrun-install-receipt.json`, and a 60 second recording dry run writing `submission/dryrun-recording-receipt.json` with the clip it produced. `scripts/check_dryruns.py` is in the W3 gate, decodes the clip and ties both receipts to the current source tree, so the week cannot be accepted without them and hand the bill to W5.
+
+Round 4 finding 1: the plan said both of these were in the W3 gate and the gate asked for neither, which made the sentence decoration. The recording one carries the most risk, because the `gazebo` GUI binary has taken this distro down three times and the video is a deliverable.
 
 The install that binds the submission is a different thing and happens after code freeze in W5, against the archive rather than the working tree. Round 3 finding 3: an install tested in W3 cannot vouch for source that W4 and W5 have since changed.
 
@@ -122,13 +124,17 @@ By now the proposal is mostly written, because each week drafts its own section 
 
 Produces:
 
-- The source freeze: commit `C`, `submission/uavx-source.zip` built from it, `submission/source-manifest.json` carrying `C` and the archive hash
+- The source freeze, by `scripts/freeze_source.sh`: commit `C`, `submission/uavx-source.zip` built from it with `git archive`, `submission/source-manifest.json` carrying `C`, the archive hash and the source tree hash
 - The binding fresh install, run against that archive, receipt bound to the archive hash
-- `submission/proposal.pdf`, 6 to 8 pages
+- `submission/proposal.pdf`, 6 to 8 pages, citing the run id behind every number it quotes
 - `submission/demo.mp4`, opening on the failure and the recovery
-- `submission/INSTALL.md`, `submission/uavx-source.zip`
+- `submission/INSTALL.md`
+- `submission/evidence-manifest.json`, naming the exact run record behind each scenario
+- `submission/attachment-manifest.json`, the file list with hashes and sizes, checked against the delivery budget in `submission/human-preflight.json`
 - `submission/fresh-install-receipt.json`, carrying the submitted commit SHA
-- `submission/sent-receipt.json`, written by the human after sending
+- `submission/sent-receipt.json`, written by the human after sending, bound to the attachment manifest
+
+`check_submission.py` rehashes the archive, checks every file in it against commit `C`, revalidates every named run against the schema and against `uavx_eval.check`, and requires each run's source hash to match the frozen source. Round 4 findings 5 and 6: it used to compare two strings that both came out of files we wrote, and count run evidence by filename. `scripts/test_submission_fixtures.py` tampers with each of those in turn and proves the rejection.
 
 Gate: `bash scripts/gate.sh 5`
 
@@ -148,9 +154,10 @@ Gate: `bash scripts/gate.sh 5`
 - Stage 2 and Stage 3. The seam behind the link layer means a UDP shaper can replace the application gate without touching routing, roles or mission code. That is the intended Stage 2 upgrade, along with `comms_blackout` and `gps_degrade`.
 - Hardware. There is none in the challenge.
 
-## Open items, not blocking
+## Before week 1 runs at all
 
-- Register on techfest.org, Competitions, PUSHPAK Grand Challenge
-- Join the UAV-X WhatsApp group, where clarifications land first
-- Send the organiser email, drafted in [organiser-email.md](organiser-email.md)
-- Confirm no attachment to the PUSHPAK project, the Drone Centre or the organising institutions, which disqualifies at any stage
+These block. `bash scripts/gate.sh preflight` refuses to start a week without `submission/human-preflight.json`, and every gate begins with preflight, so nothing in the five weeks above happens until they are done.
+
+They used to sit here as a backlog list. Round 3 finding 4 pointed out that an unregistered or ineligible entrant has no valid submission however good the simulation is, and eligibility disqualifies at any stage, including after Stage 1 results. Five weeks of work behind an invalid entry is the worst outcome available and the cheapest one to prevent.
+
+[human-preflight.md](human-preflight.md) has the detail and the receipt to write. In short: register, declare eligibility, join the clarification channel, send the organiser questions, and decide how a package too large to attach actually gets delivered.

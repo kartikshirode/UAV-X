@@ -53,7 +53,7 @@ Preflight refuses to run if a simulator is already up, because a gate inheriting
 
 Handed to every week-agent. The repo's non-negotiables.
 
-1. **The tx/rx seam is the submission.** Swarm nodes publish only to `/uavx/<own>/tx` and subscribe only to `/uavx/<own>/rx`. The allowlist is [stage-1/architecture.md](../stage-1/architecture.md) section 1 and `scripts/check_seam.sh` enforces it both statically and against the live graph. Breaking it silently voids 25% of the rubric and nothing else notices.
+1. **The tx/rx seam is the submission.** Swarm nodes publish only to `/uavx/<own>/tx` and subscribe only to `/uavx/<own>/rx`. The allowlist is [stage-1/architecture.md](../stage-1/architecture.md) section 1. `scripts/check_seam.sh` enforces it over the source and over a captured graph, with a separate process manifest per scenario, and it runs again in W4 once roles code exists. Breaking it silently voids 25% of the rubric and nothing else notices.
 2. **Never change a frozen value to pass a gate.** Every parameter in `architecture.md` and every threshold in `scripts/gate.sh` is fixed. Changing one so a run goes green is moving the goal. If a number is unreachable, stop and report BLOCKED with the arithmetic.
 3. **Never quote a metric no run produced.** Every number in a doc traces to a JSONL under `runs/` that validates against `scenarios/run-record.schema.json`. No estimating, no carrying a figure forward without rerunning.
 4. **Every run is seeded from its scenario and replays exactly.** A result nobody can reproduce is not evidence.
@@ -64,6 +64,8 @@ Handed to every week-agent. The repo's non-negotiables.
 9. Third-party code stays in `~/ws_uavx`. Our packages live in `uavx_ws/src/` and are committed. Build output goes to ext4, never `/mnt/c`.
 10. Each week drafts its own proposal section as its metric lands. W5 has no room to write six pages.
 
+Review state, meaning which round has run and what it found, lives in `.claude/review-status.json`. Do not write it into a document; `scripts/check_docs.py` fails any document that does.
+
 ## Blocked triggers
 
 Report BLOCKED rather than working around any of these:
@@ -72,7 +74,7 @@ Report BLOCKED rather than working around any of these:
 - A frozen parameter that appears unreachable. Report the arithmetic; do not retune it.
 - A gate that cannot run headless. Headless is the documented path and the GUI binary crashes the distro.
 - Anything needing the Baramati HPC. It is off-LAN and Stage 1 does not depend on it.
-- `gh` is not installed, so anything needing the GitHub CLI stops until the human installs it.
+- `gh` is not installed. Nothing in Stage 1 needs it, since the submission goes by email and there is no portal, so this is a stop rather than a blocker: if a week finds a use for it, halt and say what for.
 - A PX4, ROS or Gazebo version change. The set is pinned by SHA in `stage-1/setup/versions.lock` on purpose.
 
 ## Checkpoint

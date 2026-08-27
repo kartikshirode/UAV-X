@@ -15,7 +15,13 @@ You are reviewing a competition build plan before any implementation code is wri
 3. `stage-1/decisions.md` - the locked decisions and the go/no-go gate per week.
 4. `.claude/weekly-loop.md` - the automation config. The gate commands here must match the plan exactly.
 5. `stage-1/setup/` - the provisioning scripts, already run on the target machine.
-6. `_plan-review-round1.md`, and every later round file that exists. Do not re-report a finding an earlier round already made unless it is still unfixed, and if it is, say so and say which round raised it.
+6. `stage-1/architecture.md` - the frozen design. Every parameter, protocol and coordinate.
+7. `scripts/` - all of it. `gate.sh` is the only acceptance contract in the project, and the checkers around it are what the gates are made of. Several of them have been caught passing on broken systems, so read them as adversarially as the plan.
+8. `scenarios/run-record.schema.json` and `submission/human-preflight.schema.json` - the two provenance contracts.
+9. `.claude/review-status.json` - which round has run and what is outstanding. This is the only place that state is recorded; the documents deliberately do not carry it.
+10. `_plan-review-round1.md`, and every later round file that exists. Do not re-report a finding an earlier round already made unless it is still unfixed, and if it is, say so and say which round raised it.
+
+Four of the scripts test the other scripts: `test_seam_fixtures.py`, `test_submission_fixtures.py`, `check_geometry.py` and `check_docs.py`. Run them. A fixture suite that passes proves less than one you have watched fail for the right reason, and two rounds running the bug was in the checker rather than the thing checked.
 
 ## What you are reviewing
 
