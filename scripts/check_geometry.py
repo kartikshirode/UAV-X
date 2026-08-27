@@ -50,6 +50,13 @@ STABILITY_WINDOW = 3.0
 RECONNECT_GATE = 45.0
 MIN_SEPARATION = 10.0
 
+# A relay slot has to clear every vehicle that is still flying, by more than the
+# separation floor. The extra 5 m is for staleness: a node that has lost its
+# radio sends no HELLO, so the swarm is steering around where it last saw it.
+SLOT_CLEARANCE = 15.0
+SLOT_RAISE_STEP = 5.0
+SLOT_CEILING = 80.0
+
 # The margin an election must win by. Two candidates a metre apart is a
 # deterministic result on paper and a coin toss in SITL, where position hold
 # carries its own error.
@@ -184,6 +191,28 @@ def minimax_slot(anchor: tuple, work: list) -> tuple:
             hi = mid
     t = (lo + hi) / 2
     return tuple(anchor[i] + t * (c[i] - anchor[i]) for i in range(3))
+
+
+def clear_slot(slot: tuple, live: list) -> tuple | None:
+    """Raise the slot until it clears every vehicle that is still flying.
+
+    The balance rule alone answers a routing question and says nothing about
+    airspace. In the integrated mission it puts the relay 6.8 m from uav_2,
+    inside the 10 m floor, and that goes unnoticed only because uav_2 is dead in
+    every scenario that computes a slot. A radio failure leaves the vehicle
+    flying, and then the swarm sends its replacement to sit on top of it.
+
+    Raising rather than sliding along the segment: the hops here are about 170 m
+    horizontally, so ten metres of altitude costs almost nothing in link budget,
+    while sliding costs it directly. Raising rather than lowering because down
+    is towards terrain and towards the anchor's own layer.
+    """
+    s = slot
+    while any(math.dist(s, p) < SLOT_CLEARANCE for p in live):
+        s = (s[0], s[1], s[2] + SLOT_RAISE_STEP)
+        if s[2] > SLOT_CEILING:
+            return None
+    return s
 
 
 def lane_path(vehicle: str, reverse_first: bool) -> list:
@@ -362,6 +391,7 @@ def run(quiet: bool = False) -> int:
         fail(f"gate of {RECONNECT_GATE:.0f} s is below the derived {budget:.1f} s and would fail correct code")
 
     check_integrated(out, ok, quiet)
+    check_link_loss(out, ok)
     check_rejected(out, ok, build_integrated())
     check_encounter(out, ok)
     check_survey_baseline(out, ok)
@@ -582,6 +612,84 @@ def check_integrated(out, ok, quiet: bool) -> None:
         f"{need} of them")
 
 
+def check_link_loss(out, ok) -> None:
+    """link_loss.yaml: the failure the challenge names that a kill cannot show.
+
+    The organisers say it twice, in the challenge statement and again in the
+    FAQ: the swarm reconfigures as UAVs fail OR LOSE CONNECTIVITY. Those are
+    different faults. A killed vehicle is gone. A vehicle that has lost its
+    radio is still in the air, still occupies space, and comes back.
+
+    Same common geometry as relay_kill on purpose, so the two runs differ in
+    exactly one thing and the comparison carries the argument.
+    """
+    out("\n" + "=" * 62)
+    out("link_loss: uav_2 goes quiet rather than dying, then comes back")
+    out("=" * 62)
+
+    attach, mover, stays = "uav_1", "uav_3", "uav_4"
+    slot0 = minimax_slot(START[attach], [START[stays]])
+
+    # uav_2 is FLYING here. That is the whole difference from relay_kill.
+    live = [START[v] for v in ("uav_1", "uav_2", "uav_4")]
+    d_raw = note("link_loss:slot_to_live_uav_2", math.dist(slot0, START["uav_2"]))
+    out(f"    balance-point slot ({slot0[0]:.1f}, {slot0[1]:.1f}, {slot0[2]:.1f})")
+    out(f"    distance to uav_2, which is alive: {d_raw:.1f} m")
+
+    slot = clear_slot(slot0, live)
+    if slot is None:
+        fail("no slot altitude clears the live vehicles, so the component would "
+             "report RELAY_INFEASIBLE and this scenario proves nothing")
+        return
+    if slot == slot0:
+        ok(f"the slot already clears every flying vehicle by {d_raw:.1f} m, "
+           f"above the {SLOT_CLEARANCE:.0f} m required, so no raise is needed")
+    else:
+        ok(f"the slot raised to {slot[2]:.1f} m to clear a flying vehicle")
+
+    # Routing has to hold with uav_2 in the graph but unreachable.
+    hop_up = note("link_loss:uav_1-slot", math.dist(START[attach], slot))
+    hop_dn = note("link_loss:slot-uav_4", math.dist(slot, START[stays]))
+    for label, d in ((f"{attach} to slot", hop_up), (f"slot to {stays}", hop_dn)):
+        if d <= USED_LINK_MAX:
+            ok(f"{label:<20} {d:8.1f} m")
+        else:
+            fail(f"{label} is {d:.1f} m, beyond the {USED_LINK_MAX:.0f} m limit")
+
+    flight = note("link_loss:mover_flight", math.dist(START[mover], slot))
+    budget = note("link_loss:budget_s", reconnect_budget(flight), "s")
+    out(f"    outbound flight {flight:.1f} m, reconnect budget {budget:.1f} s, "
+        f"gate asserts {RECONNECT_GATE:.0f} s")
+    if RECONNECT_GATE <= budget:
+        fail(f"gate of {RECONNECT_GATE:.0f} s is below the derived {budget:.1f} s")
+
+    # The return. When uav_2's radio comes back the component has a route that
+    # does not use the mover, so the mover is released and flies home. The
+    # alternate path must already be up, or releasing it causes a second outage.
+    alt = path_to({k: v for k, v in START.items()}, stays, "gcs")
+    if alt and mover not in alt:
+        ok(f"once uav_2 is back, {stays} reaches gcs as {' -> '.join(alt)}, "
+           f"without {mover}, so releasing it costs no second outage")
+    else:
+        fail(f"after the radio returns, {stays} still needs {mover}: {alt}. "
+             f"Releasing the relay would drop the link again.")
+
+    # The way home must not fly through anybody.
+    worst = 1e9
+    for i in range(1001):
+        f = i / 1000.0
+        p = tuple(slot[j] + f * (START[mover][j] - slot[j]) for j in range(3))
+        for v in ("uav_1", "uav_2", "uav_4"):
+            worst = min(worst, math.dist(p, START[v]))
+    note("link_loss:return_clearance", worst)
+    if worst >= MIN_SEPARATION:
+        ok(f"the flight out and home never comes within {worst:.1f} m of another "
+           f"vehicle, against a {MIN_SEPARATION:.0f} m floor")
+    else:
+        fail(f"the mover passes {worst:.1f} m from another vehicle on its way to "
+             f"the slot, under the {MIN_SEPARATION:.0f} m floor")
+
+
 def check_rejected(out, ok, tracks) -> None:
     """Keep the two designs round 4 rejected, and prove they were wrong.
 
@@ -629,6 +737,63 @@ def check_rejected(out, ok, tracks) -> None:
         fail(f"the midpoint rule now reaches every corner within {worst:.1f} m, "
              f"so architecture.md is arguing against a problem that no longer "
              f"exists. Simplify the rule or fix the paragraph.")
+
+    # The balance rule with no clearance constraint. It answers a routing
+    # question and says nothing about airspace, and in this geometry the answer
+    # is a point 6.8 m from a vehicle. Nothing catches it today only because
+    # uav_2 is dead in every scenario that computes a slot, which is a property
+    # of the scenario list rather than of the rule.
+    corners_box = [(x, y, z4) for x in (BOX_X0, BOX_X1) for y in (BOX_Y0, BOX_Y1)]
+    bare = minimax_slot(START["uav_1"], corners_box)
+    d_bare = note("rejected:uncleared_slot_to_uav_2",
+                  math.dist(bare, START["uav_2"]))
+    out(f"    balance point alone puts the relay {d_bare:.1f} m from uav_2")
+    if d_bare < MIN_SEPARATION:
+        ok(f"unconstrained, the rule really does violate the {MIN_SEPARATION:.0f} m "
+           f"floor, so the clearance step is load bearing")
+    else:
+        fail(f"the balance point is now {d_bare:.1f} m from uav_2, so the "
+             f"clearance step has nothing to prevent here. Find a case where it "
+             f"binds or drop it.")
+    raised = clear_slot(bare, [START["uav_2"]])
+    if raised is None:
+        fail("the clearance step cannot resolve its own worked example")
+    else:
+        h1 = math.dist(START["uav_1"], raised)
+        h2 = max(math.dist(raised, c) for c in corners_box)
+        note("rejected:cleared_slot_hop_anchor", h1)
+        note("rejected:cleared_slot_hop_box", h2)
+        out(f"    raised to {raised[2]:.1f} m: clearance "
+            f"{math.dist(raised, START['uav_2']):.1f} m, hops {h1:.1f} and {h2:.1f}")
+        if max(h1, h2) <= USED_LINK_MAX:
+            ok("raising to clear the vehicle keeps both hops inside the limit")
+        else:
+            fail(f"clearing the vehicle pushes a hop to {max(h1, h2):.1f} m, past "
+                 f"the {USED_LINK_MAX:.0f} m limit")
+
+    # The alternative nobody should take: clear the vehicle by sliding further
+    # along the segment instead of climbing. It works and it spends the link
+    # budget doing it, which is the argument for raising.
+    anchor, cen = START["uav_1"], tuple(
+        sum(c[i] for c in corners_box) / len(corners_box) for i in range(3))
+    slid = None
+    for i in range(1, 2001):
+        t = i / 2000.0
+        s = tuple(anchor[j] + t * (cen[j] - anchor[j]) for j in range(3))
+        if math.dist(s, START["uav_2"]) >= SLOT_CLEARANCE and t > 0.5:
+            slid = s
+            break
+    if slid is None:
+        fail("sliding along the segment never clears the vehicle, so the "
+             "comparison in architecture.md cannot be checked")
+    else:
+        h_slid = note("rejected:slid_slot_hop_anchor", math.dist(anchor, slid))
+        out(f"    sliding instead of climbing needs a {h_slid:.1f} m anchor hop")
+        if h_slid > math.dist(START["uav_1"], raised):
+            ok(f"sliding costs {h_slid - math.dist(START['uav_1'], raised):.1f} m "
+               f"more hop than climbing, which is why the rule climbs")
+        else:
+            fail("sliding is now cheaper than climbing, so the rule should slide")
     _ = t3
 
 

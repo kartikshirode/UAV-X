@@ -149,6 +149,30 @@ Round 4 finding 2 is why the rule is stated this way. The old midpoint rule was 
 
 If either hop exceeds 175 m the component reports `RELAY_INFEASIBLE` rather than sending someone to an impossible place. Positions travel in `HELLO` and in role messages; LSAs carry neighbour tables only.
 
+### The slot has to be empty
+
+Balancing the hops answers a routing question and says nothing about airspace. In the integrated geometry it puts the relay **6.8 m** from `uav_2`, well inside the 10 m separation floor, because the best place to stand in a relay chain is roughly where the relay already is.
+
+Nothing caught that, and the reason it did not is worth stating: `uav_2` is dead in every scenario that computes a slot, so the collision cannot happen. That is a property of the scenario list, not of the rule. **A vehicle that loses its radio is still flying**, and the challenge names that failure as often as it names outright loss.
+
+So the slot is raised in 5 m steps until it clears every vehicle the component believes is airborne, by `slot_clearance` = **15 m**. That is the separation floor plus 5 m, and the 5 m is for staleness: a node with no radio sends no `HELLO`, so the swarm is steering around where it was last seen rather than where it is.
+
+| Parameter | Value |
+| --- | --- |
+| `slot_clearance` | 15 m |
+| raise step | 5 m |
+| ceiling | 80 m, above which `RELAY_INFEASIBLE` |
+
+Raised, not slid along the segment. The hops here run about 170 m horizontally, so ten metres of altitude costs almost nothing in link budget while sliding spends it directly. On the integrated geometry, raising to 56.1 m clears the vehicle by 16.4 m and leaves the hops at 170.0 m and 168.2 m. Sliding far enough to clear the same vehicle needs a 179.1 m anchor hop, which is not a worse answer, it is past the 175 m limit and therefore not an answer at all.
+
+Raised rather than lowered because down is towards terrain and towards the anchor's own layer.
+
+### Giving the vehicle back
+
+A `RELAY` reverts to `SURVEY` when its component has held a route to the GCS that **does not pass through it** for `stability_window`, and it then returns to its station or its unfinished survey work.
+
+Without this rule a swarm that loses a link once is permanently one vehicle short, which is the wrong answer to a fault that ended. It only ever fires after a connectivity loss rather than a failure, because a dead vehicle does not come back, and that is exactly why `link_loss.yaml` exists.
+
 ### Election
 
 1. Coordinator opens epoch `e = e + 1`, broadcasting `ELECTION(e, attachment_id, slot_position)`.
@@ -329,6 +353,33 @@ The slot is the midpoint of `uav_1` at (165, 0, 30) and `uav_4`, the member that
 
 Run duration 300 s, leaving 180 s after the kill for recovery and steady state.
 
+### `link_loss.yaml`
+
+The organisers name the failure twice, in the challenge statement and again in the FAQ: the swarm reconfigures as UAVs **fail or lose connectivity**. Stage 2 says the same thing in different words, promising hidden disturbances "such as UAV failures and communication outages". Every scenario above tests the first half. This one tests the second.
+
+A dead vehicle and a quiet one are not the same fault:
+
+| | `relay_kill` | `link_loss` |
+| --- | --- | --- |
+| `uav_2` after the event | gone | flying, station-keeping, radio gated both ways |
+| Occupies airspace | no | yes |
+| Comes back | no | yes, at `t = 240 s` |
+| What it tests | election, reposition, restore | all of that, plus the slot clearing a live vehicle, plus giving the vehicle back |
+
+Common geometry, identical to `relay_kill` in every respect except the injected event, so the pair differ in one thing and the comparison carries the argument.
+
+| Parameter | Value |
+| --- | --- |
+| Event | `comms_blackout` on `uav_2` at `t = 120 s` |
+| Radio restored | `t = 240 s` |
+| Run duration | 360 s |
+
+What happens. `uav_3` and `uav_4` lose their route exactly as in `relay_kill`, elect, and `uav_3` flies 191.6 m to the slot at (320, -37.5, 45). That slot sits **39.1 m** from the still-flying `uav_2`, comfortably past the 15 m clearance, so no raise is needed here and the geometry is unchanged. The route returns inside the same 32.2 s budget.
+
+At `t = 240 s` the radio comes back. `uav_4` now has `uav_4 -> uav_2 -> uav_1 -> gcs`, a route that does not use `uav_3`, so `uav_3` is released and flies home. The alternate path is already up before it leaves, which is what makes releasing it free rather than a second outage. Its flight out and back never comes within 25.1 m of another vehicle.
+
+The route itself does not change: both paths are three hops, and hysteresis keeps the one already installed. **The reconfiguration here is the role, not the route**, and that is the more interesting half.
+
 ### `encounter.yaml`
 
 Round 3 finding 8: the previous version claimed every coordinate was frozen and then gave none, and its gate asked only for `yield_events>=1`. A logger emitting one event while the flight command carried on unchanged would have satisfied all three assertions. Worse, `collision_contacts==0` passes when no contact monitor was ever attached, which is the same shape as the package check that passed on a machine with no simulator.
@@ -385,7 +436,7 @@ The same checker runs again in W5 against every record the proposal cites, not j
 | Mission completion | 25% | `coverage_fraction` from pose samples, `survey_baseline` | `coverage_fraction` after losing a vehicle to the relay role |
 | Communication resilience | 25% | `delivery_ratio_by_node.uav_4` in `relay_required` against `direct_only` | `observations_delivered_after_recovery`, `observations_evicted` |
 | Autonomous relay and role management | 20% | `relay_role_moved`, the named transition in `relay_kill`, plus the seam test | `relay_role_holder`, `strip_reassigned_to` |
-| Fault recovery and swarm reconfiguration | 15% | `time_to_reconnect_s` against the derived 45 s budget | same, measured mid-survey rather than from a hover |
+| Fault recovery and swarm reconfiguration | 15% | `time_to_reconnect_s` in `relay_kill` for a vehicle lost, and in `link_loss` for a vehicle gone quiet and returned | same, measured mid-survey rather than from a hover |
 | Safety and collision avoidance | 10% | `yield_events` in `encounter`, `min_pairwise_separation_m`, `collision_contacts` | `separation_violations` across the whole run |
 | Innovation and technical merit | 5% | this document, and the honest statement of what the link layer does and does not constrain | the radio-bounded survey area, stated with its arithmetic |
 
