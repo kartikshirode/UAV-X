@@ -15,11 +15,29 @@ Four files, and they do not repeat each other:
 
 Gates are `scripts/gate.sh`, and that script is the only definition of them. Round 2 found the same gates written out in three documents that had already drifted, with one version failing a correct implementation. Prose cannot be the source of truth for something a machine enforces, so nothing here restates a threshold.
 
+## What the organisers actually asked for
+
+Checked against the live record on 27 August, not against memory. `scripts/check_competition_spec.py` refetches `techfest.org/api/compis/` and diffs every binding field against the capture in `research/`. Twelve fields, all unchanged since 26 August. It runs in preflight every week and again in W5 without its offline flag, because the rules reserve the organisers' right to modify any stage and the only way we would find out is by looking.
+
+Five deliverables, one email, and each one has a row in the W5 gate:
+
+| Asked for | Where it comes from |
+| --- | --- |
+| 6 to 8 page technical proposal with software architecture | drafted a section per week, checked for page count, length and content |
+| A working proof-of-concept simulation | `mission_integrated`, the one run where the subsystems have to compose |
+| Source code | `git archive` of the frozen commit, every file rechecked against it |
+| Installation instructions | `INSTALL.md`, rehearsed in W3 and bound in W5 |
+| Demo video | recorded against a rehearsed capture path, decoded end to end |
+
+Three things in the rules are not in the rubric and are easy to skip. All three are cheap and all three are now gated: the solution must **comply with Indian aviation and safety law**, so the proposal carries a BVLOS regulatory section; the entrant is responsible for **not infringing third-party IP**, so the archive carries `LICENSE` and `THIRD-PARTY.md`; and the **published record can change**, so it gets refetched.
+
 ## The one thing that shapes everything
 
 60% of the rubric is communication resilience, relay and role management, and fault recovery. Mission completion is 25%. Safety is 10%.
 
 None of the accepted simulators model radio. PX4, ArduPilot, Gazebo and AirSim let every vehicle talk to every other vehicle at any distance, forever. The mesh is not configuration, it is the deliverable, and it is most of the marks. Flying is a week and the tooling nearly gives it away.
+
+And the fault is two faults. The organisers say it twice, in the challenge statement and again in the FAQ: the swarm reconfigures as UAVs **fail or lose connectivity**. Stage 2 promises hidden disturbances "such as UAV failures and communication outages", the same pair in different words. A dead vehicle and a vehicle that has gone quiet are not the same problem, because the quiet one is still in the air and it comes back. Both are in W4.
 
 ## Already done, before W1
 
@@ -106,9 +124,15 @@ Produces:
 - `uavx_roles`: the state machine in [architecture.md](architecture.md) section 4, epochs and leases included
 - The integrated mission, `scenarios/mission_integrated.yaml`, which is the run the proposal and the video both point at. Every other scenario proves one subsystem alone; this is the only one that proves the swarm.
 - Altitude deconfliction, the separation monitor, the yield rule
-- `scenarios/relay_kill.yaml`, `scenarios/encounter.yaml` and its negative control `scenarios/encounter_noyield.yaml`
+- `scenarios/relay_kill.yaml`, `scenarios/link_loss.yaml`, `scenarios/encounter.yaml` and its negative control `scenarios/encounter_noyield.yaml`
 
-`comms_blackout` and `gps_degrade` move to Stage 2. Stage 1 needs one failure demonstrated properly more than it needs three demonstrated thinly, and round 2 costed all three at more hours than the week has.
+`scenarios/link_loss.yaml` is the second half of the fault the organisers name. `uav_2` keeps flying and loses its radio, then gets it back. It reuses `relay_kill`'s geometry exactly, so the two runs differ in one thing and the comparison is the argument, and it costs one scenario file plus two rules rather than a new topology.
+
+It is also what found a real defect in the design. The slot rule balances two hops and says nothing about airspace, so on the integrated geometry it puts the relay 6.8 m from `uav_2`, inside the separation floor. Nothing caught it because `uav_2` is dead in every scenario that computes a slot, which is a property of the scenario list rather than of the rule. A vehicle that loses its radio is still flying. Both the clearance rule and its worked counterexample are in `check_geometry.py`.
+
+`gps_degrade` stays in Stage 2. Round 2 costed three failure modes at more hours than the week has, and that still holds; what changed is that this one is nearly free, because the link layer already decides delivery per message and the event injector landed in W1.
+
+**Fallback, if the role-release half does not land.** Run `link_loss` with the release rule disabled and claim the routing recovery only, which is still the named failure demonstrated. Say so in the proposal rather than implying more. Time comes from W2's slack under standing rule 6, never from W3.
 
 `encounter.yaml` exists because altitude layers alone would keep everything apart and leave the yield rule as dead code that still scored 10%. Its control run, with yielding disabled, must violate separation; without that, a pass is indistinguishable from two vehicles that happened to miss each other.
 
@@ -126,9 +150,11 @@ Produces:
 
 - The source freeze, by `scripts/freeze_source.sh`: commit `C`, `submission/uavx-source.zip` built from it with `git archive`, `submission/source-manifest.json` carrying `C`, the archive hash and the source tree hash
 - The binding fresh install, run against that archive, receipt bound to the archive hash
-- `submission/proposal.pdf`, 6 to 8 pages, citing the run id behind every number it quotes
+- `submission/proposal.pdf`, 6 to 8 pages, citing the run id behind every number it quotes, and carrying a section on Indian BVLOS regulation because the rules require the solution to comply with it
 - `submission/demo.mp4`, opening on the failure and the recovery
 - `submission/INSTALL.md`
+- `LICENSE` and `THIRD-PARTY.md` inside the archive, since the rules make the entrant responsible for third-party IP and this is built on PX4, Gazebo and ROS 2
+- A refetch of the published competition record, this time with no offline flag, so the package is checked against what the organisers say on the day rather than what they said on 26 August
 - `submission/evidence-manifest.json`, naming the exact run record behind each scenario
 - `submission/attachment-manifest.json`, the file list with hashes and sizes, checked against the delivery budget in `submission/human-preflight.json`
 - `submission/fresh-install-receipt.json`, carrying the submitted commit SHA

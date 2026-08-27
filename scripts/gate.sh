@@ -48,6 +48,14 @@ gate_preflight() {
   gsay "preflight: documents agree"
   python3 "${UAVX_REPO}/scripts/check_docs.py" || gdie "the documents contradict each other"
 
+  # The organisers can change the rules or the timeline at any point, and the
+  # only way we would find out is by looking. Offline is tolerated during a
+  # build week; W5 runs the same check without that flag, so the record is
+  # verified for real before anything is sent.
+  gsay "preflight: the published competition record"
+  python3 "${UAVX_REPO}/scripts/check_competition_spec.py" --allow-offline \
+    || gdie "the published competition record has changed. Read the diff before doing any more work."
+
   gsay "preflight: environment"
   uavx_require_ros
   uavx_require_px4_msgs
@@ -203,6 +211,27 @@ gate_w4() {
     --require "min_pairwise_separation_m>=10" \
     --require "separation_violations==0" \
     --require "collision_contacts==0"
+
+  # The other half of the fault the organisers name. "Fail OR LOSE
+  # CONNECTIVITY", said twice in the published material, and every other
+  # scenario tests the first half. A quiet vehicle still occupies airspace and
+  # still comes back, and neither of those is true of a dead one.
+  run_scenario scenarios/link_loss.yaml
+  check_run scenarios/link_loss.yaml \
+    --require "injected_event_observed==true" \
+    --require "time_to_reconnect_s<=45" \
+    --require "relay_role_moved==true" \
+    --require "relay_role_holder==uav_3" \
+    --require "observations_evicted==0" \
+    --require "route_restored_after_blackout==true" \
+    --require "relay_role_released==true" \
+    --require "mover_returned_to_station==true" \
+    --require "outage_count_after_release==0" \
+    --require "min_slot_clearance_m>=15" \
+    --require "min_pairwise_separation_m>=10" \
+    --require "separation_violations==0" \
+    --require "contact_monitor_samples>0"
+  gsay "W4: the swarm recovered a link it lost, then gave the vehicle back"
 
   # Safety, with a negative control. Round 3 finding 8: without the control a
   # pass is indistinguishable from two vehicles that happened to miss each

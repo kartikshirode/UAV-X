@@ -63,6 +63,11 @@ ORGANISER_EMAIL = "pushpak_gc2026@aero.iitb.ac.in"
 
 REQUIRED_SECTIONS = [
     "architecture", "communication", "relay", "fault", "safety", "results",
+    # From the rules, not the rubric: "Proposed solutions must comply with all
+    # applicable laws, aviation requirements, and safety protocols in India."
+    # A BVLOS swarm proposal that never mentions BVLOS regulation is ignoring a
+    # stated rule, in front of a panel from an aerospace department.
+    "regulat",
 ]
 
 # Every scenario whose numbers the proposal is allowed to quote. The integrated
@@ -71,7 +76,7 @@ REQUIRED_SECTIONS = [
 # its meaning, were both missing from the W5 list.
 REQUIRED_RUNS = [
     "survey_baseline", "relay_required", "direct_only", "relay_kill",
-    "encounter", "encounter_noyield", "mission_integrated",
+    "link_loss", "encounter", "encounter_noyield", "mission_integrated",
 ]
 
 # What the archive is allowed to hold, matching scripts/freeze_source.sh.
@@ -338,6 +343,25 @@ else:
             ok(f"every file in the archive is byte-identical to commit "
                f"{frozen_sha[:12]}, and none is missing")
 
+# --------------------------------------------------------------- licensing
+# From the rules: "Participants retain ownership of their intellectual property
+# ... submissions must not infringe on third-party IP." This submission ships
+# our code on top of PX4, Gazebo and ROS 2, so it has to say what is ours, under
+# what terms, and what it is standing on.
+section("licensing")
+for name, why in (("LICENSE", "the terms our own code is offered under"),
+                  ("THIRD-PARTY.md", "what the submission depends on and under "
+                                     "what licence")):
+    if archive is None:
+        break
+    hit = any(n.endswith("/" + name) or n == name for n in entries)
+    if hit:
+        ok(f"{name} is in the archive, {why}")
+    else:
+        fail(f"the archive has no {name}. The rules make the entrant responsible "
+             f"for not infringing third-party IP, and this submission is built "
+             f"on PX4, Gazebo and ROS 2.")
+
 # ------------------------------------------------------- fresh install receipt
 section("fresh install receipt")
 receipt_path = SUB / "fresh-install-receipt.json"
@@ -484,6 +508,21 @@ else:
                      f"{human['delivery']['attachment_limit_mb']} MB budget, and "
                      f"the recorded route is attachments. Finding this out on "
                      f"26 September is how a submission fails to arrive.")
+
+# ------------------------------------------------------- the published spec
+# "The organizers reserve the right to modify, postpone, or cancel the Grand
+# Challenge or any stage." Everything above is checked against a capture taken
+# on 26 August. Without this, a changed deadline or a changed deliverable list
+# would be discovered by not qualifying.
+section("the published competition record")
+spec = subprocess.run(
+    [sys.executable, str(REPO / "scripts" / "check_competition_spec.py")],
+    capture_output=True, text=True, cwd=str(REPO))
+for line in spec.stdout.strip().splitlines():
+    print(f"  {line.strip()}")
+if spec.returncode != 0:
+    fail("the published competition record does not match research/. Read the "
+         "diff above before sending anything.")
 
 # --------------------------------------------------------------- the send
 section("submission state")

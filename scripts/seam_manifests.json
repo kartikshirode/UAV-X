@@ -1,38 +1,81 @@
 {
   "_why": "Round 4 finding 4. The live seam pass carried one manifest for every scenario and it demanded four role_manager processes, which W4 introduces. A correct W3 graph could not satisfy the W3 seam check. Worse in the other direction: W4 adds those role managers and the old gate never ran the checker again, so the newest code in the swarm was the only code nothing ever checked. Each scenario gets its own exact list, and a process on neither side of it is a finding.",
-
-  "vehicles": ["uav_1", "uav_2", "uav_3", "uav_4"],
-
-  "outside_processes": ["/link_layer", "/metrics_collector", "/scenario_runner"],
+  "vehicles": [
+    "uav_1",
+    "uav_2",
+    "uav_3",
+    "uav_4"
+  ],
+  "outside_processes": [
+    "/link_layer",
+    "/metrics_collector",
+    "/scenario_runner"
+  ],
   "_outside_note": "Matched by exact name. Substring matching gave anything called /uav_2/link_layer_helper the link layer's exemption to read ground truth, which is the whole bypass.",
-
   "swarm_packet_type": "uavx_msgs/msg/SwarmPacket",
-
   "ros_infrastructure": {
-    "publish": ["/rosout", "/parameter_events"],
-    "subscribe": ["/parameter_events", "/clock"]
+    "publish": [
+      "/rosout",
+      "/parameter_events"
+    ],
+    "subscribe": [
+      "/parameter_events",
+      "/clock"
+    ]
   },
-
   "scenarios": {
     "relay_required": {
       "week": 3,
-      "per_vehicle": ["router", "mission_executor"],
-      "extra": ["/gcs/gcs_node"]
+      "per_vehicle": [
+        "router",
+        "mission_executor"
+      ],
+      "extra": [
+        "/gcs/gcs_node"
+      ]
     },
     "direct_only": {
       "week": 3,
-      "per_vehicle": ["router", "mission_executor"],
-      "extra": ["/gcs/gcs_node"]
+      "per_vehicle": [
+        "router",
+        "mission_executor"
+      ],
+      "extra": [
+        "/gcs/gcs_node"
+      ]
     },
     "relay_kill": {
       "week": 4,
-      "per_vehicle": ["router", "mission_executor", "role_manager"],
-      "extra": ["/gcs/gcs_node"]
+      "per_vehicle": [
+        "router",
+        "mission_executor",
+        "role_manager"
+      ],
+      "extra": [
+        "/gcs/gcs_node"
+      ]
     },
     "mission_integrated": {
       "week": 4,
-      "per_vehicle": ["router", "mission_executor", "role_manager"],
-      "extra": ["/gcs/gcs_node"]
+      "per_vehicle": [
+        "router",
+        "mission_executor",
+        "role_manager"
+      ],
+      "extra": [
+        "/gcs/gcs_node"
+      ]
+    },
+    "link_loss": {
+      "week": 4,
+      "per_vehicle": [
+        "router",
+        "mission_executor",
+        "role_manager"
+      ],
+      "extra": [
+        "/gcs/gcs_node"
+      ]
     }
   }
 }
