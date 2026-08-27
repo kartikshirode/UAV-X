@@ -15,7 +15,11 @@ Two corrections to earlier notes in this repo:
 - Round 1 of the plan review said no problem statement document exists. One does. It is a single page and it is a cover sheet, so the practical conclusion held, but the claim was wrong.
 - There are three PUSHPAK challenges, not two. UAV-X, CycloProp, and Security of Drones (`secofdrones`), sharing the same INR 25,50,000 ceiling and the same contact address.
 
-As of 26 August, 17 teams had registered for UAV-X.
+As of 26 August, 17 teams had registered for UAV-X. On 27 August it was 33, so the field roughly doubled in a day with a month still to run. Around 15 qualify from Stage 1, so the selection ratio is worth watching but nothing about it changes the work.
+
+**Re-verified 27 August.** `scripts/check_competition_spec.py` refetches the API and diffs every field that carries an obligation against the capture in `research/`: name, description, about, structure, timeline, rules, FAQ, contact, prize, team size, problem statement and the WhatsApp link. All twelve unchanged. Registration count is the only field that moved, and it is on the ignore list precisely because it moves on its own.
+
+That check now runs in preflight every week, and again in W5 without its offline flag, so the package is verified against what the organisers say on the day rather than what they said on 26 August. It exists because of one line in the rules: the organisers reserve the right to modify, postpone or cancel any stage.
 
 ## The challenge, in organiser words
 
