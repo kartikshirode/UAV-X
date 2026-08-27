@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""One definition of "the source that produced this result".
+
+Every run record carries `source_tree_sha256`, and W5 has to prove the runs it
+submits as evidence came off the source it is submitting. That only works if the
+runner and the checker compute the same number the same way, so both call this.
+
+What it covers is deliberately narrower than the repository. Editing a sentence
+in stage-1/plan.md must not invalidate a week of runs, so only the paths that
+can change what a simulation does are in scope:
+
+    uavx_ws/  scenarios/  scripts/  stage-1/setup/
+
+The hash is over "path<tab>blob" lines, sorted, where blob is git's own object
+id for the file content. That makes a hash taken from a commit and a hash taken
+from a clean checkout of that commit identical, which is the whole point.
+
+    python3 scripts/source_tree_hash.py              # the working tree
+    python3 scripts/source_tree_hash.py --ref <sha>  # a commit
+
+Prints one 64-character hex digest.
+"""
+
+import argparse
+import hashlib
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+SOURCE_PREFIXES = ("uavx_ws/", "scenarios/", "scripts/", "stage-1/setup/")
+
+
+def blob_id(data: bytes) -> str:
+    """Git's object id for a file's content."""
+    h = hashlib.sha1()
+    h.update(b"blob %d\0" % len(data))
+    h.update(data)
+    return h.hexdigest()
+
+
+def in_scope(path: str) -> bool:
+    return path.startswith(SOURCE_PREFIXES)
+
+
+def from_ref(ref: str) -> dict:
+    out = subprocess.run(
+        ["git", "-C", str(REPO), "ls-tree", "-r", "-z", ref],
+        capture_output=True, text=True, check=True).stdout
+    files = {}
+    for entry in out.split("\0"):
+        if not entry:
+            continue
+        meta, _, path = entry.partition("\t")
+        parts = meta.split()
+        if len(parts) < 3 or parts[1] != "blob":
+            continue
+        if in_scope(path):
+            files[path] = parts[2]
+    return files
+
+
+def from_worktree() -> dict:
+    out = subprocess.run(
+        ["git", "-C", str(REPO), "ls-files", "-z"],
+        capture_output=True, text=True, check=True).stdout
+    files = {}
+    for path in out.split("\0"):
+        if not path or not in_scope(path):
+            continue
+        p = REPO / path
+        if p.is_file():
+            files[path] = blob_id(p.read_bytes())
+    return files
+
+
+def digest(files: dict) -> str:
+    h = hashlib.sha256()
+    for path in sorted(files):
+        h.update(f"{path}\t{files[path]}\n".encode("utf-8"))
+    return h.hexdigest()
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ref")
+    ap.add_argument("--list", action="store_true",
+                    help="print the files that went into the hash")
+    a = ap.parse_args()
+    files = from_ref(a.ref) if a.ref else from_worktree()
+    if not files:
+        print("no source files in scope; refusing to hash nothing",
+              file=sys.stderr)
+        return 1
+    if a.list:
+        for path in sorted(files):
+            print(f"{files[path]}  {path}")
+    print(digest(files))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

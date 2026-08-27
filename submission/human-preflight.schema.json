@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UAV-X human preflight receipt",
+  "description": "Round 3 finding 4 made registration and eligibility block the loop. Round 4 finding 7 found the block was shallow: preflight checked three fields and let a plausible-looking partial file through, and nothing ever read the delivery budget it recorded, so an oversized package could reach W5 with no accepted way to send it. Every field here is one a human has to go and do, and the dates are what make a claim checkable later. See stage-1/human-preflight.md.",
+  "type": "object",
+  "required": ["registered", "eligibility", "clarification_channel", "organiser_email", "delivery"],
+  "properties": {
+    "registered": {
+      "type": "object",
+      "required": ["done", "email"],
+      "properties": {
+        "done": {
+          "type": "string",
+          "format": "date",
+          "description": "Date registered on techfest.org. There is no submission portal, so registration is the only thing tying this email to an entry."
+        },
+        "email": {
+          "type": "string",
+          "minLength": 6,
+          "pattern": "@",
+          "description": "The registered address. The submission has to come from it."
+        }
+      }
+    },
+    "eligibility": {
+      "type": "object",
+      "required": ["done", "declaration"],
+      "properties": {
+        "done": { "type": "string", "format": "date" },
+        "declaration": {
+          "type": "string",
+          "minLength": 30,
+          "description": "Explicit statement of no attachment to the PUSHPAK Project, the Drone Centre, or IIT Bombay, IISER Bhopal and VJTI Mumbai. This disqualifies at any stage, including after Stage 1 results."
+        }
+      }
+    },
+    "clarification_channel": {
+      "type": "object",
+      "required": ["done"],
+      "properties": {
+        "done": {
+          "type": "string",
+          "format": "date",
+          "description": "Date the UAV-X WhatsApp group was joined. Organiser clarifications land there first."
+        }
+      }
+    },
+    "organiser_email": {
+      "type": "object",
+      "required": ["sent", "answers", "fallback"],
+      "properties": {
+        "sent": { "type": "string", "format": "date" },
+        "answers": {
+          "type": "string",
+          "minLength": 4,
+          "description": "What they said, or 'pending'."
+        },
+        "fallback": {
+          "type": "string",
+          "minLength": 10,
+          "description": "What is assumed while the answers are pending. Source delivery method and video length both change work, so neither can wait for a reply that may not come."
+        }
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "required": ["attachment_limit_mb", "route", "fallback"],
+      "properties": {
+        "attachment_limit_mb": {
+          "type": "number",
+          "minimum": 1,
+          "description": "What the mail provider actually allows. W5 totals the attachment manifest against this."
+        },
+        "route": {
+          "type": "string",
+          "minLength": 10,
+          "description": "How the package gets there: attachments, a repository link, a shared drive link, or a split archive."
+        },
+        "fallback": {
+          "type": "string",
+          "minLength": 10,
+          "description": "What happens if the organisers say attachments only and the package is over budget."
+        }
+      }
+    }
+  }
+}

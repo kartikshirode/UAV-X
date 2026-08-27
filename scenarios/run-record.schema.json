@@ -136,12 +136,21 @@
     },
     "versions": {
       "type": "object",
-      "description": "Contents of stage-1/setup/versions.lock at run time, so a result can never be attributed to a stack it did not come off.",
+      "description": "Every ENFORCED key from stage-1/setup/versions.lock, read at run time. Round 4 finding 8: this block named four of them, so a run could be labelled with an incomplete version object and attributed to a stack it did not come off. The ROS middleware version belongs here more than most: rmw_fastrtps carries every message this project measures. The observed_ keys in the lock are context for a human and are deliberately not required.",
       "required": [
+        "ubuntu_version",
+        "ros_distro",
+        "ros_desktop_version",
+        "ros_core_version",
+        "ros_rclpy_version",
+        "ros_rclcpp_version",
+        "ros_rmw_fastrtps_cpp_version",
+        "gazebo_package",
+        "gazebo_version",
         "px4_sha",
         "xrce_agent_sha",
         "px4_msgs_sha",
-        "gazebo_version"
+        "px4_ros_com_sha"
       ],
       "additionalProperties": true
     },
@@ -163,7 +172,7 @@
     "source_tree_sha256": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
-      "description": "Hash of the working tree at launch. commit_sha alone ignores uncommitted code, so a result could come off source that was never committed."
+      "description": "Hash of the source that can change what a simulation does, from scripts/source_tree_hash.py: uavx_ws/, scenarios/, scripts/ and stage-1/setup/. Deliberately narrower than the repository, so editing a sentence of prose does not invalidate a week of runs, and deliberately wider than commit_sha, which ignores uncommitted code. W5 requires this to equal the source_tree_sha256 in submission/source-manifest.json, which is what ties the evidence to the code being submitted."
     },
     "contact_monitor_samples": {
       "type": "integer",
