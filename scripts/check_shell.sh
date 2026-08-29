@@ -16,6 +16,12 @@
 # on commit, but the gates run against the working tree, and a CRLF script dies
 # on line 1 with `$'\r': command not found`. verify.sh did exactly that and
 # still reported success, which is how this was found.
+#
+# The carriage return scan runs in python on purpose. `grep $'\r'` under MSYS
+# opens the file in text mode and strips them, so the first version of this
+# check reported a clean tree from Git Bash and found a broken 04-px4.sh from
+# WSL. A checker whose answer depends on which shell called it is worse than
+# no checker, because one of the two answers is reassuring.
 
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -25,11 +31,20 @@ cd "$REPO"
 fails=0
 n=0
 
+# One pass, bytes, no shell in the way.
+CR_FILES="$(git ls-files '*.sh' | python3 -c '
+import sys, pathlib
+for line in sys.stdin.read().splitlines():
+    p = pathlib.Path(line)
+    if p.is_file() and b"\r" in p.read_bytes():
+        print(line)
+')"
+
 while IFS= read -r f; do
   [ -f "$f" ] || continue
   n=$((n + 1))
 
-  if LC_ALL=C grep -q $'\r' "$f"; then
+  if printf '%s\n' "$CR_FILES" | grep -qxF "$f"; then
     printf '  FAIL  %s has carriage returns. It will die on its first line under bash.\n' "$f"
     fails=$((fails + 1))
     continue
@@ -50,6 +65,9 @@ fi
 
 if [ "$fails" -ne 0 ]; then
   printf '\n  %d of %d shell scripts are broken.\n' "$fails" "$n"
+  printf '  For carriage returns:  git rm --cached -r . && git reset --hard\n'
+  printf '  is NOT the fix. Rewrite the file with LF endings; .gitattributes\n'
+  printf '  already says eol=lf, so the index is probably already correct.\n'
   exit 1
 fi
 
