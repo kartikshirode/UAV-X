@@ -8,15 +8,22 @@ Every licence below was read off the copy actually installed on the machine that
 
 ## Components
 
-| Component | Version pinned in `versions.lock` | Licence | Upstream |
-| --- | --- | --- | --- |
-| PX4-Autopilot | `px4_sha` 99c4040 (v1.15.4) | BSD 3-Clause | https://github.com/PX4/PX4-Autopilot |
-| Micro XRCE-DDS Agent | `xrce_agent_sha` 7362281 (v2.4.3) | Apache 2.0 | https://github.com/eProsima/Micro-XRCE-DDS-Agent |
-| px4_msgs | `px4_msgs_sha` a1045ec | BSD 3-Clause | https://github.com/PX4/px4_msgs |
-| px4_ros_com | `px4_ros_com_sha` 86e9aeb | BSD 3-Clause | https://github.com/PX4/px4_ros_com |
-| Gazebo Classic | `gazebo_version` 11.10.2+dfsg-1 | Apache 2.0, with BSD 3-Clause parts | https://github.com/gazebosim/gazebo-classic |
-| ROS 2 Humble Hawksbill | `ros_desktop_version` 0.10.0-1jammy | Apache 2.0 | https://github.com/ros2 |
-| Ubuntu 22.04 LTS | `ubuntu_version` 22.04 | various, per package | https://ubuntu.com |
+One row per enforced pin in `versions.lock`. Not one row per project: `check_submission.py` requires every enforced key to appear here by name, so a pin added to the lock and not to this table fails the W5 gate rather than quietly shipping unlicensed.
+
+| Component | Lock key | Version | Licence | Upstream |
+| --- | --- | --- | --- | --- |
+| PX4-Autopilot | `px4_sha` | 99c4040, v1.15.4 | BSD 3-Clause | https://github.com/PX4/PX4-Autopilot |
+| Micro XRCE-DDS Agent | `xrce_agent_sha` | 7362281, v2.4.3 | Apache 2.0 | https://github.com/eProsima/Micro-XRCE-DDS-Agent |
+| px4_msgs | `px4_msgs_sha` | a1045ec | BSD 3-Clause | https://github.com/PX4/px4_msgs |
+| px4_ros_com | `px4_ros_com_sha` | 86e9aeb | BSD 3-Clause | https://github.com/PX4/px4_ros_com |
+| Gazebo Classic | `gazebo_package`, `gazebo_version` | gazebo 11.10.2+dfsg-1 | Apache 2.0, with BSD 3-Clause parts | https://github.com/gazebosim/gazebo-classic |
+| ROS 2 distribution | `ros_distro` | humble | Apache 2.0 | https://github.com/ros2 |
+| ros-humble-desktop | `ros_desktop_version` | 0.10.0-1jammy | Apache 2.0 | https://github.com/ros2/variants |
+| ros-humble-ros-core | `ros_core_version` | 0.10.0-1jammy | Apache 2.0 | https://github.com/ros2/variants |
+| ros-humble-rclpy | `ros_rclpy_version` | 3.3.21-1jammy | Apache 2.0 | https://github.com/ros2/rclpy |
+| ros-humble-rclcpp | `ros_rclcpp_version` | 16.0.19-1jammy | Apache 2.0 | https://github.com/ros2/rclcpp |
+| ros-humble-rmw-fastrtps-cpp | `ros_rmw_fastrtps_cpp_version` | 6.2.10-1jammy | Apache 2.0 | https://github.com/ros2/rmw_fastrtps |
+| Ubuntu | `ubuntu_version` | 22.04 LTS | various, per package | https://ubuntu.com |
 
 ## What the licences ask for
 

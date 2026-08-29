@@ -17,7 +17,18 @@ Two corrections to earlier notes in this repo:
 
 As of 26 August, 17 teams had registered for UAV-X. On 27 August it was 33, so the field roughly doubled in a day with a month still to run. Around 15 qualify from Stage 1, so the selection ratio is worth watching but nothing about it changes the work.
 
-**Re-verified 27 August.** `scripts/check_competition_spec.py` refetches the API and diffs every field that carries an obligation against the capture in `research/`: name, description, about, structure, timeline, rules, FAQ, contact, prize, team size, problem statement and the WhatsApp link. All twelve unchanged. Registration count is the only field that moved, and it is on the ignore list precisely because it moves on its own.
+**Re-verified 27 August, and it caught something on its first real use.** `scripts/check_competition_spec.py` refetches the API and diffs every field that carries an obligation against the capture in `research/`: name, description, about, structure, timeline, rules, FAQ, contact, prize, team size, problem statement and the WhatsApp link.
+
+Eleven were unchanged. The twelfth had moved:
+
+> was: presented by IISERB in collaboration with IISER Bhopal **and VJTI Mumbai**.
+> now: presented by IISERB in collaboration with IISER Bhopal.
+
+**VJTI Mumbai has been removed from the published collaborator list**, and it appears in no other field of the record. `research/techfest-uav-x.json` is re-captured to match.
+
+This one touches eligibility, which is the rule that ends a run. The disqualifier covers anyone attached to "the organizing/host institutions", and that set just got smaller. The declaration in [stage-1/human-preflight.md](stage-1/human-preflight.md) still names VJTI anyway: declaring no attachment to an institution that turns out not to be involved costs nothing, and the reverse is a disqualification at any stage.
+
+Nothing else about the challenge moved. No deliverable, deadline, weight or address changed. But a field nobody was watching did change inside 24 hours, which is the argument for watching them.
 
 That check now runs in preflight every week, and again in W5 without its offline flag, so the package is verified against what the organisers say on the day rather than what they said on 26 August. It exists because of one line in the rules: the organisers reserve the right to modify, postpone or cancel any stage.
 
