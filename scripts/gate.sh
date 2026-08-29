@@ -227,6 +227,9 @@ gate_w4() {
     --require "relay_role_released==true" \
     --require "mover_returned_to_station==true" \
     --require "outage_count_after_release==0" \
+    --require "handback_path==uav_4>uav_2>uav_1>gcs" \
+    --require "handback_confirmed_at<release_at" \
+    --require "observation_gap_count==0" \
     --require "min_slot_clearance_m>=15" \
     --require "min_pairwise_separation_m>=10" \
     --require "separation_violations==0" \

@@ -178,6 +178,122 @@
       "type": "integer",
       "minimum": 0,
       "description": "Zero contacts means nothing if no monitor was attached. The safety gate requires this above zero."
+    },
+    "observations": {
+      "type": "object",
+      "description": "Round 5 finding 5: the design sized a queue and never said what delivered-once meant, so a relay could count duplicate deliveries, empty its queue after a failed send, or end the run still holding a backlog while the metrics read clean. Set equality between generated and uniquely delivered ids is the only form of the claim that cannot be satisfied by sending the same packet twice.",
+      "required": [
+        "generated",
+        "unique_delivered",
+        "duplicated",
+        "expired",
+        "evicted",
+        "peak_queue_depth",
+        "backlog_drain_s"
+      ],
+      "properties": {
+        "generated": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unique_delivered": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "duplicated": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "expired": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "evicted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "peak_queue_depth": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "backlog_drain_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "missing_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "origin_id:sequence for every observation generated and never uniquely delivered. Empty is the claim."
+        }
+      }
+    },
+    "handback": {
+      "type": "object",
+      "description": "Round 5 finding 1. The handback claim is that the recovered path carried data BEFORE the relay moved. Two timestamps and a named path are what make that checkable rather than asserted; without them, break-before-make and make-before-break produce identical run records.",
+      "required": [
+        "path",
+        "confirmed_at",
+        "release_at"
+      ],
+      "properties": {
+        "path": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 2
+        },
+        "confirmed_at": {
+          "type": "number",
+          "description": "when the GCS acknowledged an observation that arrived over the new path"
+        },
+        "release_at": {
+          "type": "number",
+          "description": "when the relay was told to stand down. Must be later than confirmed_at."
+        },
+        "acknowledged_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "relay_slot": {
+      "type": "object",
+      "description": "Round 5 finding 4: the slot clearance rule was never exercised by an accepted scenario, so nothing proved a future implementation would call it. The commanded slot and the clearance it was checked against go in the record.",
+      "required": [
+        "commanded",
+        "clearance_m",
+        "band_reserved"
+      ],
+      "properties": {
+        "commanded": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 3
+        },
+        "clearance_m": {
+          "type": "number",
+          "minimum": 0
+        },
+        "band_reserved": {
+          "type": "boolean"
+        },
+        "raised_from": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number"
+          }
+        }
+      }
     }
   }
 }

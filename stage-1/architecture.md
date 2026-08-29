@@ -80,7 +80,7 @@ For an ordered pair at 3D distance `d`:
 
 Links are evaluated per direction and per message, from ground-truth positions sampled at 20 Hz.
 
-**How the numbers were chosen.** Two constraints, in order. First, a fade band cannot carry a link the gates depend on: two lossy hops need `p^2 >= 0.95`, so each hop needs `p >= 0.9747`, which lands within a few metres of `r_full` and no moving vehicle holds that. So every asserted link sits in the full band and the fade band exists only to be exercised and reported. Second, the whole geometry scales with the radio, and a smaller radio means shorter recovery flights and a shorter demo. 200 and 250 keep the topology in section 6 and put the relay flight at 191.6 m, which is 19.2 s rather than 38.
+**How the numbers were chosen.** Two constraints, in order. First, a fade band cannot carry a link the gates depend on: two lossy hops need `p^2 >= 0.95`, so each hop needs `p >= 0.9747`, which lands within a few metres of `r_full` and no moving vehicle holds that. So every asserted link sits in the full band and the fade band exists only to be exercised and reported. Second, the whole geometry scales with the radio, and a smaller radio means shorter recovery flights and a shorter demo. 200 and 250 keep the topology in section 6 and put the relay flight at 195.0 m, which is 19.5 s rather than 39.
 
 ### The placement rule
 
@@ -106,10 +106,32 @@ Link-state, chosen because it fits in a paragraph of the proposal and is exactly
 | route hysteresis | a new route must win for 2 consecutive computations before it replaces the current one |
 | application packet rate | 5 Hz per node |
 | store-and-forward queue | 512 packets per node, oldest dropped first |
+| `relay_surcharge` | 0.5, added per temporary relay on a path |
 
-Each node floods its neighbour table, builds a graph, and runs Dijkstra to `gcs` with hop count as cost. Data forwards hop by hop. A node with no route holds what it cannot send.
+Each node floods its neighbour table, builds a graph, and runs Dijkstra to `gcs`. Data forwards hop by hop. A node with no route holds what it cannot send.
 
 Hysteresis and the symmetry rule exist to stop route flapping when a link sits near a band edge.
+
+### Path cost is not just hops
+
+Round 5 finding 1 found the two frozen rules that made the `link_loss` handback impossible. Hop count was the only cost, and a new route had to win twice before replacing the installed one. When `uav_2`'s radio returns, the two candidate routes are:
+
+```
+uav_4 -> uav_2 -> uav_1 -> gcs        3 hops
+uav_4 -> uav_3 -> uav_1 -> gcs        3 hops, and uav_3 is the temporary relay
+```
+
+A tie. A tie never wins twice, so the route through the relay is never replaced, so a release rule phrased as "the component holds a route that does not pass through it" can never fire. Read the other way, the relay leaves anyway and tears down the installed next hop before its replacement is selected, which is the second outage the same design forbids.
+
+So the cost gains one term:
+
+```
+cost(path) = hops + relay_surcharge * (temporary relays on the path)
+```
+
+3.0 against 3.5, so the recovered path wins on its own merits and installs itself normally. The surcharge is deliberately **under one hop**: it breaks ties and can never make the swarm route the long way round to spare a relay. `check_geometry.py` enumerates every loop-free path and asserts both halves, the tie without the surcharge and the strict win with it, so neither can quietly stop being true.
+
+What this expresses is real, not a trick to make one route win: a route as short as another but which ties up a surveyor is worse, and hop count has no way to say so. Fixing it with geometry, by nudging a position until one route happens to be shorter, would have brought the same bug back with the next topology.
 
 ### Why the queue is 512 and not 50
 
@@ -117,7 +139,35 @@ Round 4 finding 3 is right, and it is the sharpest kind of finding: two frozen n
 
 The queue was 50 packets. At 5 Hz that holds 10 seconds. The gate allows an outage of up to 45 seconds, so a surveying node that kept working through an outage would have been required by the design to drop about three quarters of its observations, while the same design claimed none were silently dropped. No implementation could satisfy both.
 
-So the queue is sized from the gate rather than from the expected result. 45 seconds at 5 Hz is 225 packets per origin, and a relay carries its own plus everything it was holding for others, which is why the figure is 512 rather than 225. The counters `observations_generated`, `observations_queued`, `observations_evicted` and `observations_delivered_after_recovery` go in every run record, and the integrated gate asserts zero evictions. A queue that silently drops is indistinguishable from one that never filled unless something counts.
+So the queue is sized from the gate rather than from the expected result. 45 seconds at 5 Hz is 225 packets per origin, two survey origins make 450, and a relay carries its own plus everything it holds for others, which is why the figure is 512 rather than 225.
+
+### What "delivered once" means
+
+Round 5 finding 5: the paragraph above sizes a box and stops. It says nothing about what a packet is, when it may be thrown away, how a duplicate is recognised, or how long the backlog takes to clear once the route returns. An implementer under deadline has to invent all four, and every invention satisfies the gate differently.
+
+Every observation carries four fields, which is the smallest identity that makes the claim checkable:
+
+| Field | Why |
+| --- | --- |
+| `origin_id` | which vehicle saw it |
+| `sequence` | monotonic per origin, so a gap is visible |
+| `created_at` | when it was observed, not when it was sent |
+| `expires_at` | `created_at` plus `observation_lifetime` |
+
+| Parameter | Value |
+| --- | --- |
+| `observation_bytes` | 256 |
+| `forward_rate` | 200 packets per second per node |
+| `observation_lifetime` | 300 s |
+| retention | until the GCS acknowledges `(origin_id, sequence)` |
+| retry | on route recovery, oldest first |
+| deduplication | at the GCS, by `(origin_id, sequence)` |
+
+**Priority.** Observations never delay control. `HELLO`, `LSA` and role messages go in a separate queue that is always served first. Without that rule a 450 packet backlog sits in front of the very traffic that would end the outage, and the swarm takes longer to recover the harder it was working.
+
+**Drain time, derived.** A 45 second outage at 5 Hz per origin leaves at most 450 packets. At 200 per second that is **2.25 s** to clear, against a `stability_window` of 3.0 s, so the backlog is gone before recovery is even declared. 256 bytes each makes the whole backlog 115 kB, which no link in this model has trouble with.
+
+The run record carries `observations_generated`, `observations_unique_delivered`, `observations_duplicated`, `observations_expired`, `observations_evicted`, `peak_queue_depth` and `backlog_drain_s`. The gate asserts **set equality** between the ids generated and the ids uniquely delivered, and zero expired or evicted. Counting deliveries alone lets a relay satisfy the gate by sending the same packet twice; a queue that silently drops is indistinguishable from one that never filled unless something counts both ends.
 
 ## 4. Roles and the recovery state machine
 
@@ -143,7 +193,7 @@ The slot sits on the segment from the **attachment node** to the **centroid of t
 
 When the work is one stationary point the balance point is the midpoint, so `relay_kill` gets the same answer it always did and nothing about that scenario moves.
 
-Round 4 finding 2 is why the rule is stated this way. The old midpoint rule was written against a component whose surviving member stood still, and the integrated mission has one that keeps flying a survey box. Taking the midpoint to wherever the survivor happened to be at election time puts the far corner of that box 181.7 m away, past the 175 m limit, for an area the design elsewhere claims is in range. Balancing against the whole area instead gives 168.7 m and holds for the rest of the mission wherever the survivor goes.
+Round 4 finding 2 is why the rule is stated this way. The old midpoint rule was written against a component whose surviving member stood still, and the integrated mission has one that keeps flying a survey box. Taking the midpoint to wherever the survivor happened to be at election time puts the far corner of that box 181.7 m away, past the 175 m limit, for an area the design elsewhere claims is in range. Balancing against the whole area instead gives 171.3 m and holds for the rest of the mission wherever the survivor goes.
 
 `check_geometry.py` recomputes both figures every run, so the paragraph cannot end up arguing against a problem some other parameter has quietly fixed.
 
@@ -155,23 +205,39 @@ Balancing the hops answers a routing question and says nothing about airspace. I
 
 Nothing caught that, and the reason it did not is worth stating: `uav_2` is dead in every scenario that computes a slot, so the collision cannot happen. That is a property of the scenario list, not of the rule. **A vehicle that loses its radio is still flying**, and the challenge names that failure as often as it names outright loss.
 
-So the slot is raised in 5 m steps until it clears every vehicle the component believes is airborne, by `slot_clearance` = **15 m**. That is the separation floor plus 5 m, and the 5 m is for staleness: a node with no radio sends no `HELLO`, so the swarm is steering around where it was last seen rather than where it is.
+The first fix was to raise the slot only when it collided. Round 5 finding 4 killed that one: no accepted scenario ever triggered it, so nothing proved an implementation would call the rule at all, and the 5 m staleness allowance was never derived. At 10 m/s a silent vehicle covers 30 m during `neighbour_timeout` alone, and far more by the time the relay arrives. 5 m covers half a second of that.
+
+So separation is taken **vertically**, where it does not depend on knowing where anyone drifted.
 
 | Parameter | Value |
 | --- | --- |
+| `relay_band` | 75 m, and no mission corridor may enter it |
 | `slot_clearance` | 15 m |
-| raise step | 5 m |
-| ceiling | 80 m, above which `RELAY_INFEASIBLE` |
+| raise step, if the band itself is occupied | 5 m |
+| ceiling | 95 m, above which `RELAY_INFEASIBLE` |
 
-Raised, not slid along the segment. The hops here run about 170 m horizontally, so ten metres of altitude costs almost nothing in link budget while sliding spends it directly. On the integrated geometry, raising to 56.1 m clears the vehicle by 16.4 m and leaves the hops at 170.0 m and 168.2 m. Sliding far enough to clear the same vehicle needs a 179.1 m anchor hop, which is not a worse answer, it is past the 175 m limit and therefore not an answer at all.
+Every relay slot sits in the band. The mission altitudes are 30, 40, 50 and 60, so 75 clears the highest by 15 m, and `check_geometry.py` fails the design if that gap ever drops below `slot_clearance`. A silent vehicle can drift anywhere horizontally and the separation still holds, as long as it holds altitude, which is the last thing a radio failure touches: PX4 keeps flying whatever the link does.
 
-Raised rather than lowered because down is towards terrain and towards the anchor's own layer.
+The slot is still the balance point, now solved on the horizontal with the altitude fixed. It costs a little link budget and buys a guarantee: `relay_kill`'s hops become 163.0 m and the integrated mission's 171.3 m, both inside the 175 m limit.
+
+The alternative was to slide along the segment until the vehicle was clear. On the integrated geometry that needs a 179.1 m anchor hop, which is not a worse answer, it is past the limit and therefore not an answer at all. `check_geometry.py` keeps that comparison as a live assertion so the choice stays justified rather than remembered.
 
 ### Giving the vehicle back
 
-A `RELAY` reverts to `SURVEY` when its component has held a route to the GCS that **does not pass through it** for `stability_window`, and it then returns to its station or its unfinished survey work.
+Without this a swarm that loses a link once is permanently one vehicle short, which is the wrong answer to a fault that ended. It only ever fires after a connectivity loss rather than a failure, because a dead vehicle does not come back, and that is why `link_loss.yaml` exists.
 
-Without this rule a swarm that loses a link once is permanently one vehicle short, which is the wrong answer to a fault that ended. It only ever fires after a connectivity loss rather than a failure, because a dead vehicle does not come back, and that is exactly why `link_loss.yaml` exists.
+**Make before break.** The old link is never torn down until its replacement has carried real traffic. Round 5 finding 1 is right that "a route exists that avoids the relay" is not enough on its own: acting on the mere existence of an alternate breaks the installed next hop before the alternate is selected.
+
+1. The coordinator sees a route to `gcs` that does not use the relay. With the surcharge above it is now also the **cheapest** route, so it wins hysteresis and installs itself.
+2. Coordinator sends `PREPARE_RELEASE(e, new_path)`. **The relay keeps forwarding.** Nothing has been given up yet.
+3. The staying members send observations over the new path.
+4. The GCS acknowledges, naming the observation ids it received and the path they arrived on.
+5. Only on that acknowledgement does the coordinator send `RELEASE(e)`.
+6. The relay reverts to `SURVEY` and returns to its station or its unfinished survey work.
+
+If no acknowledgement naming the new path arrives within `stability_window`, the release is abandoned and the relay stays where it is. A swarm that keeps a vehicle parked is worse off than one that does not; a swarm that drops the link to recover a vehicle is much worse off than both.
+
+The run record carries `handback_path`, `handback_confirmed_at`, `release_at` and `observation_gap_count`. The gate asserts the new path carried data **before** the relay moved, which is the whole claim, and that no unique observation went missing across the handover.
 
 ### Election
 
@@ -194,10 +260,10 @@ Round 2 finding 6 is right that 30 s was asserted, not derived. Every term below
 | Detect the loss | 3.0 s | 3.0 s | `neighbour_timeout` |
 | LSA convergence | 2.0 s | 2.0 s | one `LSA` period |
 | Election | 1.0 s | 1.0 s | `election_window` |
-| Fly to slot | 19.2 s | 14.5 s | 191.6 m and 145.3 m at 10 m/s |
+| Fly to slot | 19.5 s | 15.0 s | 195.0 m and 150.0 m at 10 m/s |
 | Accelerate and settle | 4.0 s | 4.0 s | allowance |
 | Stability window | 3.0 s | 3.0 s | `stability_window` |
-| **Total** | **32.2 s** | **27.5 s** | |
+| **Total** | **32.5 s** | **28.0 s** | |
 
 One gate value covers both: **45 s**, which is the worse of the two plus 40%. It is not 30 s, because 30 s fails a correct implementation.
 
@@ -315,11 +381,11 @@ That is not decoration. When the relay dies, the component elects the member nea
 
 At `t = 70 s` each surveyor is 58% of the way through its strip, so there is finished work and unfinished work on both sides of the failure. `uav_2` dies. Both surveyors lose their route; `uav_1` keeps the GCS link.
 
-The component `{uav_3, uav_4}` elects. At the assign, 6 s later, `uav_3` is 311.8 m from `uav_1` and `uav_4` is 325.0 m. `uav_3` wins, flies 145.3 m to the slot at **(332.9, 0, 46.1)**, and both new hops are 168.7 m.
+The component `{uav_3, uav_4}` elects. At the assign, 6 s later, `uav_3` is 311.8 m from `uav_1` and `uav_4` is 325.0 m. `uav_3` wins, flies 150.0 m to the slot at **(330.3, 0, 75)**, and both new hops are 171.3 m.
 
 `uav_4` inherits `uav_3`'s remaining lane, finishes its own strip first, then flies the handover. The survey completes at about `t = 141 s`, inside the 240 s run with 99 s to spare.
 
-Observations generated during the outage are **buffered and delivered once the route returns**, which is what a real BVLOS mission does, and it is why the gate asserts delivery by end of run rather than instantaneously. The outage is 27.5 s derived, and the queue holds 512 packets against a permitted 45 s, so nothing is evicted and the gate asserts that.
+Observations generated during the outage are **buffered and delivered once the route returns**, which is what a real BVLOS mission does, and it is why the gate asserts delivery by end of run rather than instantaneously. The outage is 28.0 s derived, and the queue holds 512 packets against a permitted 45 s, so nothing is evicted and the gate asserts that.
 
 What this scenario has to show, and what its gate asserts:
 
@@ -344,10 +410,10 @@ Common geometry. At `t = 120 s`, `uav_2` is killed. Both survey drones lose thei
 
 The component `{uav_3, uav_4}` elects. Distances to the attachment node `uav_1` are 319.6 m and 320.4 m, so `uav_3` wins by 0.8 m. That margin is small but it is deterministic and reproducible, not a coin flip; the tie-break by lowest id would pick `uav_3` regardless.
 
-The slot is the midpoint of `uav_1` at (165, 0, 30) and `uav_4`, the member that stays, at (475, -75, 60), which is **(320, -37.5, 45)**.
+The slot is the balance point between `uav_1` and `uav_4`, the member that stays, solved in the reserved relay band: **(317.3, -36.8, 75)**.
 
-- `uav_3` flies (475, 75, 50) to (320, -37.5, 45): **191.6 m**, 19.2 s at 10 m/s.
-- Both new hops are 160.2 m, inside `r_full`.
+- `uav_3` flies (475, 75, 50) to (317.3, -36.8, 75): **195.0 m**, 19.5 s at 10 m/s.
+- Both new hops are 163.0 m, inside `r_full`.
 - Restored path: `uav_4 -> uav_3 -> uav_1 -> gcs`.
 - `uav_3`'s survey strip is reassigned to `uav_4`, not abandoned.
 
@@ -374,11 +440,13 @@ Common geometry, identical to `relay_kill` in every respect except the injected 
 | Radio restored | `t = 240 s` |
 | Run duration | 360 s |
 
-What happens. `uav_3` and `uav_4` lose their route exactly as in `relay_kill`, elect, and `uav_3` flies 191.6 m to the slot at (320, -37.5, 45). That slot sits **39.1 m** from the still-flying `uav_2`, comfortably past the 15 m clearance, so no raise is needed here and the geometry is unchanged. The route returns inside the same 32.2 s budget.
+What happens. `uav_3` and `uav_4` lose their route exactly as in `relay_kill`, elect, and `uav_3` flies 195.0 m to the slot at (317.3, -36.8, 75). That slot sits **52.4 m** from the still-flying `uav_2`, far past the 15 m clearance, because the band puts every relay above every mission corridor. The route returns inside the same 32.5 s budget.
 
-At `t = 240 s` the radio comes back. `uav_4` now has `uav_4 -> uav_2 -> uav_1 -> gcs`, a route that does not use `uav_3`, so `uav_3` is released and flies home. The alternate path is already up before it leaves, which is what makes releasing it free rather than a second outage. Its flight out and back never comes within 25.1 m of another vehicle.
+At `t = 240 s` the radio comes back, and this is where round 5 finding 1 landed. On hop count the recovered route and the relay route both cost three, a tie never wins hysteresis, and the relay could never be released. The `relay_surcharge` in section 3 breaks it: 3.0 against 3.5, so `uav_4 -> uav_2 -> uav_1 -> gcs` installs itself on its own merits.
 
-The route itself does not change: both paths are three hops, and hysteresis keeps the one already installed. **The reconfiguration here is the role, not the route**, and that is the more interesting half.
+Then the handback runs make before break. `uav_3` keeps forwarding while observations go over the new path, the GCS acknowledges naming that path, and only then does `uav_3` fly home. The old link is live throughout, so there is no second outage. Its flight out and back never comes within 38.1 m of another vehicle.
+
+**The reconfiguration here is the role, not the route**, and that is the more interesting half. It is also the only scenario in which the swarm gets a vehicle back.
 
 ### `encounter.yaml`
 

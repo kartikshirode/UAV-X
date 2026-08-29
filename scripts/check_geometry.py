@@ -48,6 +48,13 @@ ELECTION_WINDOW = 1.0
 SETTLE_ALLOWANCE = 4.0
 STABILITY_WINDOW = 3.0
 RECONNECT_GATE = 45.0
+
+# What a path pays for tying up a vehicle in a temporary relay role. Under one
+# hop on purpose: it breaks ties and can never outrank a genuinely shorter
+# route. Round 5 finding 1: with hop count alone the recovered path and the
+# relay path tie, a tie never wins route hysteresis, and the relay could
+# therefore never be released.
+RELAY_SURCHARGE = 0.5
 MIN_SEPARATION = 10.0
 
 # A relay slot has to clear every vehicle that is still flying, by more than the
@@ -55,7 +62,20 @@ MIN_SEPARATION = 10.0
 # radio sends no HELLO, so the swarm is steering around where it last saw it.
 SLOT_CLEARANCE = 15.0
 SLOT_RAISE_STEP = 5.0
-SLOT_CEILING = 80.0
+SLOT_CEILING = 95.0
+
+# Round 5 finding 4: raising the slot only when it happens to collide is a rule
+# no accepted scenario ever exercised, and its 5 m staleness allowance was never
+# derived. A silent vehicle sends no HELLO, so its horizontal position is a
+# guess that gets worse at 10 m/s; 5 m covers half a second of that.
+#
+# So separation is taken vertically instead, where it does not depend on knowing
+# where anyone drifted. Every relay slot sits in a band reserved for relays,
+# SLOT_CLEARANCE above the highest mission altitude, and no mission corridor may
+# enter it. That holds however lost the silent vehicle is, as long as it holds
+# altitude, which is the last thing a comms failure affects: PX4 keeps flying
+# whatever the radio does.
+RELAY_BAND = 75.0
 
 # The margin an election must win by. Two candidates a metre apart is a
 # deterministic result on paper and a coin toss in SITL, where position hold
@@ -122,6 +142,37 @@ def path_to(pos: dict, src: str, dst: str) -> list | None:
                 seen.add(n)
                 q.append(p + [n])
     return None
+
+
+def all_paths(pos: dict, src: str, dst: str) -> list:
+    """Every loop-free path, so a tie can be seen rather than hidden by BFS.
+
+    `path_to` returns one shortest path. When two are equally short it silently
+    picks by neighbour order, which is exactly how the handback tie stayed
+    invisible.
+    """
+    adj = adjacency(pos)
+    out, stack = [], [[src]]
+    while stack:
+        p = stack.pop()
+        if p[-1] == dst:
+            out.append(p)
+            continue
+        if len(p) > len(pos):
+            continue
+        for n in sorted(adj[p[-1]]):
+            if n not in p:
+                stack.append(p + [n])
+    return sorted(out, key=lambda p: (len(p), p))
+
+
+def path_cost(path: list, relays: set) -> float:
+    """One per hop, plus a surcharge for every node holding a temporary relay.
+
+    Hop count alone cannot express "this route is as short as the other one but
+    it costs me a surveyor", and that is the whole handback problem.
+    """
+    return (len(path) - 1) + RELAY_SURCHARGE * len(set(path) & relays)
 
 
 def dump_matrix(pos: dict, title: str) -> None:
@@ -191,6 +242,28 @@ def minimax_slot(anchor: tuple, work: list) -> tuple:
             hi = mid
     t = (lo + hi) / 2
     return tuple(anchor[i] + t * (c[i] - anchor[i]) for i in range(3))
+
+
+def banded_slot(anchor: tuple, work: list) -> tuple:
+    """The balance point, in the reserved relay band.
+
+    Same minimax rule as before, solved on the horizontal projection with the
+    altitude fixed. Costs a little link budget and buys separation that does not
+    depend on knowing where a silent vehicle went.
+    """
+    c = tuple(sum(p[i] for p in work) / len(work) for i in range(3))
+    lo, hi = 0.0, 1.0
+    for _ in range(200):
+        m = (lo + hi) / 2
+        s = (anchor[0] + m * (c[0] - anchor[0]),
+             anchor[1] + m * (c[1] - anchor[1]), RELAY_BAND)
+        if math.dist(anchor, s) < max(math.dist(s, p) for p in work):
+            lo = m
+        else:
+            hi = m
+    m = (lo + hi) / 2
+    return (anchor[0] + m * (c[0] - anchor[0]),
+            anchor[1] + m * (c[1] - anchor[1]), RELAY_BAND)
 
 
 def clear_slot(slot: tuple, live: list) -> tuple | None:
@@ -349,6 +422,19 @@ def run(quiet: bool = False) -> int:
         ok("uav_1 still holds the gcs link")
 
     # -------------------------------------------------- relay_kill recovery
+    out("\nthe reserved relay band")
+    mission_alts = sorted({START[v][2] for v in ("uav_1", "uav_2", "uav_3", "uav_4")}
+                          | set(SURVEY_ALT.values()))
+    gap = note("relay_band_gap", RELAY_BAND - max(mission_alts))
+    out(f"    mission altitudes {mission_alts}, band at {RELAY_BAND:.0f} m")
+    if gap >= SLOT_CLEARANCE:
+        ok(f"the band clears the highest mission corridor by {gap:.0f} m, at or "
+           f"above the {SLOT_CLEARANCE:.0f} m a relay slot must hold, so a "
+           f"silent vehicle's horizontal drift cannot close it")
+    else:
+        fail(f"the relay band is {gap:.0f} m above the highest mission "
+             f"altitude, under the {SLOT_CLEARANCE:.0f} m clearance rule")
+
     out("\nrelay_kill: election and slot, recomputed")
     attach = "uav_1"
     cands = sorted(("uav_3", "uav_4"),
@@ -358,7 +444,7 @@ def run(quiet: bool = False) -> int:
         f"{n} {math.dist(START[n], START[attach]):.1f} m" for n in ("uav_3", "uav_4")))
     out(f"    mover = {mover}, remaining = {stays}")
 
-    slot = minimax_slot(START[attach], [START[stays]])
+    slot = banded_slot(START[attach], [START[stays]])
     out(f"    slot = ({slot[0]:.1f}, {slot[1]:.1f}, {slot[2]:.1f})")
 
     d_up = note("relay_kill:uav_1-slot", math.dist(START[attach], slot))
@@ -525,7 +611,7 @@ def check_integrated(out, ok, quiet: bool) -> None:
     #    not where it happened to be when the relay died.
     z4 = SURVEY_ALT["uav_4"]
     corners = [(x, y, z4) for x in (BOX_X0, BOX_X1) for y in (BOX_Y0, BOX_Y1)]
-    slot = minimax_slot(START["uav_1"], corners)
+    slot = banded_slot(START["uav_1"], corners)
     hop_back = note("integrated:uav_1-slot", math.dist(START["uav_1"], slot))
     hop_fwd = note("integrated:slot-box", max(math.dist(slot, c) for c in corners))
     out(f"    slot = ({slot[0]:.1f}, {slot[1]:.1f}, {slot[2]:.1f}), balancing both hops")
@@ -628,7 +714,7 @@ def check_link_loss(out, ok) -> None:
     out("=" * 62)
 
     attach, mover, stays = "uav_1", "uav_3", "uav_4"
-    slot0 = minimax_slot(START[attach], [START[stays]])
+    slot0 = banded_slot(START[attach], [START[stays]])
 
     # uav_2 is FLYING here. That is the whole difference from relay_kill.
     live = [START[v] for v in ("uav_1", "uav_2", "uav_4")]
@@ -663,16 +749,51 @@ def check_link_loss(out, ok) -> None:
     if RECONNECT_GATE <= budget:
         fail(f"gate of {RECONNECT_GATE:.0f} s is below the derived {budget:.1f} s")
 
-    # The return. When uav_2's radio comes back the component has a route that
-    # does not use the mover, so the mover is released and flies home. The
-    # alternate path must already be up, or releasing it causes a second outage.
-    alt = path_to({k: v for k, v in START.items()}, stays, "gcs")
-    if alt and mover not in alt:
-        ok(f"once uav_2 is back, {stays} reaches gcs as {' -> '.join(alt)}, "
-           f"without {mover}, so releasing it costs no second outage")
+    # The return. Round 5 finding 1, and the check that was supposed to cover it
+    # asked about the ORIGINAL topology, with the mover still at its start
+    # position. That question has an easy yes and no bearing on the handback at
+    # all. The state that matters is the one after recovery: uav_2 healthy again
+    # and the mover parked at the slot.
+    post = dict(START)
+    post[mover] = slot
+
+    print()
+    routes = all_paths(post, stays, "gcs")
+    for p in routes:
+        print(f"    {' -> '.join(p):<34} {len(p) - 1} hops, "
+              f"cost {path_cost(p, {mover}):.1f}")
+
+    fewest = min(len(p) - 1 for p in routes)
+    shortest = [p for p in routes if len(p) - 1 == fewest]
+    if len(shortest) >= 2:
+        ok(f"on hop count alone {len(shortest)} routes tie at {fewest} hops, "
+           f"which is round 5 finding 1: a tie never wins hysteresis, so the "
+           f"installed route through {mover} would never be replaced and the "
+           f"release could never fire")
     else:
-        fail(f"after the radio returns, {stays} still needs {mover}: {alt}. "
-             f"Releasing the relay would drop the link again.")
+        fail(f"only one route is shortest now, so the surcharge below is "
+             f"arguing against a problem that has moved. Recheck the rule "
+             f"before trusting it.")
+
+    ranked = sorted(routes, key=lambda p: path_cost(p, {mover}))
+    best = ranked[0]
+    margin = path_cost(ranked[1], {mover}) - path_cost(best, {mover}) if len(ranked) > 1 else 0.0
+    note("link_loss:handback_margin", margin, "cost")
+    if mover not in best and margin > 0:
+        ok(f"with the relay surcharge the winner is {' -> '.join(best)}, "
+           f"clear of {mover} by {margin:.1f}, so the recovered path installs "
+           f"itself and the release predicate becomes reachable")
+    else:
+        fail(f"the cheapest route is {' -> '.join(best)} by {margin:.1f}. The "
+             f"handback still cannot happen without breaking the link first.")
+
+    # And the surcharge must never outrank a genuinely shorter path, or the
+    # swarm would route the long way round to spare a relay.
+    if RELAY_SURCHARGE < 1.0:
+        ok(f"the surcharge is {RELAY_SURCHARGE}, under one hop, so it breaks "
+           f"ties and can never beat a shorter path")
+    else:
+        fail(f"a surcharge of {RELAY_SURCHARGE} can outrank a real hop")
 
     # The way home must not fly through anybody.
     worst = 1e9
