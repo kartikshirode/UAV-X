@@ -171,7 +171,22 @@ Every observation carries four fields, which is the smallest identity that makes
 
 **Drain time, derived.** A 45 second outage at 5 Hz per origin leaves at most 450 packets. At 200 per second that is **2.25 s** to clear, against a `stability_window` of 3.0 s, so the backlog is gone before recovery is even declared. 256 bytes each makes the whole backlog 115 kB, which no link in this model has trouble with.
 
-The run record carries `observations_generated`, `observations_unique_delivered`, `observations_duplicated`, `observations_expired`, `observations_evicted`, `peak_queue_depth` and `backlog_drain_s`. The gate asserts **set equality** between the ids generated and the ids uniquely delivered, and zero expired or evicted. Counting deliveries alone lets a relay satisfy the gate by sending the same packet twice; a queue that silently drops is indistinguishable from one that never filled unless something counts both ends.
+The run record carries one `observations` object, and every name below is a field inside it. Round 6 finding 5 found three spellings of these numbers in play at once: flat `observations_generated` here, a nested object in the schema, and older flat names again in the gate. Three shapes for one measurement is a promise that at least two of the readers are checking nothing.
+
+| Field | Meaning |
+| --- | --- |
+| `generated_ids` | `origin_id:sequence` for every observation the swarm produced |
+| `delivered_ids` | `origin_id:sequence` for every observation the GCS accepted, deduplicated |
+| `generated`, `unique_delivered` | the sizes of those two sets |
+| `duplicated` | arrivals of an id the GCS already held |
+| `expired`, `evicted` | dropped for age, dropped for space |
+| `peak_queue_depth` | deepest any node's queue got, against 512 |
+| `backlog_drain_s` | route restored to backlog empty |
+| `control_queue_max_delay_s` | worst time a control message waited behind anything |
+
+The id sets are the point. `generated: 450, unique_delivered: 450` is satisfied by delivering the wrong 450 packets, and counting deliveries alone lets a relay pass by sending the same packet twice. `uavx_eval.check` recomputes `observations_set_equal`, `observations.missing_count` and `observations.unexpected_count` from the two sets, and rejects any record whose own counts contradict its own sets. [RFC 9171](https://www.rfc-editor.org/rfc/rfc9171.html) draws the same line: identity is source plus creation sequence, and delivery is reported against that identity rather than counted as transmissions.
+
+The gate asserts set equality, no unexpected ids, zero expired, zero evicted, a peak depth inside the queue, `backlog_drain_s <= 2.25` and `control_queue_max_delay_s <= 0.05`. That last bound is one in-flight observation at the 200 per second forward rate, 5 ms, with an order of magnitude of margin. The schema requires the whole block for every scenario that produces an outage, through an `if`/`then` pair that `jsonschema_mini.py` now implements rather than ignores.
 
 ## 4. Roles and the recovery state machine
 
@@ -184,7 +199,7 @@ Round 3 finding 1 broke the previous rule. It made the coordinator "the lowest i
 **The disconnected component elects its own relay.** That is also the more honest reading of "reconfigures itself as drones fail": the part of the swarm that lost contact is the part that has to solve it.
 
 1. A node whose route to `gcs` has been absent for `neighbour_timeout` marks itself `DISCONNECTED` and floods that state within its own component.
-2. The component's coordinator is its **lowest id member**. Every member computes the same one because they all see the same component.
+2. The component's coordinator is its **lowest id member**. Every member computes the same one because they all see the same component. On opening an epoch that coordinator becomes the epoch owner, and it carries the epoch to its end. See *Who owns the handback*.
 3. The **attachment node** is the last node the component could reach that still had a route to `gcs`, taken from the last link-state view before the split. In the frozen scenario that is `uav_1`.
 4. Eligible movers are `SURVEY` members of the component. A `GCS_ANCHOR` is never eligible.
 5. The mover is the eligible member **nearest the attachment node**, ties broken by lowest id.
@@ -232,16 +247,32 @@ Without this a swarm that loses a link once is permanently one vehicle short, wh
 
 **Make before break.** The old link is never torn down until its replacement has carried real traffic. Round 5 finding 1 is right that "a route exists that avoids the relay" is not enough on its own: acting on the mere existence of an alternate breaks the installed next hop before the alternate is selected.
 
-1. The epoch owner sees a route to `gcs` that does not use the relay. On the route key above it is also the **cheapest** route, so it wins hysteresis and installs itself.
-2. Coordinator sends `PREPARE_RELEASE(e, new_path)`. **The relay keeps forwarding.** Nothing has been given up yet.
+1. The epoch owner sees a route to `gcs` from a staying member that does not use the relay. On the route key above it is also the **cheapest** route, so it wins hysteresis and installs itself.
+2. The epoch owner sends `PREPARE_RELEASE(e, staying_member, new_path)`. **The relay keeps forwarding.** Nothing has been given up yet.
 3. The staying members send observations over the new path.
 4. The GCS acknowledges, naming the observation ids it received and the path they arrived on.
-5. Only on that acknowledgement does the coordinator send `RELEASE(e)`.
+5. Only on that acknowledgement does the epoch owner send `RELEASE(e)`.
 6. The relay reverts to `SURVEY` and returns to its station or its unfinished survey work.
 
 If no acknowledgement naming the new path arrives within `stability_window`, the release is abandoned and the relay stays where it is. A swarm that keeps a vehicle parked is worse off than one that does not; a swarm that drops the link to recover a vehicle is much worse off than both.
 
-The run record carries `handback_path`, `handback_confirmed_at`, `release_at` and `observation_gap_count`. The gate asserts the new path carried data **before** the relay moved, which is the whole claim, and that no unique observation went missing across the handover.
+### Who owns the handback
+
+Round 6 finding 7. Everything above said "the coordinator", and the coordinator rule is a property of the disconnected component: its lowest id member. The moment the radio comes back the component is no longer disconnected and there is no component left to take the lowest id of. Three readings were all defensible. Recompute over the merged graph, let the GCS take it, or let the original coordinator keep it, and only one of them makes the frozen release fire.
+
+There is a worse version of the third reading. In `link_loss` the component is `{uav_3, uav_4}`, so its lowest id member is `uav_3`, and `uav_3` is also the member nearest the attachment node, so it is the one elected to fly. If it stayed the owner it would be evaluating routes from itself, and every route from the relay begins at the relay. The condition would never be true.
+
+So ownership is carried, not recomputed, and the owner is never the relay:
+
+- **`epoch_owner(e)` is fixed when the epoch opens** and holds until `RELEASE(e)` or until the epoch is abandoned. Merging graph components does not move it.
+- **The owner is the lowest id member of the component that is not the elected relay.** In `link_loss` the lowest id member is `uav_3` and `uav_3` wins the election, so ownership passes to `uav_4`. This is deterministic and every member computes it identically from the same election result.
+- **The owner evaluates the cheapest route to `gcs` for each staying member, with the relay barred as an intermediate node.** Not routes from itself, and not the mere existence of an alternate somewhere in the swarm. In `link_loss` that is `uav_4 -> uav_2 -> uav_1 -> gcs`.
+- **That route must win two consecutive computations** before `PREPARE_RELEASE`, the same hysteresis every other route change obeys. A path that appears once as `uav_2` comes back into range is not a path to hand a vehicle back on.
+- **The owner renews the relay's 30 s lease** each `LSA` period for as long as the epoch is open.
+
+If the epoch owner dies, nothing takes over the open epoch. Two nodes each believing they own epoch `e` could send contradictory `RELEASE`, and a stale release is the outage this whole section exists to prevent. The lease simply stops being renewed, it expires inside 30 s, and the relay reverts to `SURVEY` on its own. Any member still `DISCONNECTED` after that opens epoch `e + 1` under the ordinary election rule. Losing a vehicle's time is recoverable; tearing down a working link on a message from a node that no longer owns the decision is not.
+
+The run record carries `handback.epoch`, `handback.epoch_owner`, `handback.staying_member`, `handback.prepared_path`, `handback.confirmed_observation_id`, `handback.release_sender`, `handback.confirmed_at`, `handback.release_at` and `handback.observation_gap_count`. The gate asserts that exact trace: the owner is `uav_4` and not the relay, the prepared path is the named non-relay path, the confirmation arrived **before** the relay moved, the release came from the owner, and no unique observation went missing across the handover.
 
 ### Election
 
@@ -389,7 +420,7 @@ The component `{uav_3, uav_4}` elects. At the assign, 6 s later, `uav_3` is 311.
 
 `uav_4` inherits `uav_3`'s remaining lane, finishes its own strip first, then flies the handover. The survey completes at about `t = 141 s`, inside the 240 s run with 99 s to spare.
 
-Observations generated during the outage are **buffered and delivered once the route returns**, which is what a real BVLOS mission does, and it is why the gate asserts delivery by end of run rather than instantaneously. The outage is 28.0 s derived, and the queue holds 512 packets against a permitted 45 s, so nothing is evicted and the gate asserts that.
+Observations generated during the outage are **buffered and delivered once the route returns**, which is what a real BVLOS mission does, and it is why the gate asserts delivery by end of run rather than instantaneously. The outage here is the derived 28.0 s. The queue is sized for 45 s, so this run never comes close to filling it, and `queue_drain.yaml` exists to go there on purpose.
 
 What this scenario has to show, and what its gate asserts:
 
@@ -452,6 +483,23 @@ Then the handback runs make before break. `uav_3` keeps forwarding while observa
 
 **The reconfiguration here is the role, not the route**, and that is the more interesting half. It is also the only scenario in which the swarm gets a vehicle back.
 
+### `queue_drain.yaml`
+
+Round 6 finding 5. The store-and-forward queue is 512 packets, and the 2.25 s drain bound is arithmetic off a 45 second outage: two disconnected origins at 5 Hz for 45 s is 450 packets, and 450 at the 200 per second forward rate is 2.25 s. The two accepted recoveries last 32.5 s and 28.0 s. Nothing had ever held the route down for as long as the numbers assume, so the depth the design claims to survive was never reached by anything that could fail.
+
+Same common geometry and the same fault as `link_loss`, with one difference: the radio never comes back. `uav_2` goes quiet at `t = 60 s` and stays quiet, and the scenario forbids the election, so `uav_3` and `uav_4` buffer for the full 45 s before the route is restored by hand at `t = 105 s`.
+
+| Field | Value |
+| --- | --- |
+| Fault | `uav_2` radio off at `t = 60 s` |
+| Relay election | disabled, so nothing shortens the outage |
+| Route restored | `t = 105 s`, a 45 s hold |
+| Run duration | 180 s |
+
+What it has to show: 450 observations generated, the delivered set equal to the generated set, nothing expired, nothing evicted, a peak queue depth between 450 and 512, the backlog cleared within 2.25 s, and no control message delayed more than 50 ms behind it. A run that drops one packet and reports clean counts fails on the id sets.
+
+This is the only scenario that reaches the queue depth the design is sized for. Every other run leaves the claim untested and reads as though it passed.
+
 ### `encounter.yaml`
 
 Round 3 finding 8: the previous version claimed every coordinate was frozen and then gave none, and its gate asked only for `yield_events>=1`. A logger emitting one event while the flight command carried on unchanged would have satisfied all three assertions. Worse, `collision_contacts==0` passes when no contact monitor was ever attached, which is the same shape as the package check that passed on a machine with no simulator.
@@ -469,7 +517,19 @@ So the trajectories are frozen, and there is a negative control.
 
 Both paths are 240 m and both vehicles start together, so without intervention they arrive at the crossing point simultaneously and pass within 0 m. `uav_4`, the higher system id, must hold until the conflict clears.
 
-**The negative control.** `scenarios/encounter_noyield.yaml` is the same run with the yield rule disabled. It must record a separation violation. Without it, a run where the vehicles happened to miss each other is indistinguishable from one where the rule worked, and the 10% safety row would rest on a coincidence.
+### `encounter_noyield.yaml`
+
+The negative control, and the only scenario here that has to fail.
+
+Identical to `encounter.yaml` in every frozen number, with the yield rule disabled. Same two vehicles, same converging paths, same commanded altitude, same 240 m to the crossing point, same seed. One flag differs.
+
+| Field | Value |
+| --- | --- |
+| Geometry | exactly `encounter.yaml` |
+| Yield rule | disabled |
+| Required result | at least one separation violation |
+
+Without it, a run where the two vehicles happened to miss each other is indistinguishable from one where the rule worked, and the 10% safety row rests on a coincidence. `check_geometry.py` proves the coincidence is impossible by construction: both paths are 240 m, so neither vehicle arrives first, and with nobody yielding they pass within 0.0 m. A control run that records no violation means the yield rule was never disabled, or the contact monitor was never attached, and either way the positive run proves nothing.
 
 The gate requires, on the yield run: at least one yield event **naming `uav_4`**, a non-zero hold duration, `min_pairwise_separation_m` at or above 10, zero contacts, a non-zero contact-monitor sample count so the zero means something, enough pose samples, and both vehicles completing. On the control run it requires a violation.
 
@@ -506,7 +566,7 @@ The same checker runs again in W5 against every record the proposal cites, not j
 | Criterion | Weight | Evidence artifact | Also in the integrated run |
 | --- | --- | --- | --- |
 | Mission completion | 25% | `coverage_fraction` from pose samples, `survey_baseline` | `coverage_fraction` after losing a vehicle to the relay role |
-| Communication resilience | 25% | `delivery_ratio_by_node.uav_4` in `relay_required` against `direct_only` | `observations_delivered_after_recovery`, `observations_evicted` |
+| Communication resilience | 25% | `delivery_ratio_by_node.uav_4` in `relay_required` against `direct_only` | `observations_set_equal` and `observations.evicted` in `link_loss` and `queue_drain` |
 | Autonomous relay and role management | 20% | `relay_role_moved`, the named transition in `relay_kill`, plus the seam test | `relay_role_holder`, `strip_reassigned_to` |
 | Fault recovery and swarm reconfiguration | 15% | `time_to_reconnect_s` in `relay_kill` for a vehicle lost, and in `link_loss` for a vehicle gone quiet and returned | same, measured mid-survey rather than from a hover |
 | Safety and collision avoidance | 10% | `yield_events` in `encounter`, `min_pairwise_separation_m`, `collision_contacts` | `separation_violations` across the whole run |

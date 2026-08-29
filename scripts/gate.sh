@@ -234,6 +234,11 @@ gate_w4() {
   check_run scenarios/relay_kill.yaml \
     --require "injected_event_observed==true" \
     --require "time_to_reconnect_s<=45" \
+    --require "observations_set_equal==true" \
+    --require "observations.evicted==0" \
+    --require "observations.expired==0" \
+    --require "relay_slot.clearance_m>=15" \
+    --require "relay_slot.band_reserved==true" \
     --require "delivery_ratio_after_recovery>=0.90" \
     --require "relay_role_moved==true" \
     --require "pose_sample_count>=1000" \
@@ -251,19 +256,64 @@ gate_w4() {
     --require "time_to_reconnect_s<=45" \
     --require "relay_role_moved==true" \
     --require "relay_role_holder==uav_3" \
-    --require "observations_evicted==0" \
+    --require "observations_set_equal==true" \
+    --require "observations.evicted==0" \
+    --require "observations.expired==0" \
+    --require "observations.unexpected_count==0" \
     --require "route_restored_after_blackout==true" \
     --require "relay_role_released==true" \
     --require "mover_returned_to_station==true" \
     --require "outage_count_after_release==0" \
-    --require "handback_path==uav_4>uav_2>uav_1>gcs" \
-    --require "handback_confirmed_at<release_at" \
-    --require "observation_gap_count==0" \
-    --require "min_slot_clearance_m>=15" \
+    --require "handback.prepared_path==uav_4>uav_2>uav_1>gcs" \
+    --require "handback.confirmed_at<handback.release_at" \
+    --require "handback.observation_gap_count==0" \
+    --require "relay_slot.clearance_m>=15" \
+    --require "relay_slot.band_reserved==true" \
     --require "min_pairwise_separation_m>=10" \
     --require "separation_violations==0" \
     --require "contact_monitor_samples>0"
-  gsay "W4: the swarm recovered a link it lost, then gave the vehicle back"
+
+  # Round 6 finding 7. Everything above says the handback happened; none of
+  # it said who owned it. The coordinator rule is a property of the
+  # disconnected component, and the component has merged by the time this
+  # runs, so the owner is carried from the election instead of recomputed.
+  # It is never the relay: uav_3 is both the lowest id member of the
+  # component and the elected mover, so ownership passes to uav_4. An
+  # implementation that takes any of the three other defensible readings
+  # fails here rather than in front of a judge.
+  check_run scenarios/link_loss.yaml \
+    --require "handback.epoch_owner==uav_4" \
+    --require "handback.epoch_owner!=relay_role_holder" \
+    --require "handback.staying_member==uav_4" \
+    --require "handback.release_sender==uav_4" \
+    --require "handback.prepared_path_computations>=2" \
+    --require "handback.confirmed_observation_id=~^uav_4:[0-9]+$" \
+    --require "observations.backlog_drain_s<=2.25" \
+    --require "observations.control_queue_max_delay_s<=0.05"
+  gsay "W4: the swarm recovered a link it lost and gave the vehicle back, with one named node owning the transaction"
+
+  # Round 6 finding 5. The queue is sized against a 45 second outage and the
+  # drain bound of 2.25 s comes off that number, but the two accepted
+  # recoveries are 32.5 s and 28.0 s, so nothing had ever held the route
+  # down for the duration the arithmetic assumes. This one holds it for the
+  # full 45 s and never restores the relay, which is the depth the store
+  # and forward design claims to survive.
+  run_scenario scenarios/queue_drain.yaml
+  check_run scenarios/queue_drain.yaml \
+    --require "injected_event_observed==true" \
+    --require "outage_duration_s>=45" \
+    --require "observations.generated>=450" \
+    --require "observations_set_equal==true" \
+    --require "observations.unexpected_count==0" \
+    --require "observations.evicted==0" \
+    --require "observations.expired==0" \
+    --require "observations.peak_queue_depth<=512" \
+    --require "observations.peak_queue_depth>=450" \
+    --require "observations.backlog_drain_s<=2.25" \
+    --require "observations.control_queue_max_delay_s<=0.05" \
+    --require "min_pairwise_separation_m>=10" \
+    --require "separation_violations==0"
+  gsay "W4: 45 seconds of backlog delivered exactly once, and control never queued behind it"
 
   # Safety, with a negative control. Round 3 finding 8: without the control a
   # pass is indistinguishable from two vehicles that happened to miss each
@@ -306,9 +356,12 @@ gate_w4() {
     --require "coverage_source==pose_samples" \
     --require "coverage_fraction_at_kill<=0.80" \
     --require "injected_event_observed==true" \
-    --require "observations_generated_during_outage>=100" \
-    --require "observations_evicted==0" \
-    --require "observations_undelivered==0" \
+    --require "observations.generated>=100" \
+    --require "observations.evicted==0" \
+    --require "observations.expired==0" \
+    --require "observations_set_equal==true" \
+    --require "observations.unexpected_count==0" \
+    --require "relay_slot.clearance_m>=15" \
     --require "relay_role_moved==true" \
     --require "relay_role_holder==uav_3" \
     --require "strip_reassigned_to==uav_4" \
