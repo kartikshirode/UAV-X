@@ -1,22 +1,28 @@
 {
   "_why": "Round 4 finding 9. Review state was written into prose in four documents, and prose does not update itself. handoff.md said round 3 had not run after round 3 had run and been fixed, and listed three of its findings as still open. decisions.md still had round 2 outstanding. The autonomous loop hands those files to a week-agent, which has no way to tell which sentence is current. So the state lives here, in one place, and check_docs.py fails any document that states it in prose.",
-  "latest_round": 5,
+  "latest_round": 6,
   "reviewer": "Codex",
   "verdict": "NOT READY",
   "findings": 9,
   "findings_addressed": 9,
-  "state": "round 5 fixes applied and verified; round 6 not yet run",
+  "state": "round 6 fixes applied and verified; round 7 not yet run",
   "review_files": [
     "_plan-review-round1.md",
     "_plan-review-round2.md",
     "_plan-review-round3.md",
     "_plan-review-round4.md",
-    "_plan-review-round5.md"
+    "_plan-review-round5.md",
+    "_plan-review-round6.md"
   ],
   "open_findings": [],
   "source_verified": {
-    "date": "2026-08-27",
+    "date": "2026-08-29",
     "how": "scripts/check_competition_spec.py against techfest.org/api/compis/",
-    "result": "VJTI Mumbai removed from the published collaborator list, re-captured; problem statement PDF bytes now hashed too"
-  }
+    "result": "obligations unchanged against the capture; registrations 45 at the round 6 audit and 48 now, against roughly 15 qualifying"
+  },
+  "found_while_fixing": [
+    "bash 5.1 on the target exits 0 when a script fails to parse after one successful command, and bash -n exits 0 on the same file. scripts/check_shell.sh reads stderr instead.",
+    "stage-1/setup/04-px4.sh carried CRLF in the working tree, so PX4 setup would have died on line 1 under bash. Found by check_shell.sh on its first run on the WSL target.",
+    "grep under MSYS strips carriage returns, so the first version of that checker was clean from Git Bash and correct from WSL."
+  ]
 }

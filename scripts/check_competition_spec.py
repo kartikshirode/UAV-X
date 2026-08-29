@@ -96,7 +96,7 @@ def write_receipt(live: dict) -> None:
         "api": API,
         "reg_count": live.get("reg_count"),
         "problem_statement_url": live.get("probStatement"),
-    }, indent=2) + "\n", encoding="utf-8")
+    }, indent=2) + "\n", encoding="utf-8", newline="\n")
 
 
 def check_problem_statement(url: str, skip: bool) -> bool:
@@ -149,7 +149,8 @@ def check_problem_statement(url: str, skip: bool) -> bool:
         base["problem_statement_url"] = url
         base["_why"] = ("Round 5 finding 8: comparing the URL string cannot see "
                         "a PDF replaced at the same address.")
-        BASELINE.write_text(json.dumps(base, indent=2) + "\n", encoding="utf-8")
+        BASELINE.write_text(json.dumps(base, indent=2) + "\n",
+                            encoding="utf-8", newline="\n")
         print(f"  note  first capture of the problem statement, {got[:16]}")
         return True
     if got != want:
