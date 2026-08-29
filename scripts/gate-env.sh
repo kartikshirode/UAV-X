@@ -102,5 +102,9 @@ uavx_require_module() {
 # Every gate that runs a scenario goes through this so a stale metrics file can
 # never satisfy a later check. See the run-record contract in stage-1/plan.md.
 uavx_invalidate_latest() {
-  rm -f "${UAVX_RUNS_DIR}/latest.jsonl"
+  # Round 6 finding 6: only latest.jsonl was deleted here. A runner that wrote
+  # a new metrics record and missed the graph capture left the previous
+  # scenario's latest-graph.json in place, and the seam pass certified the new
+  # run against the old graph.
+  rm -f "${UAVX_RUNS_DIR}/latest.jsonl" "${UAVX_RUNS_DIR}/latest-graph.json"
 }

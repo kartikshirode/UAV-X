@@ -27,6 +27,7 @@ Exit 0 clean, 1 violations, 2 the check could not be run.
 """
 
 import argparse
+import hashlib
 import fnmatch
 import json
 import re
@@ -74,7 +75,7 @@ def load_manifest(scenario: str) -> dict:
     }
 
 
-def read_snapshot(path: Path) -> dict:
+def read_snapshot(path: Path, scenario: str, expect_run: Path = None) -> dict:
     if not path.is_file():
         die(f"no graph snapshot at {path}. The scenario runner captures one "
             f"while the scenario is up.")
@@ -96,11 +97,39 @@ def read_snapshot(path: Path) -> dict:
     for key in MANIFEST_META:
         if not meta.get(key):
             die(f"{path}: _meta is missing {key}")
-    for node, cmd in (meta.get("commands") or {}).items():
-        if cmd.get("returncode") not in (0, None):
+
+    # Round 6 finding 6. The four strings were checked for being non-empty and
+    # then thrown away, so nothing compared them with anything. A snapshot from
+    # an earlier scenario, or a hand-typed one, satisfied every check here by
+    # having four fields filled in.
+    if meta.get("scenario") != scenario:
+        die(f"{path} was captured during {meta.get('scenario')!r} and this is "
+            f"the {scenario!r} pass. A graph from another scenario says "
+            f"nothing about this one.")
+
+    # And commands were optional, so an empty object passed. A capture that
+    # never ran `ros2 node list` produced the same file as a swarm where
+    # nothing was running.
+    commands = meta.get("commands") or {}
+    listing = commands.get("node_list")
+    if not isinstance(listing, dict) or listing.get("returncode") != 0:
+        die(f"{path}: _meta.commands has no successful `ros2 node list`. "
+            f"Without it there is no evidence the capture ever reached a "
+            f"running graph, and an empty capture and a clean swarm write the "
+            f"same file.")
+    for node in graph_nodes(g):
+        cmd = commands.get(node)
+        if not isinstance(cmd, dict) or "returncode" not in cmd:
+            die(f"{path}: {node} is in the graph and _meta.commands records no "
+                f"`ros2 node info` result for it. Every node in the snapshot "
+                f"has to say how it was read.")
+        if cmd["returncode"] != 0:
             die(f"{path}: the capture recorded `ros2 node info {node}` exiting "
                 f"{cmd['returncode']}. A discovery failure becomes an empty "
                 f"endpoint list, which reads exactly like a clean node.")
+
+    if expect_run is not None:
+        bind_to_run(path, meta, expect_run)
 
     for node, ep in g.items():
         for kind in KINDS:
@@ -110,6 +139,58 @@ def read_snapshot(path: Path) -> dict:
                         f"Types are what rule 6 is enforced from; a snapshot "
                         f"without them cannot be checked and must not pass.")
     return g
+
+
+def graph_nodes(g: dict) -> list:
+    return [k for k in g if k != "_meta"]
+
+
+def bind_to_run(path: Path, meta: dict, run_path: Path) -> None:
+    """The snapshot and the run record have to describe the same run.
+
+    Round 6 finding 6: `uavx_invalidate_latest` deleted latest.jsonl and left
+    latest-graph.json in place, so a runner that produced a new metrics record
+    and missed the graph capture reused the previous scenario's graph and the
+    gate passed. Deleting both is half the fix. This is the other half, because
+    a graph left behind by a run that crashed after writing it is still there
+    to be picked up.
+    """
+    if not run_path.is_file():
+        die(f"--expect-run {run_path} does not exist, so the snapshot cannot "
+            f"be tied to a run")
+    try:
+        rec = json.loads(run_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        die(f"{run_path} is not valid JSON: {exc}")
+
+    for key, label in (("run_id", "run id"),
+                       ("source_tree_sha256", "source tree")):
+        if meta.get(key) != rec.get(key):
+            die(f"the snapshot's {label} is {str(meta.get(key))[:16]} and the "
+                f"run record's is {str(rec.get(key))[:16]}. The graph was not "
+                f"captured during this run.")
+
+    want = f"scenarios/{meta['scenario']}.yaml"
+    if rec.get("scenario_path") != want:
+        die(f"the snapshot says scenario {meta['scenario']!r} and the run "
+            f"record is a run of {rec.get('scenario_path')!r}")
+
+    # The capture has to sit inside the run, not before it and not after it.
+    started, ended = rec.get("started_at"), rec.get("ended_at")
+    got = meta.get("captured_at")
+    if started and ended and not (started <= got <= ended):
+        die(f"the graph was captured at {got}, outside the run window "
+            f"{started} to {ended}. A snapshot taken before launch is the "
+            f"previous scenario's graph.")
+
+    # And the record has to name the file, so W5 reads a hash rather than
+    # trusting that some snapshot was checked once.
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if rec.get("graph_snapshot_sha256") != digest:
+        die(f"the run record's graph_snapshot_sha256 is "
+            f"{str(rec.get('graph_snapshot_sha256'))[:16]} and this snapshot "
+            f"hashes to {digest[:16]}. The run was accepted against a "
+            f"different graph than the one being checked.")
 
 
 def read_live() -> dict:
@@ -315,13 +396,25 @@ def check_outside(node, ep, vehicles, packet) -> list:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scenario", required=True)
+    ap.add_argument("--expect-run", help="the run record this snapshot must "
+                                         "belong to. Required with --snapshot; "
+                                         "a graph nobody tied to a run is a "
+                                         "graph from whenever.")
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--snapshot")
     src.add_argument("--live", action="store_true")
     a = ap.parse_args()
 
     man = load_manifest(a.scenario)
-    graph = read_live() if a.live else read_snapshot(Path(a.snapshot))
+    if a.live:
+        graph = read_live()
+    else:
+        if not a.expect_run:
+            die("--snapshot needs --expect-run. Round 6 finding 6: a snapshot "
+                "checked on its own is a file with four editable strings in "
+                "it.")
+        graph = read_snapshot(Path(a.snapshot), a.scenario,
+                              Path(a.expect_run))
 
     violations = check(graph, man)
     if violations:

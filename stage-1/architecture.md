@@ -59,6 +59,10 @@ Each scenario now carries its **own exact process manifest**, in `scripts/seam_m
 
 Graph snapshots carry the message **type** on every endpoint, not only the topic name. Without the type there is no way to enforce rule 6, and rule 6 is the one that catches a swarm quietly agreeing on a side channel that happens to be named something innocent.
 
+A snapshot also has to belong to the run it certifies. Round 6 finding 6: the gate deleted `latest.jsonl` before each launch and left `latest-graph.json` alone, so a run that wrote new metrics and missed its graph capture was checked against the previous scenario's graph. The four provenance strings were read, confirmed non-empty, and thrown away without being compared to anything.
+
+Both files are invalidated before launch now, and the graph pass takes `--expect-run`. It matches the snapshot's scenario against the pass being run, its run id and source hash against the run record, its capture time against the run window, and its own sha256 against the `graph_snapshot_sha256` the record carries. Every node in the snapshot also has to name the `ros2 node info` call that produced it, with a zero return code, alongside one successful `ros2 node list`: a capture that never reached a running graph used to write the same file as a swarm where every node was clean.
+
 Outside processes are matched by exact name, `/link_layer`, `/metrics_collector` and `/scenario_runner`. Substring matching let a node called `uav_2/link_layer_helper` inherit the link layer's exemption and read ground truth.
 
 ## 2. Link model

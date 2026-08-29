@@ -23,7 +23,7 @@
 #
 # Usage:
 #   scripts/check_seam.sh --static-only
-#   scripts/check_seam.sh --snapshot <file> --scenario <name>
+#   scripts/check_seam.sh --snapshot <file> --scenario <name> --expect-run <record>
 #   scripts/check_seam.sh --live --scenario <name>
 #
 # The allowlist is stage-1/architecture.md section 1.
@@ -37,12 +37,15 @@ source "${HERE}/gate-env.sh"
 MODE=""
 SNAPSHOT=""
 SCENARIO=""
+EXPECT_RUN=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --static-only) MODE="static" ;;
     --snapshot)    MODE="snapshot"; SNAPSHOT="${2:-}"; shift
                    [ -n "$SNAPSHOT" ] || gdie "--snapshot needs a file" ;;
     --live)        MODE="live" ;;
+    --expect-run)  EXPECT_RUN="${2:-}"; shift
+                   [ -n "$EXPECT_RUN" ] || gdie "--expect-run needs a run record" ;;
     --scenario)    SCENARIO="${2:-}"; shift
                    [ -n "$SCENARIO" ] || gdie "--scenario needs a name" ;;
     *)             gdie "unknown argument: $1" ;;
@@ -127,7 +130,8 @@ if [ "$MODE" = "live" ]; then
   uavx_require_ros
   python3 "${HERE}/seam_graph.py" --scenario "$SCENARIO" --live || gdie "tx/rx seam violated at runtime"
 else
-  python3 "${HERE}/seam_graph.py" --scenario "$SCENARIO" --snapshot "$SNAPSHOT" \
+  [ -n "${EXPECT_RUN:-}" ] || gdie "--snapshot needs --expect-run. Round 6 finding 6: a snapshot checked without the run record it belongs to is four editable strings."
+  python3 "${HERE}/seam_graph.py" --scenario "$SCENARIO" --snapshot "$SNAPSHOT" --expect-run "$EXPECT_RUN" \
     || gdie "tx/rx seam violated in the captured graph"
 fi
 

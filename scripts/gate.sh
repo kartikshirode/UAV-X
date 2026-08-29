@@ -204,6 +204,7 @@ gate_w3() {
   gsay "W3: seam, graph captured during relay_required"
   bash "${UAVX_REPO}/scripts/check_seam.sh" --snapshot \
     "${UAVX_RUNS_DIR}/latest-graph.json" --scenario relay_required \
+    --expect-run "${UAVX_RUNS_DIR}/latest.jsonl" \
     || gdie "tx/rx seam violated at runtime"
   check_run scenarios/relay_required.yaml \
     --require "delivery_ratio>=0.95" \
@@ -349,6 +350,7 @@ gate_w4() {
   gsay "W4: seam, graph captured during the integrated mission"
   bash "${UAVX_REPO}/scripts/check_seam.sh" --snapshot \
     "${UAVX_RUNS_DIR}/latest-graph.json" --scenario mission_integrated \
+    --expect-run "${UAVX_RUNS_DIR}/latest.jsonl" \
     || gdie "tx/rx seam violated at runtime, with roles running"
 
   check_run scenarios/mission_integrated.yaml \

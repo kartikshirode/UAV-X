@@ -17,6 +17,7 @@ reason other than its own is a failure of the suite.
 Exit 0 if every fixture behaved as specified.
 """
 
+import hashlib
 import json
 import os
 import shutil
@@ -45,6 +46,20 @@ def ep(topic: str, typ: str) -> dict:
     return {"topic": topic, "type": typ}
 
 
+def add_node(g: dict, node: str, spec: dict) -> dict:
+    """Add a node the way a capture would, command entry included.
+
+    Round 6 finding 6 requires every node in a snapshot to have a `ros2 node
+    info` result behind it. A fixture that adds a bare node would now fail on
+    the missing command rather than on the bypass it was written to prove,
+    which would quietly stop testing the bypass.
+    """
+    g[node] = spec
+    g["_meta"]["commands"][node] = {"cmd": f"ros2 node info {node}",
+                                    "returncode": 0}
+    return g
+
+
 def clean_graph(week: int) -> dict:
     """The graph a correct implementation produces.
 
@@ -64,7 +79,10 @@ def clean_graph(week: int) -> dict:
         "scenario": "mission_integrated" if week >= 4 else "relay_required",
         "run_id": "fixture_run",
         "source_tree_sha256": "0" * 64,
-        "commands": {},
+        # Round 6 finding 6: commands was optional and an empty object passed,
+        # so a capture that never reached a running graph wrote the same file
+        # as a clean swarm. run_graph fills one entry per node below.
+        "commands": {"node_list": {"returncode": 0}},
     }}
     for v in VEHICLES:
         for proc in procs:
@@ -101,6 +119,14 @@ def clean_graph(week: int) -> dict:
         "publishers": [], "subscribers": [ep("/gazebo/model_states", TRUTH)],
         "services": [], "actions": [],
     }
+    # One capture command per node, which is what a real capture writes and
+    # what round 6 finding 6 now requires. A case that adds a node has to add
+    # its command too, and that is the point: a node in the graph with nothing
+    # saying how it was read is a node somebody typed.
+    for node in list(g):
+        if node != "_meta":
+            g["_meta"]["commands"][node] = {"cmd": f"ros2 node info {node}",
+                                            "returncode": 0}
     return g
 
 
@@ -126,6 +152,10 @@ def _c4(g):
 @case("W4 processes running under a W3 scenario", "relay_required", 4,
       "in neither this scenario's manifest")
 def _w4_in_w3(g):
+    # The graph is a W4 one. It claims to be the relay_required capture,
+    # because the bypass under test is W4 processes appearing in a W3 run, not
+    # a mislabelled snapshot. That is its own case now.
+    g["_meta"]["scenario"] = "relay_required"
     return g
 
 
@@ -196,22 +226,20 @@ def _packet_elsewhere(g):
 @case("unknown helper publishing to its own tx", "relay_required", 3,
       "in neither this scenario's manifest")
 def _unknown(g):
-    g["/uav_2/sneaky_helper"] = {
+    return add_node(g, "/uav_2/sneaky_helper", {
         "publishers": [ep("/uavx/uav_2/tx", PACKET)],
         "subscribers": [], "services": [], "actions": [],
-    }
-    return g
+    })
 
 
 @case("node name merely containing an outside-process name", "relay_required", 3,
       "in neither this scenario's manifest")
 def _substring_exemption(g):
-    g["/uav_2/link_layer_helper"] = {
+    return add_node(g, "/uav_2/link_layer_helper", {
         "publishers": [],
         "subscribers": [ep("/gazebo/model_states", TRUTH)],
         "services": [], "actions": [],
-    }
-    return g
+    })
 
 
 @case("link layer publishing into a tx", "relay_required", 3,
@@ -224,11 +252,10 @@ def _link_layer_injects(g):
 @case("scenario runner carrying swarm traffic", "mission_integrated", 4,
       "never by sending swarm traffic")
 def _runner_traffic(g):
-    g["/scenario_runner"] = {
+    return add_node(g, "/scenario_runner", {
         "publishers": [ep("/uavx/uav_3/rx", PACKET)],
         "subscribers": [], "services": [], "actions": [],
-    }
-    return g
+    })
 
 
 @case("every expected node present with no endpoints at all", "mission_integrated", 4,
@@ -264,13 +291,6 @@ def _no_link_layer(g):
     return g
 
 
-@case("a node info call that failed during capture", "mission_integrated", 4,
-      "CANNOT:exiting 1")
-def _failed_capture(g):
-    g["_meta"]["commands"] = {"/uav_1/router": {"returncode": 1}}
-    return g
-
-
 @case("a snapshot with no provenance", "mission_integrated", 4,
       "CANNOT:no _meta block")
 def _no_meta(g):
@@ -278,10 +298,74 @@ def _no_meta(g):
     return g
 
 
-def run_graph(scenario: str, snapshot: Path) -> tuple:
+# Round 6 finding 6. Every one of these produced a passing seam check before.
+@case("a capture that never ran ros2 node list", "mission_integrated", 4,
+      "CANNOT:no successful `ros2 node list`")
+def _no_listing(g):
+    g["_meta"]["commands"] = {}
+    return g
+
+
+@case("a node in the graph with no capture command behind it",
+      "mission_integrated", 4, "CANNOT:records no `ros2 node info` result")
+def _partial_commands(g):
+    del g["_meta"]["commands"]["/uav_1/router"]
+    return g
+
+
+@case("a command entry with no return code at all", "mission_integrated", 4,
+      "CANNOT:records no `ros2 node info` result")
+def _no_returncode(g):
+    g["_meta"]["commands"]["/uav_1/router"] = {"cmd": "ros2 node info"}
+    return g
+
+
+@case("a node info call that reported failure", "mission_integrated", 4,
+      "CANNOT:exiting 1")
+def _failed_node_info(g):
+    g["_meta"]["commands"]["/uav_1/router"]["returncode"] = 1
+    return g
+
+
+@case("the previous scenario's graph left behind", "mission_integrated", 4,
+      "CANNOT:says nothing about this one")
+def _wrong_scenario(g):
+    g["_meta"]["scenario"] = "relay_required"
+    return g
+
+
+def run_record_for(snapshot: Path, meta: dict, dest: Path) -> Path:
+    """The run record a correct capture would have been written beside.
+
+    Round 6 finding 6 requires the snapshot to be tied to a run, so every
+    fixture needs one. Built from the snapshot's own _meta so a fixture that
+    mutates the metadata is testing the binding rather than fighting it.
+    """
+    rec = {
+        "run_id": meta.get("run_id"),
+        "scenario_path": f"scenarios/{meta.get('scenario')}.yaml",
+        "source_tree_sha256": meta.get("source_tree_sha256"),
+        "started_at": "2026-09-20T09:00:00",
+        "ended_at": "2026-09-20T11:00:00",
+        "graph_snapshot_sha256": hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+    }
+    dest.write_text(json.dumps(rec), encoding="utf-8")
+    return dest
+
+
+def run_graph(scenario: str, snapshot: Path, record: Path = None) -> tuple:
+    if record is None:
+        # Derive one from whatever the snapshot claims, so the case under test
+        # is the only thing that can fail.
+        try:
+            meta = json.loads(snapshot.read_text(encoding="utf-8")).get("_meta") or {}
+        except (json.JSONDecodeError, OSError):
+            meta = {}
+        record = run_record_for(snapshot, meta,
+                                snapshot.with_suffix(".run.jsonl"))
     p = subprocess.run(
         [sys.executable, str(SEAM_GRAPH), "--scenario", scenario,
-         "--snapshot", str(snapshot)],
+         "--snapshot", str(snapshot), "--expect-run", str(record)],
         capture_output=True, text=True, timeout=120)
     return p.returncode, p.stdout + p.stderr
 
@@ -392,11 +476,52 @@ def main() -> int:
             for line in out.strip().splitlines()[:6]:
                 print(f"           {line}")
 
+    print("\n--- the snapshot has to belong to the run that was accepted")
+    for label, mutate, want in (
+        ("a snapshot from another run id",
+         lambda r: r.update({"run_id": "some_other_run"}), "was not captured during this run"),
+        ("a snapshot from another source tree",
+         lambda r: r.update({"source_tree_sha256": "9" * 64}), "was not captured during this run"),
+        ("a run record for a different scenario",
+         lambda r: r.update({"scenario_path": "scenarios/direct_only.yaml"}),
+         "is a run of"),
+        ("a graph captured before the run started",
+         lambda r: r.update({"started_at": "2026-09-20T10:30:00",
+                             "ended_at": "2026-09-20T11:00:00"}),
+         "outside the run window"),
+        ("a run accepted against a different graph",
+         lambda r: r.update({"graph_snapshot_sha256": "1" * 64}),
+         "different graph"),
+    ):
+        snap = tmp / "clean_W4_graph_with_role_managers.json"
+        if not snap.is_file():
+            snap = next(tmp.glob("clean_W4*.json"), None)
+        if snap is None:
+            print(f"  FAIL  {label:<44} no clean W4 snapshot to mutate")
+            failures += 1
+            continue
+        meta = json.loads(snap.read_text(encoding="utf-8"))["_meta"]
+        rec_path = tmp / f"bind_{label.replace(' ', '_')}.jsonl"
+        run_record_for(snap, meta, rec_path)
+        rec = json.loads(rec_path.read_text(encoding="utf-8"))
+        mutate(rec)
+        rec_path.write_text(json.dumps(rec), encoding="utf-8")
+        rc, out = run_graph("mission_integrated", snap, rec_path)
+        good = rc == 2 and want in out
+        print(f"  {'ok  ' if good else 'FAIL'}  {label:<44} rc={rc}")
+        if not good:
+            failures += 1
+            print(f"           expected exit 2 saying {want!r}")
+            for line in out.strip().splitlines()[:4]:
+                print(f"           {line}")
+
     print("\n--- malformed input must stop the check, not pass it")
     bad = tmp / "untyped.json"
     bad.write_text(json.dumps({
         "_meta": {"captured_at": "2026-09-20T10:00:00", "scenario": "relay_required",
-                  "run_id": "fixture_run", "source_tree_sha256": "0" * 64},
+                  "run_id": "fixture_run", "source_tree_sha256": "0" * 64,
+                  "commands": {"node_list": {"returncode": 0},
+                               "/uav_1/router": {"returncode": 0}}},
         "/uav_1/router": {"publishers": ["/uavx/uav_1/tx"]}}), encoding="utf-8")
     rc, out = run_graph("relay_required", bad)
     good = rc == 2 and "without a message type" in out

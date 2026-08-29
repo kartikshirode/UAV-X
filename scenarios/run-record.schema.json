@@ -370,6 +370,11 @@
           }
         }
       }
+    },
+    "graph_snapshot_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256 of the ROS graph snapshot captured during this run. Round 6 finding 6: uavx_invalidate_latest deleted only latest.jsonl, so a run that missed its graph capture was certified against the previous scenario's graph. The seam check compares this against the file it was handed, so a reused snapshot fails rather than passes."
     }
   },
   "allOf": [
@@ -433,6 +438,26 @@
       "then": {
         "required": [
           "relay_slot"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "scenario_path": {
+            "enum": [
+              "scenarios/relay_required.yaml",
+              "scenarios/mission_integrated.yaml"
+            ]
+          }
+        },
+        "required": [
+          "scenario_path"
+        ]
+      },
+      "then": {
+        "required": [
+          "graph_snapshot_sha256"
         ]
       }
     }

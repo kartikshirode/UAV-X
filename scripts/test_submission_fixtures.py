@@ -70,13 +70,22 @@ def git(*args) -> str:
 # real run of that scenario would.
 OUTAGE_SCENARIOS = {"relay_kill", "link_loss", "mission_integrated", "queue_drain"}
 
+# The two scenarios a gate captures a ROS graph during. Round 6 finding 6: the
+# run record has to name the graph it was accepted against, or a reused
+# snapshot from the previous scenario is indistinguishable from a fresh one.
+GRAPH_SCENARIOS = {"relay_required", "mission_integrated"}
+
 
 def evidence_blocks(scenario: str) -> dict:
+    out = {}
+    if scenario in GRAPH_SCENARIOS:
+        out["graph_snapshot_sha256"] = hashlib.sha256(
+            scenario.encode()).hexdigest()
     if scenario not in OUTAGE_SCENARIOS:
-        return {}
+        return out
 
     ids = [f"uav_{n}:{i}" for n in (3, 4) for i in range(225)]
-    out = {
+    out.update({
         "observations": {
             "generated_ids": ids,
             "delivered_ids": list(ids),
@@ -97,7 +106,7 @@ def evidence_blocks(scenario: str) -> dict:
             "band_reserved": True,
             "raised_from": None,
         },
-    }
+    })
     if scenario == "link_loss":
         out["handback"] = {
             "epoch": 1,
