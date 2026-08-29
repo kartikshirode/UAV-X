@@ -5,7 +5,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
-for step in 01-base 02-ros2-humble 03-gazebo-classic 04-px4 05-ros2-bridge; do
+for step in 01-base 02-ros2-humble 03-gazebo-classic 04-px4 05-ros2-bridge 06-submission-tools; do
   printf '\n########## %s\n' "$step"
   bash "$HERE/${step}.sh"
 done

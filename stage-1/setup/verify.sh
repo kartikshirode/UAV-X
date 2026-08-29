@@ -53,6 +53,16 @@ check "ros-${ROS_DISTRO_NAME} installed" test -f "/opt/ros/${ROS_DISTRO_NAME}/se
 check "ros2 cli"                          command -v ros2
 check "colcon"                            command -v colcon
 
+# Round 6 finding 2: this script reported a healthy stack on a machine where
+# none of the four existed, and the first thing to notice was W5 failing to
+# read its own proposal. An environment check that omits a required tool is
+# the same failure as the old Gazebo one, green while the work cannot be done.
+say "submission tools"
+check "pdftotext (reads the proposal)"    command -v pdftotext
+check "pdfinfo (page count)"              command -v pdfinfo
+check "ffmpeg (proves the demo decodes)"  command -v ffmpeg
+check "ffprobe (demo duration)"           command -v ffprobe
+
 say "simulator"
 # Assert on binaries, not on package metadata. dpkg-query -W reports a version
 # for a package apt merely knows about, so a version check passed on a machine

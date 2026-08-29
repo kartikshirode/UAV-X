@@ -13,12 +13,9 @@ sudo apt-get install -y --no-install-recommends \
   locales ninja-build pkg-config python3-pip python3-venv software-properties-common \
   unzip wget
 
-# W5 runs inside this distro and check_submission.py cannot read the proposal
-# without pdftotext or decode the video without ffmpeg. Both were missing here
-# and the failure would have arrived in the last four days, reported as
-# "cannot read the PDF" rather than as "you never installed poppler".
-say "the tools the submission check needs"
-sudo apt-get install -y --no-install-recommends poppler-utils ffmpeg
+# poppler-utils and ffmpeg used to be installed here. They moved to
+# 06-submission-tools.sh, because adding them under this step's existing stamp
+# meant every machine already set up skipped them and nothing noticed.
 
 say "locale"
 sudo locale-gen en_US en_US.UTF-8
