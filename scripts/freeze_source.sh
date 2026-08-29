@@ -29,7 +29,7 @@ cd "$UAVX_REPO"
 # These, and nothing else. `git archive HEAD` with no paths would sweep in
 # submission/, meaning the archive would carry the demo video and the proposal
 # and then be attached beside them.
-ARCHIVE_PATHS=(uavx_ws scenarios scripts stage-1)
+ARCHIVE_PATHS=(uavx_ws scenarios scripts stage-1 LICENSE THIRD-PARTY.md)
 
 if [ -n "$(git status --porcelain)" ]; then
   gdie "the working tree is dirty. Commit first: a freeze of uncommitted work binds nothing."

@@ -1,0 +1,25 @@
+Copyright (c) 2026 Kartik Shirode. All rights reserved.
+
+This software was written for the PUSHPAK Grand Challenge 2026, UAV-X:
+Resilient BVLOS Swarm Challenge, hosted by IIT Bombay and funded by MeitY,
+Government of India.
+
+Permission is granted to the organisers of the PUSHPAK Grand Challenge 2026,
+their evaluation committee, and their appointed reviewers, to store, run,
+modify and evaluate this software for the purpose of judging the entry, for as
+long as the challenge and any programme following from it require.
+
+No other licence is granted. The competition rules state that participants
+retain ownership of their intellectual property, and this notice exists to keep
+that ownership explicit rather than implied.
+
+This grant covers only the original work in this archive. Third party
+components are covered by their own licences, listed in THIRD-PARTY.md, and
+nothing here modifies or supersedes them.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
