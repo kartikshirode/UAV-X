@@ -210,10 +210,40 @@ else:
            f"source and the authority, and says simulation only")
 
 # ------------------------------------------------------------------- video
+# Round 6 finding 3: this took the first of demo.mp4 and demo.mkv that existed
+# and decoded it, while delivery asked only for one listed name beginning
+# "demo.". Two ways through. A valid demo.mp4 on disk with demo.txt in the
+# manifest, and a good MP4 decoded here while a corrupt MKV was the file
+# actually sent. Both reach the submitted state with no checked video among the
+# delivered bytes, which is round 5 finding 3 one file along.
+#
+# So: collect every candidate, require exactly one, decode that one, and later
+# require that exact name, size and hash in the delivery manifest.
 section("video")
-video = next((p for p in (SUB / "demo.mp4", SUB / "demo.mkv") if p.is_file()), None)
-if video is None:
+# The one file that was decoded. Delivery has to send this exact file, and
+# nothing else named demo.*.
+checked_video = None
+DEMO_SUFFIXES = (".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v")
+candidates = sorted(q for q in SUB.glob("demo.*") if q.is_file())
+video_candidates = [q for q in candidates if q.suffix.lower() in DEMO_SUFFIXES]
+other_demos = [q for q in candidates if q not in video_candidates]
+
+video = None
+if other_demos:
+    fail(f"submission/ holds {', '.join(q.name for q in other_demos)} beside "
+         f"the demo video. Anything called demo.* can be picked up by the "
+         f"delivery manifest, and a demo.txt in the email is not a video.")
+elif len(video_candidates) > 1:
+    fail(f"submission/ holds {len(video_candidates)} demo videos "
+         f"({', '.join(q.name for q in video_candidates)}). One is checked and "
+         f"the other is not, and nothing says which one gets sent.")
+elif not video_candidates:
     fail("submission/demo.mp4 missing")
+else:
+    video = video_candidates[0]
+
+if video is None:
+    pass
 elif not have("ffprobe") or not have("ffmpeg"):
     fail("ffmpeg not installed, cannot verify the video decodes. apt install ffmpeg")
 else:
@@ -239,7 +269,8 @@ else:
     if proc.returncode != 0 or proc.stderr.strip():
         fail(f"video does not decode cleanly: {proc.stderr.strip()[:200]}")
     else:
-        ok("decodes end to end with no errors")
+        ok(f"{video.name} decodes end to end with no errors")
+        checked_video = video
 
 # ------------------------------------------------------------------ install
 section("installation instructions")
@@ -589,6 +620,36 @@ else:
     if len(demos) != 1:
         fail(f"the delivery manifest names {len(demos)} demo files; there is "
              f"exactly one video deliverable")
+
+    # Round 6 finding 3. The count above is satisfied by demo.txt. What has to
+    # be sent is the file that decoded, by name, and then by bytes, because a
+    # manifest entry naming demo.mp4 while carrying another file's hash is the
+    # same omission wearing the right label.
+    if checked_video is None:
+        fail("no demo video was checked, so nothing can confirm the delivered "
+             "one is the one that decodes")
+    elif checked_video.name not in demos:
+        fail(f"the delivery manifest sends {demos[0] if demos else 'no demo'} "
+             f"and the video that was decoded is {checked_video.name}. The "
+             f"checked video is not the one going in the email.")
+    else:
+        want = sha256_file(checked_video)
+        entry = next((i for i in list(att.get("attachments", []))
+                      + list(att.get("delivered_by_link", []))
+                      if i.get("name") == checked_video.name), None)
+        if entry is None:
+            fail(f"{checked_video.name} is listed and has no manifest entry")
+        elif entry.get("sha256") != want:
+            fail(f"the manifest sends a {checked_video.name} whose hash is not "
+                 f"the file that decoded. {str(entry.get('sha256'))[:16]} "
+                 f"against {want[:16]}.")
+        elif entry.get("bytes") != checked_video.stat().st_size:
+            fail(f"the manifest records {entry.get('bytes')} bytes for "
+                 f"{checked_video.name}, the checked file is "
+                 f"{checked_video.stat().st_size}")
+        else:
+            ok(f"the delivered demo is {checked_video.name}, the file that was "
+               f"decoded, by hash")
 
     # A file sent as a link is still a deliverable and still has to be checked.
     for item in att.get("delivered_by_link", []):

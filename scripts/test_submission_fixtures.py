@@ -419,6 +419,47 @@ def _swapped_attachment(dest, built):
     (dest / "INSTALL.md").write_text("different " * 300, encoding="utf-8")
 
 
+# Round 6 finding 3, all three routes past the old check. The video that gets
+# decoded and the video that gets sent were never required to be the same file.
+@case("a text file delivered in place of the demo",
+      "beside the demo video")
+def _demo_txt(dest, built):
+    txt = dest / "demo.txt"
+    txt.write_text("the video is coming later", encoding="utf-8")
+    man = json.loads((dest / "attachment-manifest.json").read_text(encoding="utf-8"))
+    for item in man["attachments"]:
+        if item["name"] == "demo.mp4":
+            item["name"] = "demo.txt"
+            item["bytes"] = txt.stat().st_size
+            item["sha256"] = sha256_bytes(txt.read_bytes())
+    (dest / "attachment-manifest.json").write_text(json.dumps(man, indent=2),
+                                                   encoding="utf-8")
+
+
+@case("a valid demo nobody listed for delivery",
+      "not the one going in the email")
+def _demo_unlisted(dest, built):
+    man = json.loads((dest / "attachment-manifest.json").read_text(encoding="utf-8"))
+    man["attachments"] = [i for i in man["attachments"] if i["name"] != "demo.mp4"]
+    (dest / "attachment-manifest.json").write_text(json.dumps(man, indent=2),
+                                                   encoding="utf-8")
+
+
+@case("a good mp4 checked while a corrupt mkv is the one sent",
+      "demo videos")
+def _demo_two(dest, built):
+    mkv = dest / "demo.mkv"
+    mkv.write_bytes(b"\x1aE\xdf\xa3" + b"\x00" * 4096)
+    man = json.loads((dest / "attachment-manifest.json").read_text(encoding="utf-8"))
+    for item in man["attachments"]:
+        if item["name"] == "demo.mp4":
+            item["name"] = "demo.mkv"
+            item["bytes"] = mkv.stat().st_size
+            item["sha256"] = sha256_bytes(mkv.read_bytes())
+    (dest / "attachment-manifest.json").write_text(json.dumps(man, indent=2),
+                                                   encoding="utf-8")
+
+
 @case("a second archive left in the directory", "expected exactly one source archive")
 def _two_archives(dest, built):
     shutil.copy(built["archive"], dest / "uavx-source.tgz")
