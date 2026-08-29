@@ -48,13 +48,42 @@ gate_preflight() {
   gsay "preflight: documents agree"
   python3 "${UAVX_REPO}/scripts/check_docs.py" || gdie "the documents contradict each other"
 
+  # Round 6, found while fixing finding 2. bash 5.1, which is what Ubuntu 22.04
+  # ships and therefore what every gate runs under, exits 0 when a script fails
+  # to parse after one successful command. `bash -n` exits 0 on the same file.
+  # A .sh edited from the Windows side and saved with CRLF dies on line 1 and
+  # reports success. verify.sh did precisely this and printed "all checks
+  # passed" having run none of them.
+  gsay "preflight: the shell scripts parse"
+  bash "${UAVX_REPO}/scripts/check_shell.sh" || gdie "a shell script in this repo is broken"
+
   # The organisers can change the rules or the timeline at any point, and the
-  # only way we would find out is by looking. Offline is tolerated during a
-  # build week; W5 runs the same check without that flag, so the record is
-  # verified for real before anything is sent.
+  # only way we would find out is by looking.
+  #
+  # Round 6 finding 8: this ran with --allow-offline and `|| gdie`, so exit 3,
+  # the code that means "offline, but a real check happened inside the last
+  # seven days", killed the week. That is the documented fallback for the WSL
+  # DNS drops, and it could never once have worked. W1 to W4 take 0 or 3. W5
+  # calls this function with UAVX_SPEC_STRICT=1 and takes only 0.
   gsay "preflight: the published competition record"
-  python3 "${UAVX_REPO}/scripts/check_competition_spec.py" --allow-offline \
-    || gdie "the published competition record has changed. Read the diff before doing any more work."
+  # Overridable only so test_gate_preflight.py can hand it a checker that
+  # returns each documented code on demand. Every real week runs the real one.
+  # >>> spec-decision, extracted verbatim by test_gate_preflight.py
+  local spec_checker="${UAVX_SPEC_CHECKER:-${UAVX_REPO}/scripts/check_competition_spec.py}"
+  local spec_rc=0
+  if [ "${UAVX_SPEC_STRICT:-0}" = "1" ]; then
+    python3 "$spec_checker" || spec_rc=$?
+    [ "$spec_rc" -eq 0 ] \
+      || gdie "W5 checks the published record online. It exited ${spec_rc}; 1 means it could not be read, 2 means it changed, 3 means nobody has read it today. None of those is a state to send from."
+  else
+    python3 "$spec_checker" --allow-offline || spec_rc=$?
+    case "$spec_rc" in
+      0) ;;
+      3) gsay "preflight: offline, working from a check inside the seven day limit" ;;
+      *) gdie "the published competition record has changed, or has not been read recently enough. Read the diff before doing any more work." ;;
+    esac
+  fi
+  # <<< spec-decision
 
   gsay "preflight: environment"
   uavx_require_ros
@@ -318,7 +347,7 @@ case "$WEEK" in
   2) gate_preflight; gate_build; gate_w2 ;;
   3) gate_preflight; gate_build; gate_w3 ;;
   4) gate_preflight; gate_build; gate_w4 ;;
-  5) gate_preflight; gate_build; gate_w5 ;;
+  5) export UAVX_SPEC_STRICT=1; gate_preflight; gate_build; gate_w5 ;;
   *) gdie "unknown week: ${WEEK}" ;;
 esac
 
