@@ -17,7 +17,11 @@ Gates are `scripts/gate.sh`, and that script is the only definition of them. Rou
 
 ## What the organisers actually asked for
 
-Checked against the live record on 27 August, not against memory. `scripts/check_competition_spec.py` refetches `techfest.org/api/compis/` and diffs every binding field against the capture in `research/`. Twelve fields, all unchanged since 26 August. It runs in preflight every week and again in W5 without its offline flag, because the rules reserve the organisers' right to modify any stage and the only way we would find out is by looking.
+Checked against the live record, not against memory. `scripts/check_competition_spec.py` refetches `techfest.org/api/compis/`, diffs every field against the capture in `research/`, and downloads the linked problem statement to rehash its bytes. Everything is binding unless it is named as noise, so a field nobody thought about cannot change quietly; `live` turning false stops the gate rather than printing a note.
+
+It earned its place immediately. On its first real run it caught VJTI Mumbai being removed from the published collaborator list, inside 24 hours of the capture, and that is the sentence the eligibility rule points at. Nothing else has moved.
+
+Preflight runs it every week and tolerates being offline only while a genuine check is less than a week old. W5 runs it with no flags at all.
 
 Five deliverables, one email, and each one has a row in the W5 gate:
 
@@ -154,7 +158,8 @@ Produces:
 - `submission/demo.mp4`, opening on the failure and the recovery
 - `submission/INSTALL.md`
 - `LICENSE` and `THIRD-PARTY.md` inside the archive, since the rules make the entrant responsible for third-party IP and this is built on PX4, Gazebo and ROS 2
-- A refetch of the published competition record, this time with no offline flag, so the package is checked against what the organisers say on the day rather than what they said on 26 August
+- A refetch of the published competition record with no offline flag and no `--skip-pdf`, so the package is checked against what the organisers say on the day, the linked problem statement is downloaded and its bytes rehashed, and a withdrawn challenge stops the gate instead of printing a note
+- A regulatory compliance section citing the Drone Rules 2021 and its 2022 and 2023 amendments, an official source, the authority, and the plain statement that Stage 1 and Stage 2 are simulation only. The gate checks those are present; a human signs that the analysis is right, because a substring checker cannot
 - `submission/evidence-manifest.json`, naming the exact run record behind each scenario
 - `submission/attachment-manifest.json`, the file list with hashes and sizes, checked against the delivery budget in `submission/human-preflight.json`
 - `submission/fresh-install-receipt.json`, carrying the submitted commit SHA
@@ -174,6 +179,12 @@ Gate: `bash scripts/gate.sh 5`
 4. **No week-agent may change a value in [architecture.md](architecture.md) or a threshold in `scripts/gate.sh` to make its own gate pass.** That is moving the goal. If a number is unreachable, stop and report it.
 5. Each week drafts its proposal section as its metric lands.
 6. When a week overruns, take days from the phase with the lowest rubric weight that still has slack. Never from W3.
+
+## Before any physical flight, whenever that comes
+
+Not a Stage 1 item, and written down here so it cannot be skipped later. Stage 1 and Stage 2 fly nothing. Stage 3 is a live demonstration in front of a jury, and the moment anything leaves the ground the position changes completely.
+
+Go or no go, rechecked against current requirements rather than against a paragraph written in September: airspace classification for the site, drone registration, the remote pilot certificate, aircraft type certification, and BVLOS permission. The Drone Rules 2021 and its amendments are the instrument; DGCA and Digital Sky are where the current position is published. No field test starts from what this repository says.
 
 ## What this plan does not cover
 

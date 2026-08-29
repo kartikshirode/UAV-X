@@ -39,6 +39,7 @@ import subprocess
 import sys
 import tarfile
 import zipfile
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -47,7 +48,8 @@ from source_tree_hash import blob_id                      # noqa: E402
 import check_human_preflight                              # noqa: E402
 # One definition, shared with scripts/test_submission_fixtures.py. Round 5
 # finding 2: these lists were copied into the fixture by hand and drifted.
-from check_submission_const import REQUIRED_RUNS, REQUIRED_SECTIONS  # noqa: E402
+from check_submission_const import (REQUIRED_RUNS, REQUIRED_SECTIONS,
+                                   REQUIRED_COMPLIANCE)  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 # Overridable so scripts/test_submission_fixtures.py can point the whole checker
@@ -134,6 +136,29 @@ try:
     else:
         ok(f"delivery budget {human['delivery']['attachment_limit_mb']} MB, "
            f"route: {human['delivery']['route']}")
+        # Round 5 finding 8, third layer: an API diff does not read the channels
+        # the rules say changes are announced on. Round 5 finding 9: a person
+        # signs the legal analysis, because a substring checker cannot.
+        today = date.today()
+        for path, label, limit in (
+                (("clarification_channel", "last_checked"), "the WhatsApp group", 14),
+                (("organiser_email", "last_checked"), "the organiser reply inbox", 14),
+                (("compliance_review", "done"), "the compliance sign-off", 60)):
+            raw = human.get(path[0], {}).get(path[1])
+            try:
+                age = (today - date.fromisoformat(raw)).days
+            except (TypeError, ValueError):
+                fail(f"{label} has no usable date in human-preflight.json")
+                continue
+            if age > limit:
+                fail(f"{label} was last read {age} days ago, over the {limit} "
+                     f"day limit. The rules say changes are announced through "
+                     f"official channels, so not reading them is not a defence.")
+            else:
+                ok(f"{label} read {age} day(s) ago")
+        cr = human.get("compliance_review", {})
+        if cr.get("by"):
+            ok(f"compliance signed off by {cr['by']} on {cr.get('done')}")
 except SystemExit:
     fail("submission/human-preflight.json missing or unreadable. "
          "See stage-1/human-preflight.md.")
@@ -173,6 +198,16 @@ else:
         fail(f"proposal never mentions: {', '.join(missing)}")
     else:
         ok("covers architecture, communication, relay, fault, safety, results")
+
+    # Round 5 finding 9: "regulat" appearing anywhere satisfied this, and a
+    # sentence saying the system is unregulated contains it.
+    absent = [(t, why) for t, why in REQUIRED_COMPLIANCE if t.lower() not in low]
+    if absent:
+        for token, why in absent:
+            fail(f"the regulatory section never gives {token!r}, {why}")
+    else:
+        ok(f"regulatory section cites the rules, the amendments, an official "
+           f"source and the authority, and says simulation only")
 
 # ------------------------------------------------------------------- video
 section("video")

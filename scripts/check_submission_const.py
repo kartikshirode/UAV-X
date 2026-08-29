@@ -19,3 +19,19 @@ REQUIRED_RUNS = [
     "survey_baseline", "relay_required", "direct_only", "relay_kill",
     "link_loss", "encounter", "encounter_noyield", "mission_integrated",
 ]
+
+
+# Round 5 finding 9: "regulat" appearing anywhere satisfied the old check, so a
+# sentence saying the system is unregulated would have passed. These are the
+# things a real regulatory section cannot avoid naming. A checker cannot judge
+# legal correctness, which is why submission/human-preflight.json also carries a
+# dated human sign-off.
+REQUIRED_COMPLIANCE = [
+    ("Drone Rules", "the principal instrument, the Drone Rules 2021"),
+    ("2021", "the year of the principal rules"),
+    ("2022", "the first amendment"),
+    ("2023", "the second amendment"),
+    ("civilaviation.gov.in", "an official source rather than a summary"),
+    ("DGCA", "the authority"),
+    ("simulation only", "the plain statement that Stage 1 and 2 fly nothing"),
+]

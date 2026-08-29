@@ -3,11 +3,21 @@
   "title": "UAV-X human preflight receipt",
   "description": "Round 3 finding 4 made registration and eligibility block the loop. Round 4 finding 7 found the block was shallow: preflight checked three fields and let a plausible-looking partial file through, and nothing ever read the delivery budget it recorded, so an oversized package could reach W5 with no accepted way to send it. Every field here is one a human has to go and do, and the dates are what make a claim checkable later. See stage-1/human-preflight.md.",
   "type": "object",
-  "required": ["registered", "eligibility", "clarification_channel", "organiser_email", "delivery"],
+  "required": [
+    "registered",
+    "eligibility",
+    "clarification_channel",
+    "organiser_email",
+    "delivery",
+    "compliance_review"
+  ],
   "properties": {
     "registered": {
       "type": "object",
-      "required": ["done", "email"],
+      "required": [
+        "done",
+        "email"
+      ],
       "properties": {
         "done": {
           "type": "string",
@@ -24,9 +34,15 @@
     },
     "eligibility": {
       "type": "object",
-      "required": ["done", "declaration"],
+      "required": [
+        "done",
+        "declaration"
+      ],
       "properties": {
-        "done": { "type": "string", "format": "date" },
+        "done": {
+          "type": "string",
+          "format": "date"
+        },
         "declaration": {
           "type": "string",
           "minLength": 30,
@@ -36,20 +52,36 @@
     },
     "clarification_channel": {
       "type": "object",
-      "required": ["done"],
+      "required": [
+        "done",
+        "last_checked"
+      ],
       "properties": {
         "done": {
           "type": "string",
           "format": "date",
           "description": "Date the UAV-X WhatsApp group was joined. Organiser clarifications land there first."
+        },
+        "last_checked": {
+          "type": "string",
+          "format": "date",
+          "description": "When the WhatsApp group was last read. The rules say changes are communicated through official channels, and round 5 finding 8 is right that an API diff does not read a channel. W5 refuses a stale one."
         }
       }
     },
     "organiser_email": {
       "type": "object",
-      "required": ["sent", "answers", "fallback"],
+      "required": [
+        "sent",
+        "answers",
+        "fallback",
+        "last_checked"
+      ],
       "properties": {
-        "sent": { "type": "string", "format": "date" },
+        "sent": {
+          "type": "string",
+          "format": "date"
+        },
         "answers": {
           "type": "string",
           "minLength": 4,
@@ -59,12 +91,21 @@
           "type": "string",
           "minLength": 10,
           "description": "What is assumed while the answers are pending. Source delivery method and video length both change work, so neither can wait for a reply that may not come."
+        },
+        "last_checked": {
+          "type": "string",
+          "format": "date",
+          "description": "When the reply inbox was last read for organiser answers."
         }
       }
     },
     "delivery": {
       "type": "object",
-      "required": ["attachment_limit_mb", "route", "fallback"],
+      "required": [
+        "attachment_limit_mb",
+        "route",
+        "fallback"
+      ],
       "properties": {
         "attachment_limit_mb": {
           "type": "number",
@@ -80,6 +121,30 @@
           "type": "string",
           "minLength": 10,
           "description": "What happens if the organisers say attachments only and the package is over budget."
+        }
+      }
+    },
+    "compliance_review": {
+      "type": "object",
+      "required": [
+        "done",
+        "by",
+        "statement"
+      ],
+      "description": "Round 5 finding 9: W5 searched the proposal for the six letters 'regulat', which a sentence saying the system is unregulated would satisfy. A machine can check that the citations are present and resolve; only a person can say the analysis is right, so a person signs it.",
+      "properties": {
+        "done": {
+          "type": "string",
+          "format": "date"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 3
+        },
+        "statement": {
+          "type": "string",
+          "minLength": 60,
+          "description": "What was checked and what it concluded. Stage 1 and Stage 2 are simulation only, so no permission is needed now; the obligations that would attach before any physical flight are the point of writing it down."
         }
       }
     }

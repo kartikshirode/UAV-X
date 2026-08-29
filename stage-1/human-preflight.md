@@ -30,7 +30,7 @@ Join the UAV-X WhatsApp group: https://chat.whatsapp.com/EdOZigIfR4s0LvBl4N49XB
 
 Organiser clarifications land there before anywhere else. If the video format or the source delivery method is answered for someone else, it is answered for you.
 
-Record: the date joined.
+Record: the date joined, and the date you last read it. W5 refuses a channel nobody has looked at in a fortnight. The rules say changes are communicated through official channels, and an API diff does not read a chat group.
 
 ## 4. The organiser questions
 
@@ -39,7 +39,7 @@ Send [organiser-email.md](organiser-email.md). Two of its answers change work th
 - **Source delivery.** Repository link or email attachment? The plan currently does both, which is a hedge rather than compliance.
 - **Video limit.** No published limit, so the 180 s cap in `check_submission.py` is our invention. If theirs is shorter, the edit changes.
 
-Record: the date sent, and either the answers or the fallback being assumed.
+Record: the date sent, the date you last checked for a reply, and either the answers or the fallback being assumed.
 
 ## 5. Delivery method, decided
 
@@ -53,6 +53,14 @@ Decide now, and record it:
 
 `check_submission.py` checks the package against this budget in W5, so the number has to exist before then.
 
+## 6. Regulatory sign-off
+
+The rules require the solution to comply with Indian aviation law and safety rules. Stage 1 and Stage 2 are simulation only, so nothing flies and no operational permission attaches, but the proposal has to say that rather than leave it implied, and it has to cite the actual instruments.
+
+`check_submission.py` verifies the proposal names the Drone Rules 2021, the 2022 and 2023 amendments, an official source, the authority, and the words "simulation only". That is presence, not correctness. A substring checker cannot give legal advice, so a person reads the section and signs it.
+
+Record: the date, who signed it, and a sentence saying what was checked and what it concluded.
+
 ## The receipt
 
 Write `submission/human-preflight.json`:
@@ -61,10 +69,15 @@ Write `submission/human-preflight.json`:
 {
   "registered":        {"done": "2026-08-27", "email": "..."},
   "eligibility":       {"done": "2026-08-27", "declaration": "no attachment to PUSHPAK, the Drone Centre, IIT Bombay, IISER Bhopal or VJTI Mumbai"},
-  "clarification_channel": {"done": "2026-08-27"},
-  "organiser_email":   {"sent": "2026-08-27", "answers": "pending", "fallback": "repo link plus zip, video under 180 s"},
-  "delivery":          {"attachment_limit_mb": 25, "route": "repository link, archive attached if under the limit"}
+  "clarification_channel": {"done": "2026-08-27", "last_checked": "2026-08-27"},
+  "organiser_email":   {"sent": "2026-08-27", "answers": "pending", "fallback": "repo link plus zip, video under 180 s", "last_checked": "2026-08-27"},
+  "delivery":          {"attachment_limit_mb": 25, "route": "repository link, archive attached if under the limit", "fallback": "shared drive link if over budget"},
+  "compliance_review": {"done": "2026-08-27", "by": "...", "statement": "Stage 1 and Stage 2 are simulation only, so no operational permission attaches; the DGCA and Digital Sky obligations before any physical flight are recorded in the proposal."}
 }
 ```
 
+The shape is enforced by [../submission/human-preflight.schema.json](../submission/human-preflight.schema.json), not by eye. Round 4 finding 7: preflight used to read three fields and accept any truthy object for the rest, so a half-written receipt passed.
+
 `scripts/gate.sh preflight` reads this file and refuses to run without it. That is deliberate: it is the one part of this project a machine genuinely cannot do, so the machine stops until it is done.
+
+**Keep VJTI Mumbai in the eligibility declaration** even though the organisers removed it from the published collaborator list on 27 August. Declaring no attachment to an institution that turns out not to be involved costs nothing. The reverse is a disqualification at any stage.

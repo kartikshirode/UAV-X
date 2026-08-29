@@ -19,6 +19,7 @@ weeks and two rewrites ago does not count as a rehearsal of this code.
 Exit 0 if both rehearsals happened against this source.
 """
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -42,6 +43,14 @@ def fail(msg: str) -> None:
 
 def ok(msg: str) -> None:
     print(f"  ok    {msg}")
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def load(path: Path):
@@ -69,19 +78,50 @@ def main() -> int:
     current = digest(from_worktree())
     print(f"  source tree {current[:12]}")
 
-    print("\n--- fresh install rehearsal")
+    print("\n--- rebuild rehearsal")
     r = load(SUB / "dryrun-install-receipt.json")
     if r is not None:
+        # Round 5 finding 6: this used to accept any JSON claiming result=pass
+        # with five strings in steps_run. It never ran an installer, never read
+        # an exit code, never checked a target existed. The receipt is now an
+        # artifact of scripts/rehearse_install.sh, which cannot write one unless
+        # every step exited 0, and the transcript it kept is rehashed here.
         if r.get("result") != "pass":
-            fail(f"install rehearsal recorded result={r.get('result')}")
-        elif check_freshness(r, "install", current):
+            fail(f"rehearsal recorded result={r.get('result')}")
+        elif r.get("kind") != "rebuild-rehearsal":
+            fail(f"receipt kind is {r.get('kind')!r}. Only "
+                 f"scripts/rehearse_install.sh writes this file, and it stamps "
+                 f"what the rehearsal actually was. Calling a receipt-only "
+                 f"check a fresh install is how W5 inherits the risk anyway.")
+        elif check_freshness(r, "rebuild", current):
+            tpath = REPO / (r.get("transcript") or "")
             steps = r.get("steps_run") or []
-            if len(steps) < 5:
-                fail(f"install rehearsal ran {len(steps)} setup steps; there "
-                     f"are five and a partial run proves less than none")
+            if not r.get("transcript") or not tpath.is_file():
+                fail(f"the receipt names transcript {r.get('transcript')!r}, "
+                     f"which is not there. The transcript is the evidence; the "
+                     f"receipt is only the claim.")
+            elif sha256_file(tpath) != r.get("transcript_sha256"):
+                fail("the transcript does not hash to what the receipt says. "
+                     "One of them has been edited since the rehearsal ran.")
+            elif not r.get("target"):
+                fail("the receipt records no build target, so nothing says "
+                     "where this was rebuilt")
             else:
-                ok(f"fresh install rehearsed {r.get('done')}, {len(steps)} steps, "
-                   f"{r.get('minutes', '?')} minutes")
+                body = tpath.read_text(encoding="utf-8", errors="replace")
+                bad = [ln for ln in body.splitlines()
+                       if ln.startswith("[exit ") and ln.strip() != "[exit 0]"]
+                if bad:
+                    fail(f"the transcript records {len(bad)} non-zero exit(s) "
+                         f"while the receipt says pass: {bad[:3]}")
+                elif len(steps) < 5:
+                    fail(f"the rehearsal ran {len(steps)} steps; a partial "
+                         f"rebuild proves less than none")
+                elif body.count("[exit 0]") < len(steps):
+                    fail(f"the receipt claims {len(steps)} steps and the "
+                         f"transcript shows {body.count('[exit 0]')} completing")
+                else:
+                    ok(f"rebuilt {r.get('done')} into {r.get('target')}, "
+                       f"{len(steps)} steps, transcript verified")
 
     print("\n--- recording rehearsal")
     r = load(SUB / "dryrun-recording-receipt.json")
@@ -94,6 +134,13 @@ def main() -> int:
                 fail(f"recording rehearsal names clip {r.get('clip')!r}, which "
                      f"is not there. The receipt is the claim; the file is the "
                      f"evidence.")
+            elif sha256_file(clip) != r.get("clip_sha256"):
+                fail("the clip does not hash to what the receipt says. Any "
+                     "decodable video satisfied the old check; this one has to "
+                     "be the video the rehearsal recorded.")
+            elif not r.get("run_id") or not r.get("scenario"):
+                fail("the recording receipt names no run id and scenario, so "
+                     "the clip is not bound to anything that ran")
             elif not shutil.which("ffprobe") or not shutil.which("ffmpeg"):
                 fail("ffmpeg is not installed, so the clip cannot be verified. "
                      "apt install ffmpeg")

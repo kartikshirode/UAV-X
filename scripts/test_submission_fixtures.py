@@ -26,6 +26,7 @@ Exit 0 if every check behaved as specified.
 
 import hashlib
 import json
+from datetime import date
 import os
 import re
 import shutil
@@ -47,6 +48,8 @@ import check_submission_const as K                          # noqa: E402
 # baseline silently stopped matching. Read the list from the checker.
 SCENARIOS = K.REQUIRED_RUNS
 SECTIONS = K.REQUIRED_SECTIONS
+
+TODAY = date.today().isoformat()
 
 CASES: list = []
 
@@ -105,12 +108,19 @@ def build_package(dest: Path) -> dict:
         "eligibility": {"done": "2026-08-27",
                         "declaration": "no attachment to PUSHPAK, the Drone "
                                        "Centre, IIT Bombay, IISER Bhopal or VJTI"},
-        "clarification_channel": {"done": "2026-08-27"},
+        "clarification_channel": {"done": "2026-08-27",
+                                  "last_checked": TODAY},
         "organiser_email": {"sent": "2026-08-27", "answers": "pending",
-                            "fallback": "repo link plus zip, video under 180 s"},
+                            "fallback": "repo link plus zip, video under 180 s",
+                            "last_checked": TODAY},
         "delivery": {"attachment_limit_mb": 25,
                      "route": "attachments to the organiser address",
                      "fallback": "shared drive link if over budget"},
+        "compliance_review": {
+            "done": TODAY, "by": "fixture",
+            "statement": "Stage 1 and Stage 2 are simulation only, so no "
+                         "operational permission attaches; the DGCA and "
+                         "Digital Sky obligations are recorded for Stage 3."},
     }, indent=2), encoding="utf-8")
     shutil.copy(REPO / "submission" / "human-preflight.schema.json",
                 dest / "human-preflight.schema.json")
@@ -154,7 +164,7 @@ def build_package(dest: Path) -> dict:
     fixture_assets.write_pdf(
         dest / "proposal.pdf",
         fixture_assets.proposal_pages(sorted(manifest_runs_ids(manifest_runs)),
-                                      SECTIONS))
+                                      SECTIONS, K.REQUIRED_COMPLIANCE))
     if not fixture_assets.write_video(dest / "demo.mp4", 60):
         raise RuntimeError("ffmpeg is not available, so no valid baseline "
                            "package can be built. A suite that silently skips "

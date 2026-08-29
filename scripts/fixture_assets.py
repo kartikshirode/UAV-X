@@ -67,7 +67,8 @@ def write_pdf(path: Path, pages: list) -> None:
     _ = zlib
 
 
-def proposal_pages(run_ids: list, sections: list, words_per_page: int = 340) -> list:
+def proposal_pages(run_ids: list, sections: list, compliance: list = (),
+                   words_per_page: int = 420) -> list:
     """Six pages that satisfy every content rule check_submission applies.
 
     Not filler for its own sake. The checker asks for a page count, a word
@@ -81,14 +82,26 @@ def proposal_pages(run_ids: list, sections: list, words_per_page: int = 340) -> 
             "rebuilds the chain without anyone touching it. Every number in "
             "this document comes from a recorded run. ").split()
 
-    first = [f"UAV-X Stage 1 technical proposal, fixture build.",
+    first = ["UAV-X Stage 1 technical proposal, fixture build.",
              "Sections covered below: " + ", ".join(sections) + ".",
-             "Regulatory position: simulation only, no physical flight.",
              "Evidence, by run id:"]
     first += [f"  {r}" for r in run_ids]
     pages.append(first)
 
-    for page in range(5):
+    # The regulatory page. Its tokens come from the checker, so a fixture
+    # cannot pass a rule the real proposal would fail.
+    reg = ["Section R. Regulatory compliance.",
+           "Stage 1 and Stage 2 are simulation only. Nothing flies, so no",
+           "operational permission is required for this submission.",
+           "Principal instrument and amendments:"]
+    reg += [f"  {t}" for t, _ in compliance]
+    reg += ["Before any physical flight the current DGCA and Digital Sky",
+            "requirements are rechecked: airspace, registration, remote pilot",
+            "certificate, aircraft type certificate and BVLOS permission.",
+            "Source: https://www.civilaviation.gov.in/ministry-documents/rules"]
+    pages.append(reg)
+
+    for page in range(4):
         lines, cur = [], []
         for i in range(words_per_page):
             cur.append(body[(page * words_per_page + i) % len(body)])
