@@ -128,11 +128,13 @@ Produces:
 - `uavx_roles`: the state machine in [architecture.md](architecture.md) section 4, epochs and leases included
 - The integrated mission, `scenarios/mission_integrated.yaml`, which is the run the proposal and the video both point at. Every other scenario proves one subsystem alone; this is the only one that proves the swarm.
 - Altitude deconfliction, the separation monitor, the yield rule
-- `scenarios/relay_kill.yaml`, `scenarios/link_loss.yaml`, `scenarios/encounter.yaml` and its negative control `scenarios/encounter_noyield.yaml`
+- `scenarios/relay_kill.yaml`, `scenarios/link_loss.yaml`, `scenarios/queue_drain.yaml`, `scenarios/encounter.yaml` and its negative control `scenarios/encounter_noyield.yaml`
 
 `scenarios/link_loss.yaml` is the second half of the fault the organisers name. `uav_2` keeps flying and loses its radio, then gets it back. It reuses `relay_kill`'s geometry exactly, so the two runs differ in one thing and the comparison is the argument, and it costs one scenario file plus two rules rather than a new topology.
 
 It is also what found a real defect in the design. The slot rule balances two hops and says nothing about airspace, so on the integrated geometry it puts the relay 6.8 m from `uav_2`, inside the separation floor. Nothing caught it because `uav_2` is dead in every scenario that computes a slot, which is a property of the scenario list rather than of the rule. A vehicle that loses its radio is still flying. Both the clearance rule and its worked counterexample are in `check_geometry.py`.
+
+`scenarios/queue_drain.yaml` holds the route down for the full 45 s the store-and-forward queue is sized against. Round 6 finding 5: the queue is 512 packets and the 2.25 s drain bound is arithmetic off a 45 second outage, while the two accepted recoveries last 32.5 s and 28.0 s. The depth the design claims to survive had never been reached by anything that could fail. It is the same geometry as `link_loss` with the election disabled and the radio never restored, so it costs a scenario file and no new code.
 
 `gps_degrade` stays in Stage 2. Round 2 costed three failure modes at more hours than the week has, and that still holds; what changed is that this one is nearly free, because the link layer already decides delivery per message and the event injector landed in W1.
 

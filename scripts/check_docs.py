@@ -228,6 +228,34 @@ for s in sorted(frozen - all_run):
     fail(f"architecture.md freezes scenarios/{s}.yaml and no gate ever runs it")
 guard(before, f"all {len(frozen)} frozen scenarios are run by a gate")
 
+# And the other direction, which is the one that was open. A gate can run a
+# scenario nobody has written down, and then the only description of what it
+# has to contain is a list of --require flags. queue_drain arrived in gate.sh
+# and in REQUIRED_RUNS before it had geometry, and nothing here would have
+# noticed.
+before = len(problems)
+for s in sorted(all_run - frozen):
+    fail(f"gate.sh runs scenarios/{s}.yaml and architecture.md has no "
+         f"### `{s}.yaml` section. A scenario with acceptance flags and no "
+         f"frozen geometry cannot be implemented twice the same way.")
+guard(before, f"all {len(all_run)} scenarios the gate runs have frozen geometry")
+
+# The submission's required run list and the gate's have to be the same set,
+# or W5 asks for evidence no week produces, or accepts a week that produced
+# less than it ran.
+before = len(problems)
+sys.path.insert(0, str(REPO / "scripts"))
+from check_submission_const import REQUIRED_RUNS               # noqa: E402
+missing = set(REQUIRED_RUNS) - all_run
+extra = all_run - set(REQUIRED_RUNS)
+for s in sorted(missing):
+    fail(f"check_submission_const.REQUIRED_RUNS names {s} and no gate runs it")
+for s in sorted(extra):
+    fail(f"gate.sh runs {s} and W5 never asks for its record, so the run is "
+         f"evidence for nothing")
+guard(before, f"the {len(REQUIRED_RUNS)} runs W5 requires are exactly the ones "
+              f"the gates produce")
+
 # Artifacts the plan promises must be checked by something the gate calls.
 before = len(problems)
 gate_reach = gate

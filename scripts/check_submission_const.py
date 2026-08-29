@@ -18,6 +18,11 @@ REQUIRED_SECTIONS = [
 REQUIRED_RUNS = [
     "survey_baseline", "relay_required", "direct_only", "relay_kill",
     "link_loss", "encounter", "encounter_noyield", "mission_integrated",
+    # Round 6 finding 5: the queue is sized against a 45 second outage and
+    # the 2.25 s drain bound is derived from it, while the two accepted
+    # recoveries last 32.5 s and 28.0 s. Nothing had held the route down
+    # for as long as the arithmetic assumes.
+    "queue_drain",
 ]
 
 
