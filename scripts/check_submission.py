@@ -448,23 +448,89 @@ if archive is not None:
                      f"record {why}")
 
 # ------------------------------------------------------- fresh install receipt
+# Round 6 finding 1: this compared archive_sha256, commit_sha and the string
+# "pass", and no script in the repository produced any of them. A hand-written
+# JSON file with three values in it certified the one install that decides
+# whether a judge can run this at all. scripts/fresh_install.sh is that script
+# now, and everything below reads what it left behind rather than what it
+# claimed.
 section("fresh install receipt")
 receipt_path = SUB / "fresh-install-receipt.json"
+FRESH_STEPS = json.loads((REPO / "scripts" / "rehearsal-steps.json")
+                         .read_text(encoding="utf-8"))["archive_install"]
 if not receipt_path.is_file():
-    fail("submission/fresh-install-receipt.json missing. Run the fresh install "
-         "against the archive.")
+    fail("submission/fresh-install-receipt.json missing. Run "
+         "scripts/fresh_install.sh against the frozen archive.")
 else:
     r = load_json(receipt_path) or {}
-    if archive_sha256 and r.get("archive_sha256") != archive_sha256:
-        fail("the fresh install tested a different archive than the one being "
-             "submitted")
+    target = r.get("target") or {}
+    # Resolved inside the submission directory, not against the repo root.
+    # The wrapper always writes the transcript beside the receipt, and taking
+    # the basename means a receipt cannot point the checker at some other file
+    # on the machine either.
+    tname = Path(r.get("transcript") or "").name
+    tpath = (SUB / tname) if tname else SUB
+
+    if r.get("kind") != "archive-install":
+        fail(f"the receipt kind is {r.get('kind')!r}. Only "
+             f"scripts/fresh_install.sh writes this file, and it stamps what "
+             f"the install actually was. A rebuild of the working tree is a "
+             f"different claim from installing the archive on a clean target.")
+    elif r.get("result") != "pass":
+        fail(f"receipt records result={r.get('result')}")
+    elif archive_sha256 and r.get("archive_sha256") != archive_sha256:
+        fail(f"the fresh install tested archive "
+             f"{str(r.get('archive_sha256'))[:16]} and the one being submitted "
+             f"is {archive_sha256[:16]}")
     elif frozen_sha and r.get("commit_sha") != frozen_sha:
         fail(f"receipt is for {str(r.get('commit_sha'))[:12]}, frozen source is "
              f"{str(frozen_sha)[:12]}")
+    elif target.get("kind") not in ("wsl-distro", "clean-prefix"):
+        fail(f"the receipt names no clean target. target={target!r}. Without "
+             f"one, nothing says where the archive was installed, and 'it "
+             f"worked on the machine that built it' is not the claim.")
+    elif not target.get("name"):
+        fail("the receipt records a target kind and no target name")
+    elif not r.get("smoke_run_id"):
+        fail("the receipt records no smoke run id. An install that builds and "
+             "never flies is not an install a judge can use.")
+    elif r.get("steps_run") != FRESH_STEPS:
+        fail(f"steps_run is not what scripts/fresh_install.sh runs. Wanted "
+             f"{FRESH_STEPS}, got {r.get('steps_run')}.")
+    elif not r.get("transcript") or not tpath.is_file():
+        fail(f"the receipt names transcript {r.get('transcript')!r}, which is "
+             f"not there. The transcript is the evidence; the receipt is only "
+             f"the claim.")
+    elif sha256_file(tpath) != r.get("transcript_sha256"):
+        fail("the fresh install transcript does not hash to what the receipt "
+             "says. One of them has been edited since the install ran.")
     else:
-        ok("fresh install verified against the submitted archive")
-    if r.get("result") != "pass":
-        fail(f"receipt records result={r.get('result')}")
+        body = tpath.read_text(encoding="utf-8", errors="replace")
+        bad = [ln for ln in body.splitlines()
+               if ln.startswith("[exit ") and ln.strip() != "[exit 0]"]
+        missing = []
+        for label in FRESH_STEPS:
+            head = f"=== {label}"
+            at = body.find(head)
+            if at < 0:
+                missing.append(label)
+                continue
+            rest = body[at + len(head):]
+            nxt = rest.find("\n=== ")
+            if "[exit 0]" not in (rest if nxt < 0 else rest[:nxt]):
+                missing.append(label)
+        if bad:
+            fail(f"the fresh install transcript records {len(bad)} non-zero "
+                 f"exit(s) while the receipt says pass: {bad[:3]}")
+        elif missing:
+            fail(f"the transcript has no completed section for {missing}")
+        elif r.get("smoke_run_id") not in body:
+            fail(f"the receipt names smoke run {r.get('smoke_run_id')} and the "
+                 f"transcript never mentions it")
+        else:
+            ok(f"the frozen archive installed and flew on "
+               f"{target['kind']} {target['name']}, all "
+               f"{len(FRESH_STEPS)} steps in the transcript")
 
 # ----------------------------------------------------------- run evidence
 section("run evidence")

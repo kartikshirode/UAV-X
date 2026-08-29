@@ -396,6 +396,20 @@ gate_w4() {
 }
 
 gate_w5() {
+  # Round 6 finding 1: W5 read a fresh-install receipt that no script in
+  # this repository produced, so the one install that decides whether a
+  # judge can run any of this was certified by a file. The archive gets
+  # frozen and then installed onto a clean target, here, before the
+  # package is checked.
+  gsay "W5: freeze the source being submitted"
+  bash "${UAVX_REPO}/scripts/freeze_source.sh" || gdie "the freeze failed"
+
+  gsay "W5: install the frozen archive onto a clean target"
+  rm -f "${UAVX_REPO}/submission/fresh-install-receipt.json" \
+        "${UAVX_REPO}/submission/fresh-install-transcript.log"
+  bash "${UAVX_REPO}/scripts/fresh_install.sh" \
+    || gdie "the frozen archive does not install on a clean target. That is what a judge will do with it first."
+
   gsay "W5: submission package"
   # Do NOT wrap this in `|| gdie`. The checker exits 2 for "package complete,
   # waiting for a human to send it", which is a different state from "package

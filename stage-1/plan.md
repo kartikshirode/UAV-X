@@ -109,7 +109,7 @@ Produces:
 
 The control run is the important half. A delivery ratio of 1.0 proves nothing on its own, because that is also what a silently open gate produces. `uav_4` is 484.6 m from the GCS, beyond `r_max`, so with forwarding disabled its delivery must be exactly 0.
 
-Also this week, because W5 has no room for them: a fresh-install **dry run** writing `submission/dryrun-install-receipt.json`, and a 60 second recording dry run writing `submission/dryrun-recording-receipt.json` with the clip it produced. `scripts/check_dryruns.py` is in the W3 gate, decodes the clip and ties both receipts to the current source tree, so the week cannot be accepted without them and hand the bill to W5.
+Also this week, because W5 has no room for them: a rebuild **dry run** and a 60 second recording dry run. `gate_w3` deletes both receipt sets, runs `scripts/rehearse_install.sh` and `scripts/rehearse_recording.sh`, and only then runs `scripts/check_dryruns.py`. Round 6 finding 4: the gate used to call the checker and neither wrapper, so a week could go green on receipts left over from the run before or on files somebody typed. The checker opens what the receipts point at, the transcript section per named step and the run record behind the clip, rather than counting strings in them.
 
 Round 4 finding 1: the plan said both of these were in the W3 gate and the gate asked for neither, which made the sentence decoration. The recording one carries the most risk, because the `gazebo` GUI binary has taken this distro down three times and the video is a deliverable.
 
@@ -155,7 +155,7 @@ By now the proposal is mostly written, because each week drafts its own section 
 Produces:
 
 - The source freeze, by `scripts/freeze_source.sh`: commit `C`, `submission/uavx-source.zip` built from it with `git archive`, `submission/source-manifest.json` carrying `C`, the archive hash and the source tree hash
-- The binding fresh install, run against that archive, receipt bound to the archive hash
+- The binding fresh install, by `scripts/fresh_install.sh`: the archive unpacked onto a clean target, `INSTALL.md` followed as written, built, `verify.sh`, then four vehicles airborne. The receipt is written only after every step exits 0 and binds the target, the archive hash, commit `C`, the transcript hash and the smoke run id. Round 6 finding 1: W5 used to compare three fields in a file no script in the repository produced
 - `submission/proposal.pdf`, 6 to 8 pages, citing the run id behind every number it quotes, and carrying a section on Indian BVLOS regulation because the rules require the solution to comply with it
 - `submission/demo.mp4`, opening on the failure and the recovery
 - `submission/INSTALL.md`
@@ -164,7 +164,7 @@ Produces:
 - A regulatory compliance section citing the Drone Rules 2021 and its 2022 and 2023 amendments, an official source, the authority, and the plain statement that Stage 1 and Stage 2 are simulation only. The gate checks those are present; a human signs that the analysis is right, because a substring checker cannot
 - `submission/evidence-manifest.json`, naming the exact run record behind each scenario
 - `submission/attachment-manifest.json`, the file list with hashes and sizes, checked against the delivery budget in `submission/human-preflight.json`
-- `submission/fresh-install-receipt.json`, carrying the submitted commit SHA
+- `submission/fresh-install-receipt.json` and its transcript, carrying the target, the submitted commit SHA and the smoke run id
 - `submission/sent-receipt.json`, written by the human after sending, bound to the attachment manifest
 
 `check_submission.py` rehashes the archive, checks every file in it against commit `C`, revalidates every named run against the schema and against `uavx_eval.check`, and requires each run's source hash to match the frozen source. Round 4 findings 5 and 6: it used to compare two strings that both came out of files we wrote, and count run evidence by filename. `scripts/test_submission_fixtures.py` tampers with each of those in turn and proves the rejection.

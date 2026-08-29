@@ -75,6 +75,43 @@ OUTAGE_SCENARIOS = {"relay_kill", "link_loss", "mission_integrated", "queue_drai
 # snapshot from the previous scenario is indistinguishable from a fresh one.
 GRAPH_SCENARIOS = {"relay_required", "mission_integrated"}
 
+# Round 6 finding 1: the old baseline wrote archive_sha256, commit_sha and
+# result: pass straight into the receipt and expected the package to pass. It
+# was the false green rather than a test of it. The executor is stubbed at the
+# process boundary, the same way the spec checker and uavx_eval are, and what
+# it leaves behind is what a real run of scripts/fresh_install.sh leaves
+# behind: a transcript with one completed section per step and a smoke run id
+# that appears in it.
+FRESH_STEPS = json.loads((REPO / "scripts" / "rehearsal-steps.json")
+                         .read_text(encoding="utf-8"))["archive_install"]
+
+
+def stub_fresh_install(dest: Path, archive_sha: str, commit: str) -> None:
+    smoke = "smoke_20260926T000100"
+    lines = [f"target_kind=clean-prefix", "target=/tmp/uavx-fresh-install",
+             f"archive_sha256={archive_sha}", f"commit={commit}",
+             "started=2026-09-26T00:00:00Z", ""]
+    for label in FRESH_STEPS:
+        lines += ["", f"=== {label}", "$ some command", "output", "[exit 0]"]
+    lines += ["", "=== installed version set", f"run_id={smoke}", "[exit 0]"]
+    transcript = dest / "fresh-install-transcript.log"
+    transcript.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    (dest / "fresh-install-receipt.json").write_text(json.dumps({
+        "kind": "archive-install",
+        "result": "pass",
+        "target": {"kind": "clean-prefix", "name": "/tmp/uavx-fresh-install"},
+        "archive_sha256": archive_sha,
+        "commit_sha": commit,
+        "started": "2026-09-26T00:00:00Z",
+        "done": "2026-09-26",
+        "ended": "2026-09-26T00:40:00Z",
+        "transcript": "submission/fresh-install-transcript.log",
+        "transcript_sha256": sha256_bytes(transcript.read_bytes()),
+        "smoke_run_id": smoke,
+        "steps_run": list(FRESH_STEPS),
+    }, indent=2), encoding="utf-8")
+
 
 def evidence_blocks(scenario: str) -> dict:
     out = {}
@@ -158,11 +195,7 @@ def build_package(dest: Path) -> dict:
         "built_by": "scripts/freeze_source.sh",
     }, indent=2), encoding="utf-8")
 
-    (dest / "fresh-install-receipt.json").write_text(json.dumps({
-        "commit_sha": commit,
-        "archive_sha256": sha256_bytes(archive.read_bytes()),
-        "result": "pass",
-    }, indent=2), encoding="utf-8")
+    stub_fresh_install(dest, sha256_bytes(archive.read_bytes()), commit)
 
     (dest / "human-preflight.json").write_text(json.dumps({
         "registered": {"done": "2026-08-27", "email": "someone@example.com"},
@@ -330,11 +363,41 @@ def _repack(dest, built):
     man["archive_sha256"] = sha256_bytes(src.read_bytes())
     (dest / "source-manifest.json").write_text(json.dumps(man, indent=2),
                                                encoding="utf-8")
+    stub_fresh_install(dest, man["archive_sha256"], built["commit"])
+    refresh_attachment(dest, src.name)
+
+
+# Round 6 finding 1, the case the old fixture was written as.
+@case("a hand-written three field install receipt", "receipt kind is")
+def _typed_install(dest, built):
+    (dest / "fresh-install-receipt.json").write_text(json.dumps({
+        "commit_sha": built["commit"],
+        "archive_sha256": sha256_bytes(built["archive"].read_bytes()),
+        "result": "pass",
+    }, indent=2), encoding="utf-8")
+
+
+@case("an install receipt naming no clean target", "names no clean target")
+def _no_target(dest, built):
     r = json.loads((dest / "fresh-install-receipt.json").read_text(encoding="utf-8"))
-    r["archive_sha256"] = man["archive_sha256"]
+    del r["target"]
     (dest / "fresh-install-receipt.json").write_text(json.dumps(r, indent=2),
                                                      encoding="utf-8")
-    refresh_attachment(dest, src.name)
+
+
+@case("an install transcript edited after the fact", "does not hash to what")
+def _edited_transcript(dest, built):
+    t = dest / "fresh-install-transcript.log"
+    t.write_text(t.read_text(encoding="utf-8") + "\nlooks fine to me\n",
+                 encoding="utf-8")
+
+
+@case("an install that built and never flew", "records no smoke run id")
+def _no_smoke(dest, built):
+    r = json.loads((dest / "fresh-install-receipt.json").read_text(encoding="utf-8"))
+    r["smoke_run_id"] = ""
+    (dest / "fresh-install-receipt.json").write_text(json.dumps(r, indent=2),
+                                                     encoding="utf-8")
 
 
 @case("a required run record emptied", "fails the run-record schema")
