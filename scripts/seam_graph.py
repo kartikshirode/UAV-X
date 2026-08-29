@@ -27,6 +27,7 @@ Exit 0 clean, 1 violations, 2 the check could not be run.
 """
 
 import argparse
+import fnmatch
 import json
 import re
 import subprocess
@@ -41,6 +42,7 @@ PARAM_SVC = re.compile(
     r"/(describe_parameters|get_parameter_types|get_parameters|list_parameters"
     r"|set_parameters|set_parameters_atomically|get_type_description)$")
 KINDS = ("publishers", "subscribers", "services", "actions")
+MANIFEST_META = ["captured_at", "scenario", "run_id", "source_tree_sha256"]
 
 
 def die(msg: str) -> None:
@@ -66,6 +68,9 @@ def load_manifest(scenario: str) -> dict:
         "infra_sub": set(m["ros_infrastructure"]["subscribe"]),
         "expected": set(expected),
         "week": s["week"],
+        "required_outside": set(m.get("required_outside", [])),
+        "required_endpoints": m.get("required_endpoints", {}),
+        "snapshot_meta": m.get("snapshot_required_meta", []),
     }
 
 
@@ -79,6 +84,24 @@ def read_snapshot(path: Path) -> dict:
         die(f"{path} is not valid JSON: {exc}")
     if not isinstance(g, dict) or not g:
         die(f"{path} holds no nodes")
+
+    # Round 5 finding 7: a snapshot has to say where it came from. Without this
+    # a hand-written file is indistinguishable from a capture, and the whole
+    # graph pass rests on a file anybody can type.
+    meta = g.pop("_meta", None)
+    if meta is None:
+        die(f"{path} has no _meta block. A graph snapshot must record "
+            f"captured_at, scenario, run_id and source_tree_sha256, or there is "
+            f"nothing tying it to a run.")
+    for key in MANIFEST_META:
+        if not meta.get(key):
+            die(f"{path}: _meta is missing {key}")
+    for node, cmd in (meta.get("commands") or {}).items():
+        if cmd.get("returncode") not in (0, None):
+            die(f"{path}: the capture recorded `ros2 node info {node}` exiting "
+                f"{cmd['returncode']}. A discovery failure becomes an empty "
+                f"endpoint list, which reads exactly like a clean node.")
+
     for node, ep in g.items():
         for kind in KINDS:
             for e in ep.get(kind, []):
@@ -91,16 +114,30 @@ def read_snapshot(path: Path) -> dict:
 
 def read_live() -> dict:
     try:
-        nodes = subprocess.run(["ros2", "node", "list"], capture_output=True,
-                               text=True, timeout=60).stdout.split()
+        listing = subprocess.run(["ros2", "node", "list"], capture_output=True,
+                                 text=True, timeout=60)
     except (OSError, subprocess.SubprocessError) as exc:
         die(f"ros2 node list failed: {exc}")
+    if listing.returncode != 0:
+        die(f"ros2 node list exited {listing.returncode}: "
+            f"{listing.stderr.strip()[:200]}")
+    nodes = listing.stdout.split()
     if not nodes:
         die("no ROS nodes running. The live pass needs a scenario up.")
     out = {}
     for n in nodes:
-        info = subprocess.run(["ros2", "node", "info", n], capture_output=True,
-                              text=True, timeout=60).stdout
+        # Round 5 finding 7: the return code and stderr were both thrown away,
+        # so a node info that failed produced an empty endpoint list and passed
+        # as a clean node.
+        proc = subprocess.run(["ros2", "node", "info", n], capture_output=True,
+                              text=True, timeout=60)
+        if proc.returncode != 0:
+            die(f"ros2 node info {n} exited {proc.returncode}: "
+                f"{proc.stderr.strip()[:200]}")
+        info = proc.stdout
+        if not any(h in info for h in ("Publishers:", "Subscribers:")):
+            die(f"ros2 node info {n} returned nothing parseable. Treating that "
+                f"as a node with no endpoints is how an empty graph passes.")
         cur = None
         d = {k: [] for k in KINDS}
         for line in info.splitlines():
@@ -137,6 +174,32 @@ def check(graph: dict, man: dict) -> list:
     for extra in sorted(present - man["expected"] - man["outside"]):
         v.append(f"{extra} is in the graph and in neither this scenario's "
                  f"manifest nor the outside-process list")
+
+    # 1b. Round 5 finding 7. A list of processes is not a graph. Thirteen nodes
+    #     with every endpoint list empty satisfied every rule above and was
+    #     reported clean, which means the seam pass could be satisfied by a
+    #     scenario where nothing ever talked.
+    for want in sorted(man["required_outside"] - present):
+        v.append(f"{want} is absent. A scenario graph without it is not a graph "
+                 f"of this system: the radio is the deliverable, and if the "
+                 f"process modelling it never ran, every delivery number in "
+                 f"this run came from somewhere else.")
+
+    for node in sorted(present):
+        proc = node.strip("/").split("/")[-1]
+        need = man["required_endpoints"].get(proc)
+        if not need:
+            continue
+        own = node.strip("/").split("/")[0]
+        for kind in ("publishers", "subscribers"):
+            held = [e["topic"] for e in graph[node].get(kind, [])]
+            for pattern in need.get(kind, []):
+                want = pattern.replace("{v}", own)
+                if not any(fnmatch.fnmatch(t, want) for t in held):
+                    v.append(f"{node} holds no {kind[:-1]} matching {want}. "
+                             f"A node that is present and silent is not a node "
+                             f"that respects the seam, it is a node that never "
+                             f"opened it.")
 
     for node in sorted(graph):
         ep = graph[node]

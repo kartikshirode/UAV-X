@@ -1,5 +1,5 @@
 {
-  "_why": "Round 4 finding 4. The live seam pass carried one manifest for every scenario and it demanded four role_manager processes, which W4 introduces. A correct W3 graph could not satisfy the W3 seam check. Worse in the other direction: W4 adds those role managers and the old gate never ran the checker again, so the newest code in the swarm was the only code nothing ever checked. Each scenario gets its own exact list, and a process on neither side of it is a finding.",
+  "_why": "Round 4 finding 4 gave each scenario its own process list. Round 5 finding 7 found that a list of processes is not a graph: a snapshot naming all 13 expected nodes with every endpoint list empty passed clean. Presence was checked and content never was. So each process now also declares the endpoints it MUST hold, and a node that carries none of them fails.",
   "vehicles": [
     "uav_1",
     "uav_2",
@@ -77,5 +77,76 @@
         "/gcs/gcs_node"
       ]
     }
-  }
+  },
+  "required_outside": [
+    "/link_layer",
+    "/metrics_collector"
+  ],
+  "_required_outside_note": "A scenario graph without the link layer in it is not a graph of this system. The radio is the deliverable; if the process modelling it is absent, every delivery number in the run came from somewhere else.",
+  "required_endpoints": {
+    "router": {
+      "publishers": [
+        "/uavx/{v}/tx"
+      ],
+      "subscribers": [
+        "/uavx/{v}/rx"
+      ]
+    },
+    "mission_executor": {
+      "publishers": [
+        "/uavx/{v}/tx",
+        "/{v}/fmu/in/*"
+      ],
+      "subscribers": [
+        "/uavx/{v}/rx",
+        "/{v}/fmu/out/*"
+      ]
+    },
+    "role_manager": {
+      "publishers": [
+        "/uavx/{v}/tx"
+      ],
+      "subscribers": [
+        "/uavx/{v}/rx"
+      ]
+    },
+    "gcs_node": {
+      "publishers": [
+        "/uavx/gcs/tx"
+      ],
+      "subscribers": [
+        "/uavx/gcs/rx"
+      ]
+    },
+    "link_layer": {
+      "publishers": [
+        "/uavx/uav_1/rx",
+        "/uavx/uav_2/rx",
+        "/uavx/uav_3/rx",
+        "/uavx/uav_4/rx",
+        "/uavx/gcs/rx"
+      ],
+      "subscribers": [
+        "/uavx/uav_1/tx",
+        "/uavx/uav_2/tx",
+        "/uavx/uav_3/tx",
+        "/uavx/uav_4/tx",
+        "/uavx/gcs/tx",
+        "*model_states*"
+      ]
+    },
+    "metrics_collector": {
+      "publishers": [],
+      "subscribers": [
+        "*model_states*"
+      ]
+    }
+  },
+  "_required_endpoints_note": "Every entry here must be present or the node fails. {v} is the owning vehicle id. A * glob is allowed only below a namespace whose ownership is already fixed: which PX4 topic the mission executor uses is the implementer's business, whose namespace it is is not.",
+  "snapshot_required_meta": [
+    "captured_at",
+    "scenario",
+    "run_id",
+    "source_tree_sha256"
+  ]
 }

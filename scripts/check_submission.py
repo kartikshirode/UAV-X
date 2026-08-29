@@ -45,6 +45,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from jsonschema_mini import validate                      # noqa: E402
 from source_tree_hash import blob_id                      # noqa: E402
 import check_human_preflight                              # noqa: E402
+# One definition, shared with scripts/test_submission_fixtures.py. Round 5
+# finding 2: these lists were copied into the fixture by hand and drifted.
+from check_submission_const import REQUIRED_RUNS, REQUIRED_SECTIONS  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 # Overridable so scripts/test_submission_fixtures.py can point the whole checker
@@ -61,26 +64,15 @@ MAX_VIDEO_S = 180          # our assumption, not theirs; see organiser-email.md
 MIN_VIDEO_S = 30
 ORGANISER_EMAIL = "pushpak_gc2026@aero.iitb.ac.in"
 
-REQUIRED_SECTIONS = [
-    "architecture", "communication", "relay", "fault", "safety", "results",
-    # From the rules, not the rubric: "Proposed solutions must comply with all
-    # applicable laws, aviation requirements, and safety protocols in India."
-    # A BVLOS swarm proposal that never mentions BVLOS regulation is ignoring a
-    # stated rule, in front of a panel from an aerospace department.
-    "regulat",
-]
 
 # Every scenario whose numbers the proposal is allowed to quote. The integrated
 # mission and the safety control are on it because round 4 finding 6 found the
 # one run that proves the swarm, and the one run that gives the safety result
 # its meaning, were both missing from the W5 list.
-REQUIRED_RUNS = [
-    "survey_baseline", "relay_required", "direct_only", "relay_kill",
-    "link_loss", "encounter", "encounter_noyield", "mission_integrated",
-]
 
 # What the archive is allowed to hold, matching scripts/freeze_source.sh.
-ARCHIVE_PATHS = ("uavx_ws/", "scenarios/", "scripts/", "stage-1/")
+ARCHIVE_PATHS = ("uavx_ws/", "scenarios/", "scripts/", "stage-1/",
+                 "LICENSE", "THIRD-PARTY.md")
 ARCHIVE_PREFIX = "uavx-source/"
 
 FORBIDDEN_IN_ARCHIVE = [
@@ -349,18 +341,45 @@ else:
 # our code on top of PX4, Gazebo and ROS 2, so it has to say what is ours, under
 # what terms, and what it is standing on.
 section("licensing")
-for name, why in (("LICENSE", "the terms our own code is offered under"),
-                  ("THIRD-PARTY.md", "what the submission depends on and under "
-                                     "what licence")):
-    if archive is None:
-        break
-    hit = any(n.endswith("/" + name) or n == name for n in entries)
-    if hit:
-        ok(f"{name} is in the archive, {why}")
-    else:
-        fail(f"the archive has no {name}. The rules make the entrant responsible "
-             f"for not infringing third-party IP, and this submission is built "
-             f"on PX4, Gazebo and ROS 2.")
+if archive is not None:
+    # Round 5 finding 3: the previous check accepted an empty file at any depth
+    # whose name ended the right way. That proves neither ownership terms nor
+    # third-party notices.
+    for name in ("LICENSE", "THIRD-PARTY.md"):
+        want = ARCHIVE_PREFIX + name
+        if want not in entries:
+            fail(f"the archive has no {want}. The rules make the entrant "
+                 f"responsible for third-party IP, and this is built on PX4, "
+                 f"Gazebo and ROS 2.")
+            continue
+        body = entries[want].decode("utf-8", "replace")
+        if len(body.split()) < 60:
+            fail(f"{want} is {len(body.split())} words. An empty licence file is "
+                 f"worse than none: it looks like the question was answered.")
+        else:
+            ok(f"{name} present, {len(body.split())} words")
+
+    tp = entries.get(ARCHIVE_PREFIX + "THIRD-PARTY.md", b"").decode("utf-8", "replace")
+    if tp:
+        # Every enforced pin in versions.lock has to appear by name, with a
+        # licence identifier and an upstream URL beside it. One guessed label
+        # for the whole stack is not an inventory.
+        lock = (REPO / "stage-1" / "setup" / "versions.lock").read_text(encoding="utf-8")
+        pins = [m for m in re.findall(r"^([a-z0-9_]+)=", lock, re.M)
+                if not m.startswith("observed_")]
+        missing_pin = [k for k in pins if k not in tp]
+        if missing_pin:
+            fail(f"THIRD-PARTY.md never names these pinned components: "
+                 f"{', '.join(missing_pin)}. A dependency nobody listed is a "
+                 f"dependency nobody checked the licence of.")
+        else:
+            ok(f"THIRD-PARTY.md accounts for all {len(pins)} pinned components")
+        for token, why in (("BSD 3-Clause", "the PX4 family's terms"),
+                           ("Apache 2.0", "the ROS and Gazebo terms"),
+                           ("http", "an upstream to check against")):
+            if token not in tp:
+                fail(f"THIRD-PARTY.md never mentions {token}, so it does not "
+                     f"record {why}")
 
 # ------------------------------------------------------- fresh install receipt
 section("fresh install receipt")
@@ -484,9 +503,35 @@ else:
         else:
             total += size
 
-    for needed in ("proposal.pdf", "INSTALL.md"):
-        if not any(i.get("name") == needed for i in att.get("attachments", [])):
-            fail(f"attachment manifest does not include {needed}")
+    # Round 5 finding 3: only the proposal and INSTALL.md were required here,
+    # so a receipt for an email carrying two of the five deliverables reached
+    # the submitted state. The archive and the video had to exist on disk and
+    # never had to be sent.
+    listed = {i.get("name") for i in att.get("attachments", [])}
+    listed |= {i.get("name") for i in att.get("delivered_by_link", [])}
+    needed = ["proposal.pdf", "INSTALL.md"]
+    if archive is not None:
+        needed.append(archive.name)
+    demos = [n for n in listed if str(n).startswith("demo.")]
+    for name in needed:
+        if name not in listed:
+            fail(f"the delivery manifest does not include {name}, so the "
+                 f"submission can be recorded as sent without it")
+    if len(demos) != 1:
+        fail(f"the delivery manifest names {len(demos)} demo files; there is "
+             f"exactly one video deliverable")
+
+    # A file sent as a link is still a deliverable and still has to be checked.
+    for item in att.get("delivered_by_link", []):
+        p = SUB / item.get("name", "")
+        for field in ("route", "url", "bytes", "sha256", "access_tested"):
+            if not item.get(field):
+                fail(f"{item.get('name')} is delivered by link and its manifest "
+                     f"entry has no {field}. A link nobody opened is not a "
+                     f"delivery.")
+        if p.is_file() and item.get("sha256") != sha256_file(p):
+            fail(f"{p.name} on disk does not match the hash published at "
+                 f"{item.get('url')}")
 
     # Not guarded on `not problems`. The budget is the one check whose answer
     # a human has to act on days ahead of the deadline, and hiding it behind
@@ -515,9 +560,13 @@ else:
 # on 26 August. Without this, a changed deadline or a changed deliverable list
 # would be discovered by not qualifying.
 section("the published competition record")
-spec = subprocess.run(
-    [sys.executable, str(REPO / "scripts" / "check_competition_spec.py")],
-    capture_output=True, text=True, cwd=str(REPO))
+# Overridable only so the fixture suite can stub it at the process boundary.
+# W5 runs the real one: a package checked against a stub is checked against
+# nothing.
+SPEC_CHECKER = os.environ.get("UAVX_SPEC_CHECKER") or str(
+    REPO / "scripts" / "check_competition_spec.py")
+spec = subprocess.run([sys.executable, SPEC_CHECKER],
+                      capture_output=True, text=True, cwd=str(REPO))
 for line in spec.stdout.strip().splitlines():
     print(f"  {line.strip()}")
 if spec.returncode != 0:

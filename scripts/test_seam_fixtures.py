@@ -35,6 +35,7 @@ POSE = "px4_msgs/msg/VehicleLocalPosition"
 LOG = "rcl_interfaces/msg/Log"
 PARAM = "rcl_interfaces/msg/ParameterEvent"
 TRUTH = "gazebo_msgs/msg/ModelStates"
+SETPOINT = "px4_msgs/msg/TrajectorySetpoint"
 
 CASES: list = []
 STATIC_CASES: list = []
@@ -49,22 +50,34 @@ def clean_graph(week: int) -> dict:
 
     W3 has no role managers because uavx_roles does not exist yet. That is the
     whole point of per-scenario manifests.
+
+    Every node carries the endpoints its manifest row requires. Round 5 finding
+    7: the previous version of this helper happened to include them, so nothing
+    noticed that the checker never looked.
     """
     procs = ["router", "mission_executor"]
     if week >= 4:
         procs.append("role_manager")
 
-    g = {}
+    g = {"_meta": {
+        "captured_at": "2026-09-20T10:00:00",
+        "scenario": "mission_integrated" if week >= 4 else "relay_required",
+        "run_id": "fixture_run",
+        "source_tree_sha256": "0" * 64,
+        "commands": {},
+    }}
     for v in VEHICLES:
         for proc in procs:
             node = f"/{v}/{proc}"
-            g[node] = {
-                "publishers": [ep(f"/uavx/{v}/tx", PACKET), ep("/rosout", LOG)],
-                "subscribers": [
-                    ep(f"/uavx/{v}/rx", PACKET),
+            pubs = [ep(f"/uavx/{v}/tx", PACKET), ep("/rosout", LOG)]
+            subs = [ep(f"/uavx/{v}/rx", PACKET),
                     ep(f"/{v}/fmu/out/vehicle_local_position", POSE),
-                    ep("/parameter_events", PARAM),
-                ],
+                    ep("/parameter_events", PARAM)]
+            if proc == "mission_executor":
+                # It has to be able to fly the aircraft.
+                pubs.append(ep(f"/{v}/fmu/in/trajectory_setpoint", SETPOINT))
+            g[node] = {
+                "publishers": pubs, "subscribers": subs,
                 "services": [ep(f"{node}/get_parameters",
                                 "rcl_interfaces/srv/GetParameters")],
                 "actions": [],
@@ -218,6 +231,53 @@ def _runner_traffic(g):
     return g
 
 
+@case("every expected node present with no endpoints at all", "mission_integrated", 4,
+      "never opened it")
+def _all_empty(g):
+    for node in list(g):
+        if node == "_meta":
+            continue
+        g[node] = {"publishers": [], "subscribers": [], "services": [],
+                   "actions": []}
+    return g
+
+
+@case("one mandatory endpoint missing", "mission_integrated", 4,
+      "holds no publisher matching /uavx/uav_3/tx")
+def _missing_endpoint(g):
+    g["/uav_3/router"]["publishers"] = [ep("/rosout", LOG)]
+    return g
+
+
+@case("the mission executor cannot command its aircraft", "mission_integrated", 4,
+      "holds no publisher matching /uav_2/fmu/in/*")
+def _no_setpoints(g):
+    g["/uav_2/mission_executor"]["publishers"] = [
+        ep("/uavx/uav_2/tx", PACKET), ep("/rosout", LOG)]
+    return g
+
+
+@case("the link layer never ran", "mission_integrated", 4,
+      "/link_layer is absent")
+def _no_link_layer(g):
+    del g["/link_layer"]
+    return g
+
+
+@case("a node info call that failed during capture", "mission_integrated", 4,
+      "CANNOT:exiting 1")
+def _failed_capture(g):
+    g["_meta"]["commands"] = {"/uav_1/router": {"returncode": 1}}
+    return g
+
+
+@case("a snapshot with no provenance", "mission_integrated", 4,
+      "CANNOT:no _meta block")
+def _no_meta(g):
+    del g["_meta"]
+    return g
+
+
 def run_graph(scenario: str, snapshot: Path) -> tuple:
     p = subprocess.run(
         [sys.executable, str(SEAM_GRAPH), "--scenario", scenario,
@@ -311,6 +371,13 @@ def main() -> int:
 
         if expect is None:
             good, why = rc == 0, "expected a clean pass"
+        elif expect.startswith("CANNOT:"):
+            # Unusable input must stop the check, not fail it as a violation.
+            # A snapshot the checker cannot trust and a swarm that broke the
+            # seam are different answers and must not share an exit code.
+            want = expect.split(":", 1)[1]
+            good = rc == 2 and want in out
+            why = f"expected exit 2 saying {want!r}, got {rc}"
         elif rc == 0:
             good, why = False, "passed, but should have been caught"
         elif rc != 1:
@@ -327,8 +394,10 @@ def main() -> int:
 
     print("\n--- malformed input must stop the check, not pass it")
     bad = tmp / "untyped.json"
-    bad.write_text(json.dumps({"/uav_1/router": {"publishers": ["/uavx/uav_1/tx"]}}),
-                   encoding="utf-8")
+    bad.write_text(json.dumps({
+        "_meta": {"captured_at": "2026-09-20T10:00:00", "scenario": "relay_required",
+                  "run_id": "fixture_run", "source_tree_sha256": "0" * 64},
+        "/uav_1/router": {"publishers": ["/uavx/uav_1/tx"]}}), encoding="utf-8")
     rc, out = run_graph("relay_required", bad)
     good = rc == 2 and "without a message type" in out
     print(f"  {'ok  ' if good else 'FAIL'}  untyped snapshot refused              rc={rc}")
