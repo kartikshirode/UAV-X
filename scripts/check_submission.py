@@ -465,6 +465,40 @@ else:
             fail(f"{scenario}: {path.name} fails the run-record schema: {errs[0]}")
             continue
 
+        # Round 6 finding 5. The record carries both id sets so equality can be
+        # recomputed rather than believed, and this is where it gets
+        # recomputed. Doing it only in uavx_eval would leave the last gate
+        # before the send trusting a summary line written by the thing it is
+        # checking: generated 450, unique_delivered 450, and 450 of the wrong
+        # packets delivered.
+        obs = record.get("observations")
+        if isinstance(obs, dict):
+            gen = set(obs.get("generated_ids") or [])
+            got = set(obs.get("delivered_ids") or [])
+            missing = sorted(gen - got)
+            unexpected = sorted(got - gen)
+            if missing or unexpected:
+                fail(f"{scenario}: generated_ids and delivered_ids are not the "
+                     f"same set. {len(missing)} generated and never delivered "
+                     f"{missing[:3]}, {len(unexpected)} delivered and never "
+                     f"generated {unexpected[:3]}. Delivered once is a claim "
+                     f"about which observations arrived, not how many.")
+                continue
+            for field, size in (("generated", len(gen)),
+                                ("unique_delivered", len(got))):
+                if obs.get(field) != size:
+                    fail(f"{scenario}: observations.{field} says "
+                         f"{obs.get(field)} and its own id set holds {size}. A "
+                         f"record that disagrees with itself cannot be read "
+                         f"either way.")
+                    break
+            else:
+                if obs.get("backlog_drain_s", 0) > 2.25:
+                    fail(f"{scenario}: the backlog took "
+                         f"{obs['backlog_drain_s']}s to drain, past the 2.25 s "
+                         f"the queue size was derived from")
+                    continue
+
         want_scenario = f"scenarios/{scenario}.yaml"
         if record.get("scenario_path") != want_scenario:
             fail(f"{scenario}: {path.name} records a run of "

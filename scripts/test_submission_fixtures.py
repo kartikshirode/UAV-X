@@ -63,6 +63,58 @@ def git(*args) -> str:
                           capture_output=True, text=True, check=True).stdout
 
 
+# Round 6 finding 5: the schema defines observations, handback and relay_slot
+# and required none of them, so this fixture omitted all three and the baseline
+# it calls valid was a package whose communication evidence was absent. The
+# schema requires them per scenario now, and the baseline has to carry what a
+# real run of that scenario would.
+OUTAGE_SCENARIOS = {"relay_kill", "link_loss", "mission_integrated", "queue_drain"}
+
+
+def evidence_blocks(scenario: str) -> dict:
+    if scenario not in OUTAGE_SCENARIOS:
+        return {}
+
+    ids = [f"uav_{n}:{i}" for n in (3, 4) for i in range(225)]
+    out = {
+        "observations": {
+            "generated_ids": ids,
+            "delivered_ids": list(ids),
+            "generated": len(ids),
+            "unique_delivered": len(ids),
+            "duplicated": 0,
+            "expired": 0,
+            "evicted": 0,
+            "peak_queue_depth": 450,
+            "backlog_drain_s": 2.1,
+            "control_queue_max_delay_s": 0.004,
+            "missing_ids": [],
+            "unexpected_ids": [],
+        },
+        "relay_slot": {
+            "commanded": [317.3, -36.8, 75.0],
+            "clearance_m": 52.4,
+            "band_reserved": True,
+            "raised_from": None,
+        },
+    }
+    if scenario == "link_loss":
+        out["handback"] = {
+            "epoch": 1,
+            "epoch_owner": "uav_4",
+            "staying_member": "uav_4",
+            "prepared_path": ["uav_4", "uav_2", "uav_1", "gcs"],
+            "prepared_path_computations": 2,
+            "confirmed_observation_id": "uav_4:118",
+            "release_sender": "uav_4",
+            "confirmed_at": 268.4,
+            "release_at": 269.1,
+            "observation_gap_count": 0,
+            "acknowledged_ids": ["uav_4:118"],
+        }
+    return out
+
+
 def build_package(dest: Path) -> dict:
     """A submission directory that is internally consistent before tampering."""
     dest.mkdir(parents=True, exist_ok=True)
@@ -152,6 +204,7 @@ def build_package(dest: Path) -> dict:
             "elapsed_sim_s": 240,
             "source_tree_sha256": tree,
         }
+        rec.update(evidence_blocks(scenario))
         (runs / f"{rid}.jsonl").write_text(json.dumps(rec), encoding="utf-8")
         manifest_runs[scenario] = str((runs / f"{rid}.jsonl").resolve())
 
@@ -278,6 +331,36 @@ def _repack(dest, built):
 @case("a required run record emptied", "fails the run-record schema")
 def _empty_run(dest, built):
     Path(built["manifest_runs"]["relay_kill"]).write_text("{}", encoding="utf-8")
+
+
+# Round 6 finding 5. The three evidence blocks were defined and required by
+# nothing, so a run could omit the entire communication result and validate.
+@case("the outage run with its observation evidence removed",
+      "missing 'observations'")
+def _no_observations(dest, built):
+    p = Path(built["manifest_runs"]["link_loss"])
+    rec = json.loads(p.read_text(encoding="utf-8"))
+    del rec["observations"]
+    p.write_text(json.dumps(rec), encoding="utf-8")
+
+
+@case("the handback run with no epoch owner", "missing 'epoch_owner'")
+def _no_owner(dest, built):
+    p = Path(built["manifest_runs"]["link_loss"])
+    rec = json.loads(p.read_text(encoding="utf-8"))
+    del rec["handback"]["epoch_owner"]
+    p.write_text(json.dumps(rec), encoding="utf-8")
+
+
+# The whole point of carrying both id sets rather than two counts.
+@case("delivered counts that match while the ids do not",
+      "delivered_ids")
+def _wrong_ids(dest, built):
+    p = Path(built["manifest_runs"]["queue_drain"])
+    rec = json.loads(p.read_text(encoding="utf-8"))
+    rec["observations"]["delivered_ids"] = [
+        f"uav_9:{i}" for i in range(len(rec["observations"]["generated_ids"]))]
+    p.write_text(json.dumps(rec), encoding="utf-8")
 
 
 @case("a run produced from different source", "The evidence and the code do not match")
