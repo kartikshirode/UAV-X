@@ -1,0 +1,17 @@
+{
+  "_why": "Round 6 finding 4: check_dryruns.py accepted any receipt carrying five strings in steps_run and a transcript containing five [exit 0] lines. It never checked that the five were the five the wrapper runs, so a typed receipt and a typed transcript satisfied the W3 gate. One definition, read by the wrapper that runs them and by the checker that reads the transcript afterwards.",
+  "install": [
+    "verify.sh, stack matches versions.lock",
+    "colcon build into a fresh prefix",
+    "the built overlay sources",
+    "colcon test in the fresh prefix",
+    "smoke run, four vehicles airborne"
+  ],
+  "archive_install": [
+    "unpack the frozen archive into a clean target",
+    "the submitted INSTALL.md path",
+    "colcon build from the unpacked archive",
+    "verify.sh inside the target",
+    "smoke run, four vehicles airborne"
+  ]
+}

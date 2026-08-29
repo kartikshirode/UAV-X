@@ -43,15 +43,38 @@ SOURCE_SHA="$(python3 "${HERE}/source_tree_hash.py")"
 # Whatever the runner does, it must not open the GUI.
 export UAVX_HEADLESS=1
 
-gsay "launching ${SCENARIO} for a ${SECONDS_WANTED}s capture rehearsal"
+# Round 6 finding 4: the header above says the run id is burned into the
+# frame, and it was learned by reading the run record AFTER the capture had
+# finished, so nothing was ever passed to the overlay. The claim and the code
+# disagreed, and the claim is the one that makes an unrelated clip impossible.
+# The id is minted here, handed to the runner and to the overlay, and the run
+# record is then required to carry it back.
+RUN_ID="${SCENARIO##*/}"
+RUN_ID="rehearsal_${RUN_ID%.yaml}_$(date -u +%Y%m%dT%H%M%SZ)"
+
+# Both files, so a capture that fails leaves nothing behind for the next run
+# to pick up. See round 6 finding 6.
+uavx_invalidate_latest
+
+gsay "launching ${SCENARIO} as ${RUN_ID} for a ${SECONDS_WANTED}s capture rehearsal"
 bash "${UAVX_REPO}/scripts/run_scenario.sh" "${SCENARIO}" --record "${CLIP}" \
      --record-seconds "${SECONDS_WANTED}" \
+     --run-id "${RUN_ID}" \
+     --overlay-text "${RUN_ID}" \
   || gdie "the scenario run failed, so there is nothing to have recorded"
 
-[ -f "${UAVX_RUNS_DIR}/latest.jsonl" ] \
+RECORD="${UAVX_RUNS_DIR}/latest.jsonl"
+[ -f "$RECORD" ] \
   || gdie "the run produced no record, so the clip cannot be bound to a run"
-RUN_ID="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1],encoding='utf-8'))['run_id'])" \
-          "${UAVX_RUNS_DIR}/latest.jsonl")"
+GOT_ID="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1],encoding='utf-8')).get('run_id',''))" \
+          "$RECORD")"
+[ "$GOT_ID" = "$RUN_ID" ] \
+  || gdie "asked for run ${RUN_ID} and the record says ${GOT_ID}. The overlay carries the id this script minted, so a record under another id means the clip and the record are not the same run."
+
+GRAPH="${UAVX_RUNS_DIR}/latest-graph.json"
+[ -f "$GRAPH" ] \
+  || gdie "the run captured no ROS graph, so the seam pass would have nothing to check for this run"
+GRAPH_SHA="$(sha256sum "$GRAPH" | cut -d' ' -f1)"
 
 [ -f "$CLIP" ] || gdie "no clip at ${CLIP}. The capture path does not work, which is exactly what this rehearsal exists to find out in W3 rather than W5."
 
@@ -65,16 +88,28 @@ ffmpeg -v error -i "$CLIP" -f null - 2>/dev/null || gdie "the clip does not deco
 CLIP_SHA="$(sha256sum "$CLIP" | cut -d' ' -f1)"
 ENDED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-python3 - "$RECEIPT" "$CLIP_SHA" "$RUN_ID" "$SCENARIO" "$SOURCE_SHA" "$DUR" "$ENDED" <<'PY'
-import json, os, sys, tempfile
-receipt, sha, run_id, scenario, src, dur, ended = sys.argv[1:8]
+python3 - "$RECEIPT" "$CLIP_SHA" "$RUN_ID" "$SCENARIO" "$SOURCE_SHA" "$DUR" "$ENDED" \
+         "$RECORD" "$GRAPH_SHA" <<'PY'
+import json, os, shutil, sys, tempfile
+receipt, sha, run_id, scenario, src, dur, ended, record, graph_sha = sys.argv[1:10]
+
+# Round 6 finding 4: the receipt named a run id and a scenario and nothing ever
+# opened the record they pointed at. Keep the record beside the clip, so the
+# checker reads the run rather than the claim about it.
+kept = os.path.join(os.path.dirname(receipt), "dryrun-recording-run.jsonl")
+shutil.copyfile(record, kept)
+
 data = {
+    "kind": "recording-rehearsal",
     "result": "pass",
     "method": "headless gzserver capture via run_scenario.sh --record",
     "clip": "submission/dryrun-recording.mp4",
     "clip_sha256": sha,
     "duration_s": float(dur),
     "run_id": run_id,
+    "run_record": "submission/dryrun-recording-run.jsonl",
+    "graph_snapshot_sha256": graph_sha,
+    "overlay_text": run_id,
     "scenario": scenario,
     "source_tree_sha256": src,
     "done": ended[:10],
