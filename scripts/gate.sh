@@ -221,9 +221,27 @@ gate_w3() {
   # inherit them, and the gate asked for neither, which meant the promise was
   # decoration. The recording one matters most: the gazebo GUI binary has taken
   # this distro down three times, and the video is a deliverable.
+  #
+  # Round 6 finding 4: adding check_dryruns.py fixed the wrong half. The
+  # gate still only read receipts, and the two wrappers that produce them
+  # were never invoked by anything. A week could go green on files left
+  # over from the week before, or on files somebody typed.
+  #
+  # So the stale receipts go first. If a wrapper fails, the gate stops at
+  # the wrapper, and there is no old receipt left behind for the checker
+  # to accept in its place.
   gsay "W3: the two rehearsals W5 has no room for"
+  rm -f "${UAVX_REPO}/submission/dryrun-install-receipt.json" \
+        "${UAVX_REPO}/submission/dryrun-install-transcript.log" \
+        "${UAVX_REPO}/submission/dryrun-recording-receipt.json" \
+        "${UAVX_REPO}/submission/dryrun-recording-run.jsonl" \
+        "${UAVX_REPO}/submission/dryrun-recording.mp4"
+  bash "${UAVX_REPO}/scripts/rehearse_install.sh" \
+    || gdie "the rebuild rehearsal failed. See submission/dryrun-install-transcript.log."
+  bash "${UAVX_REPO}/scripts/rehearse_recording.sh" \
+    || gdie "the 60 second recording rehearsal failed. Finding this out in W5 leaves four days and no capture path."
   python3 "${UAVX_REPO}/scripts/check_dryruns.py" \
-    || gdie "the fresh install and the 60 second recording rehearsals are part of W3"
+    || gdie "the rehearsals ran and their evidence does not hold up"
 }
 
 gate_w4() {

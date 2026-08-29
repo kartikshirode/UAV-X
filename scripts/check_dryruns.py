@@ -33,6 +33,14 @@ REPO = Path(__file__).resolve().parent.parent
 SUB = REPO / "submission"
 MIN_RECORDING_S = 55.0
 
+# Round 6 finding 4: "five strings in steps_run" and "five [exit 0] lines" were
+# the whole test, so a typed receipt beside a typed transcript passed. These
+# are the exact labels rehearse_install.sh runs, read from the same file the
+# wrapper reads, and every one of them has to appear in the transcript with a
+# zero exit beside it.
+STEPS = json.loads((REPO / "scripts" / "rehearsal-steps.json")
+                   .read_text(encoding="utf-8"))["install"]
+
 problems: list[str] = []
 
 
@@ -74,6 +82,60 @@ def check_freshness(receipt: dict, label: str, current: str) -> bool:
     return True
 
 
+def check_recording_run(r: dict) -> bool:
+    """Open the run the clip claims to come from.
+
+    Round 6 finding 4: the receipt named a run id and a scenario, and nothing
+    ever opened the record they pointed at. Two strings that are merely
+    non-empty is what a hand-written receipt looks like.
+    """
+    rel = r.get("run_record")
+    if not rel:
+        fail("the recording receipt names no run record. A run id with no "
+             "record behind it is a string.")
+        return False
+    path = REPO / rel
+    if not path.is_file():
+        fail(f"the recording receipt points at {rel}, which is not there")
+        return False
+    try:
+        rec = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        fail(f"{rel}: {exc}")
+        return False
+
+    if rec.get("run_id") != r.get("run_id"):
+        fail(f"the receipt is for run {r.get('run_id')} and the record it "
+             f"names is run {rec.get('run_id')}. The clip and the record are "
+             f"different runs.")
+        return False
+    want = f"scenarios/{Path(r['scenario']).stem}.yaml"
+    if rec.get("scenario_path") not in (r.get("scenario"), want):
+        fail(f"the receipt says the clip is of {r.get('scenario')} and the "
+             f"record is a run of {rec.get('scenario_path')}")
+        return False
+    if rec.get("source_tree_sha256") != r.get("source_tree_sha256"):
+        fail("the clip's receipt and the run record it names disagree about "
+             "which source tree produced them")
+        return False
+    if rec.get("completion") not in (None, "complete"):
+        fail(f"the clip is of a run that ended {rec.get('completion')}. A "
+             f"recording of a crashed scenario rehearses the capture path and "
+             f"nothing else.")
+        return False
+    if r.get("graph_snapshot_sha256") and \
+            rec.get("graph_snapshot_sha256") not in (None, r["graph_snapshot_sha256"]):
+        fail("the receipt and the run record name different graph snapshots")
+        return False
+    # The overlay is what makes an unrelated clip impossible to substitute.
+    if r.get("overlay_text") != r.get("run_id"):
+        fail(f"the receipt says the frame carries {r.get('overlay_text')!r} "
+             f"and the run is {r.get('run_id')!r}. The overlay is the only "
+             f"thing tying the picture to the run.")
+        return False
+    return True
+
+
 def main() -> int:
     current = digest(from_worktree())
     print(f"  source tree {current[:12]}")
@@ -106,25 +168,53 @@ def main() -> int:
             elif not r.get("target"):
                 fail("the receipt records no build target, so nothing says "
                      "where this was rebuilt")
+            elif not Path(r["target"]).is_dir():
+                # Round 6 finding 4. A receipt naming a prefix that is not
+                # there describes a rebuild whose output nobody can look at.
+                fail(f"the receipt says it rebuilt into {r['target']}, which "
+                     f"does not exist. Either the rehearsal never ran or its "
+                     f"output is gone, and neither is a rehearsal W3 can be "
+                     f"accepted on.")
+            elif steps != STEPS:
+                fail(f"steps_run is not what rehearse_install.sh runs. Wanted "
+                     f"{STEPS}, got {steps}. Five strings of any kind used to "
+                     f"be enough.")
             else:
                 body = tpath.read_text(encoding="utf-8", errors="replace")
                 bad = [ln for ln in body.splitlines()
                        if ln.startswith("[exit ") and ln.strip() != "[exit 0]"]
+                # Each label has to appear as its own transcript section, with
+                # a zero exit after it and before the next section starts.
+                missing = []
+                for label in STEPS:
+                    head = f"=== {label}"
+                    at = body.find(head)
+                    if at < 0:
+                        missing.append(label)
+                        continue
+                    rest = body[at + len(head):]
+                    nxt = rest.find("\n=== ")
+                    section = rest if nxt < 0 else rest[:nxt]
+                    if "[exit 0]" not in section:
+                        missing.append(label)
                 if bad:
                     fail(f"the transcript records {len(bad)} non-zero exit(s) "
                          f"while the receipt says pass: {bad[:3]}")
-                elif len(steps) < 5:
-                    fail(f"the rehearsal ran {len(steps)} steps; a partial "
-                         f"rebuild proves less than none")
-                elif body.count("[exit 0]") < len(steps):
-                    fail(f"the receipt claims {len(steps)} steps and the "
-                         f"transcript shows {body.count('[exit 0]')} completing")
+                elif missing:
+                    fail(f"the transcript has no completed section for "
+                         f"{missing}. The receipt claims these ran; the "
+                         f"transcript is where they would have said so.")
                 else:
                     ok(f"rebuilt {r.get('done')} into {r.get('target')}, "
-                       f"{len(steps)} steps, transcript verified")
+                       f"all {len(STEPS)} steps present in the transcript")
 
     print("\n--- recording rehearsal")
     r = load(SUB / "dryrun-recording-receipt.json")
+    if r is not None:
+        if r.get("kind") != "recording-rehearsal":
+            fail(f"receipt kind is {r.get('kind')!r}. Only "
+                 f"scripts/rehearse_recording.sh writes this file.")
+            r = None
     if r is not None:
         if not check_freshness(r, "recording", current):
             pass
@@ -141,6 +231,8 @@ def main() -> int:
             elif not r.get("run_id") or not r.get("scenario"):
                 fail("the recording receipt names no run id and scenario, so "
                      "the clip is not bound to anything that ran")
+            elif not check_recording_run(r):
+                pass
             elif not shutil.which("ffprobe") or not shutil.which("ffmpeg"):
                 fail("ffmpeg is not installed, so the clip cannot be verified. "
                      "apt install ffmpeg")
