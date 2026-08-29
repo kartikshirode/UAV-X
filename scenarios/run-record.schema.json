@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "UAV-X run record",
-  "description": "Provenance contract for runs/*.jsonl. Round 2 finding 5: nothing tied runs/latest.jsonl to the scenario that had just run, so a stale green file survived a crashed simulation and a metrics writer that never saw a vehicle could satisfy a gate. uavx_eval.check validates this block before reading any metric. A metric can only be trusted after its provenance is. Round 3 finding 6: packet counts and injected events were optional, and there was no duration, so a short run with no events could satisfy every requirement. They are required now.",
+  "description": "Provenance contract for runs/*.jsonl. Round 2 finding 5: nothing tied runs/latest.jsonl to the scenario that had just run, so a stale green file survived a crashed simulation and a metrics writer that never saw a vehicle could satisfy a gate. uavx_eval.check validates this block before reading any metric. A metric can only be trusted after its provenance is. Round 3 finding 6: packet counts and injected events were optional, and there was no duration, so a short run with no events could satisfy every requirement. They are required now. Round 6 finding 5: observations, handback and relay_slot were defined here and required by nothing, so the run that proves the communication mark could omit all three and still validate. They are required per scenario through the allOf block at the end, which is why jsonschema_mini now implements if and then.",
   "type": "object",
   "required": [
     "run_id",
@@ -181,17 +181,36 @@
     },
     "observations": {
       "type": "object",
-      "description": "Round 5 finding 5: the design sized a queue and never said what delivered-once meant, so a relay could count duplicate deliveries, empty its queue after a failed send, or end the run still holding a backlog while the metrics read clean. Set equality between generated and uniquely delivered ids is the only form of the claim that cannot be satisfied by sending the same packet twice.",
+      "description": "Round 5 finding 5 asked what delivered-once means. Round 6 finding 5 is right that counts alone cannot answer it: a record saying generated 450 and unique_delivered 450 is satisfied by 450 deliveries of the wrong 450 packets. The two id sets go in, and the evaluator recomputes equality from them rather than trusting the arithmetic in the file. RFC 9171 makes the same separation, identity by source plus creation sequence on one side and delivery reports on the other.",
       "required": [
+        "generated_ids",
+        "delivered_ids",
         "generated",
         "unique_delivered",
         "duplicated",
         "expired",
         "evicted",
         "peak_queue_depth",
-        "backlog_drain_s"
+        "backlog_drain_s",
+        "control_queue_max_delay_s"
       ],
       "properties": {
+        "generated_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
+          },
+          "description": "origin_id:sequence for every observation the swarm produced during the run."
+        },
+        "delivered_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
+          },
+          "description": "origin_id:sequence for every observation the GCS accepted, deduplicated. Set equality with generated_ids is the claim."
+        },
         "generated": {
           "type": "integer",
           "minimum": 0
@@ -202,7 +221,8 @@
         },
         "duplicated": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "description": "arrivals of an id the GCS already held. Not a failure; a number the record has to carry so unique_delivered cannot be inflated by retries."
         },
         "expired": {
           "type": "integer",
@@ -214,49 +234,105 @@
         },
         "peak_queue_depth": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "description": "deepest any node's store-and-forward queue got, against the 512 packet size."
         },
         "backlog_drain_s": {
           "type": "number",
-          "minimum": 0
+          "minimum": 0,
+          "description": "route restored to backlog empty. Derived bound is 2.25 s: 450 packets at 200 per second."
+        },
+        "control_queue_max_delay_s": {
+          "type": "number",
+          "minimum": 0,
+          "description": "worst time a HELLO, LSA or role message waited behind anything. Observations never delay control, so this stays small however deep the backlog got."
         },
         "missing_ids": {
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
           },
-          "description": "origin_id:sequence for every observation generated and never uniquely delivered. Empty is the claim."
+          "description": "generated and never uniquely delivered. Empty is the claim, and it is what the evaluator prints when equality fails."
+        },
+        "unexpected_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
+          },
+          "description": "delivered but never generated. Empty is the claim."
         }
       }
     },
     "handback": {
       "type": "object",
-      "description": "Round 5 finding 1. The handback claim is that the recovered path carried data BEFORE the relay moved. Two timestamps and a named path are what make that checkable rather than asserted; without them, break-before-make and make-before-break produce identical run records.",
+      "description": "Round 5 finding 1: the claim is that the recovered path carried data BEFORE the relay moved, and without timestamps and a named path, break-before-make and make-before-break produce identical records. Round 6 finding 7: the transaction also needs an owner. The coordinator rule is a property of the disconnected component, and by the time the handback runs the component has merged, so ownership is carried from the election rather than recomputed. The owner is never the relay.",
       "required": [
-        "path",
+        "epoch",
+        "epoch_owner",
+        "staying_member",
+        "prepared_path",
+        "confirmed_observation_id",
+        "release_sender",
         "confirmed_at",
-        "release_at"
+        "release_at",
+        "observation_gap_count"
       ],
       "properties": {
-        "path": {
+        "epoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "epoch_owner": {
+          "type": "string",
+          "minLength": 3,
+          "description": "the node that opened the epoch and carried it to release. Must not be the relay."
+        },
+        "staying_member": {
+          "type": "string",
+          "minLength": 3,
+          "description": "the member whose route the owner evaluated. In link_loss, uav_4."
+        },
+        "prepared_path": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "minItems": 2
+          "minItems": 2,
+          "description": "the non-relay path named in PREPARE_RELEASE. The relay must not appear in it."
+        },
+        "prepared_path_computations": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "consecutive computations the prepared path won before PREPARE_RELEASE. Route hysteresis is 2, and a path that appears once as the radio comes back is not one to hand a vehicle back on."
+        },
+        "confirmed_observation_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_]+:[0-9]+$",
+          "description": "the observation the GCS acknowledged over the prepared path. This one id is what turns make-before-break from an intention into a fact."
+        },
+        "release_sender": {
+          "type": "string",
+          "minLength": 3,
+          "description": "who sent RELEASE. Must be epoch_owner; a release from anyone else is the stale-owner case the design forbids."
         },
         "confirmed_at": {
-          "type": "number",
-          "description": "when the GCS acknowledged an observation that arrived over the new path"
+          "type": "number"
         },
         "release_at": {
           "type": "number",
-          "description": "when the relay was told to stand down. Must be later than confirmed_at."
+          "description": "later than confirmed_at, which is the whole make-before-break claim."
+        },
+        "observation_gap_count": {
+          "type": "integer",
+          "minimum": 0
         },
         "acknowledged_ids": {
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
           }
         }
       }
@@ -295,5 +371,70 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "scenario_path": {
+            "enum": [
+              "scenarios/relay_kill.yaml",
+              "scenarios/link_loss.yaml",
+              "scenarios/mission_integrated.yaml",
+              "scenarios/queue_drain.yaml"
+            ]
+          }
+        },
+        "required": [
+          "scenario_path"
+        ]
+      },
+      "then": {
+        "required": [
+          "observations"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "scenario_path": {
+            "enum": [
+              "scenarios/link_loss.yaml"
+            ]
+          }
+        },
+        "required": [
+          "scenario_path"
+        ]
+      },
+      "then": {
+        "required": [
+          "handback"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "scenario_path": {
+            "enum": [
+              "scenarios/relay_kill.yaml",
+              "scenarios/link_loss.yaml",
+              "scenarios/mission_integrated.yaml",
+              "scenarios/queue_drain.yaml"
+            ]
+          }
+        },
+        "required": [
+          "scenario_path"
+        ]
+      },
+      "then": {
+        "required": [
+          "relay_slot"
+        ]
+      }
+    }
+  ]
 }
