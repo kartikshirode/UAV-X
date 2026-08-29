@@ -49,12 +49,18 @@ SETTLE_ALLOWANCE = 4.0
 STABILITY_WINDOW = 3.0
 RECONNECT_GATE = 45.0
 
-# What a path pays for tying up a vehicle in a temporary relay role. Under one
-# hop on purpose: it breaks ties and can never outrank a genuinely shorter
-# route. Round 5 finding 1: with hop count alone the recovered path and the
-# relay path tie, a tie never wins route hysteresis, and the relay could
-# therefore never be released.
-RELAY_SURCHARGE = 0.5
+# Round 5 finding 1: with hop count alone the recovered path and the relay path
+# tie, a tie never wins route hysteresis, and the relay could therefore never be
+# released. The first fix was a scalar surcharge of 0.5 per temporary relay on
+# the path, and round 6 finding 9 is right that it only behaves for one relay.
+# Two relays on a three hop path cost 3 + 2(0.5) = 4, which ties a four hop path
+# carrying none; three relays lose to it outright. Stage 1 never builds a relay
+# chain, so nothing here would have caught it, and the rule as frozen would have
+# been wrong the moment a second disturbance did.
+#
+# The route key is a pair instead, compared left to right, which is what
+# `route_key` returns. Fewer hops always wins. Relay count only ever decides a
+# tie. No weight to pick, and nothing to be wrong at a larger relay count.
 MIN_SEPARATION = 10.0
 
 # A relay slot has to clear every vehicle that is still flying, by more than the
@@ -166,13 +172,16 @@ def all_paths(pos: dict, src: str, dst: str) -> list:
     return sorted(out, key=lambda p: (len(p), p))
 
 
-def path_cost(path: list, relays: set) -> float:
-    """One per hop, plus a surcharge for every node holding a temporary relay.
+def route_key(path: list, relays: set) -> tuple:
+    """(hops, temporary relays on the path). Lower wins, compared left to right.
 
     Hop count alone cannot express "this route is as short as the other one but
-    it costs me a surveyor", and that is the whole handback problem.
+    it costs me a surveyor", and that is the whole handback problem. A pair says
+    it without having to price a relay against a hop: Dijkstra compares the
+    tuple, so a shorter path can never lose however many relays sit on the
+    alternative.
     """
-    return (len(path) - 1) + RELAY_SURCHARGE * len(set(path) & relays)
+    return (len(path) - 1, len(set(path) & relays))
 
 
 def dump_matrix(pos: dict, title: str) -> None:
@@ -477,6 +486,7 @@ def run(quiet: bool = False) -> int:
         fail(f"gate of {RECONNECT_GATE:.0f} s is below the derived {budget:.1f} s and would fail correct code")
 
     check_integrated(out, ok, quiet)
+    check_route_key(out, ok)
     check_link_loss(out, ok)
     check_rejected(out, ok, build_integrated())
     check_encounter(out, ok)
@@ -698,6 +708,65 @@ def check_integrated(out, ok, quiet: bool) -> None:
         f"{need} of them")
 
 
+def check_route_key(out, ok) -> None:
+    """The route rule has to hold for topologies Stage 1 never builds.
+
+    Round 6 finding 9. The scalar surcharge was checked against the one
+    situation the frozen scenarios produce, a single temporary relay, and it is
+    correct there. It is wrong at two. The rule ends up in the proposal and in
+    the implementation, and a later disturbance that elects a second relay while
+    the first is still held would silently start routing the long way round.
+
+    So the property gets checked directly, over relay counts Stage 1 will not
+    reach, rather than inferred from a constant being under 1.
+    """
+    out("\n" + "=" * 62)
+    out("route key: fewer hops always wins, relays only break ties")
+    out("=" * 62)
+
+    # The case the old rule got wrong. Three hops through two temporary relays
+    # against four hops through none.
+    short = ["uav_4", "uav_5", "uav_6", "gcs"]
+    long_ = ["uav_4", "uav_2", "uav_1", "uav_0", "gcs"]
+    two = {"uav_5", "uav_6"}
+    out(f"    {' -> '.join(short):<38} key {route_key(short, two)}")
+    out(f"    {' -> '.join(long_):<38} key {route_key(long_, two)}")
+    out(f"    the same two under the old scalar rule: "
+        f"{(len(short) - 1) + 0.5 * len(set(short) & two):.1f} and "
+        f"{(len(long_) - 1) + 0.5 * len(set(long_) & two):.1f}")
+    if route_key(short, two) < route_key(long_, two):
+        ok("the three hop path through two relays still beats the four hop path "
+           "through none. A scalar surcharge of 0.5 ties them here, and loses "
+           "outright at three relays")
+    else:
+        fail("a genuinely shorter path lost to a longer one, which is the whole "
+             "thing the pair is for")
+
+    # And exhaustively, not just on the one case that motivated it. Every hop
+    # count against every hop count, at every relay count a path could carry.
+    worst = None
+    for hops_a in range(1, 8):
+        for hops_b in range(1, 8):
+            for relays_a in range(0, hops_a + 1):
+                for relays_b in range(0, hops_b + 1):
+                    a = (hops_a, relays_a)
+                    b = (hops_b, relays_b)
+                    if hops_a < hops_b and not a < b:
+                        worst = (a, b)
+    if worst is None:
+        ok("across every hop count to 7 and every relay count a path of that "
+           "length could carry, no shorter path ever loses to a longer one")
+    else:
+        fail(f"{worst[0]} did not beat {worst[1]} despite being shorter")
+
+    # The tie-break half. Equal hops, and the one holding fewer relays wins.
+    if (3, 0) < (3, 1) < (3, 2):
+        ok("at equal hops the route holding fewer temporary relays wins, which "
+           "is what makes the handback release reachable")
+    else:
+        fail("equal hop routes do not order by relay count")
+
+
 def check_link_loss(out, ok) -> None:
     """link_loss.yaml: the failure the challenge names that a kill cannot show.
 
@@ -761,7 +830,7 @@ def check_link_loss(out, ok) -> None:
     routes = all_paths(post, stays, "gcs")
     for p in routes:
         print(f"    {' -> '.join(p):<34} {len(p) - 1} hops, "
-              f"cost {path_cost(p, {mover}):.1f}")
+              f"key {route_key(p, {mover})}")
 
     fewest = min(len(p) - 1 for p in routes)
     shortest = [p for p in routes if len(p) - 1 == fewest]
@@ -775,25 +844,19 @@ def check_link_loss(out, ok) -> None:
              f"arguing against a problem that has moved. Recheck the rule "
              f"before trusting it.")
 
-    ranked = sorted(routes, key=lambda p: path_cost(p, {mover}))
+    ranked = sorted(routes, key=lambda p: route_key(p, {mover}))
     best = ranked[0]
-    margin = path_cost(ranked[1], {mover}) - path_cost(best, {mover}) if len(ranked) > 1 else 0.0
-    note("link_loss:handback_margin", margin, "cost")
-    if mover not in best and margin > 0:
-        ok(f"with the relay surcharge the winner is {' -> '.join(best)}, "
-           f"clear of {mover} by {margin:.1f}, so the recovered path installs "
-           f"itself and the release predicate becomes reachable")
+    runner = ranked[1] if len(ranked) > 1 else None
+    strict = runner is not None and route_key(best, {mover}) < route_key(runner, {mover})
+    if mover not in best and strict:
+        ok(f"on the pair the winner is {' -> '.join(best)} at "
+           f"{route_key(best, {mover})}, strictly below {route_key(runner, {mover})}, "
+           f"so the recovered path installs itself and the release predicate "
+           f"becomes reachable")
     else:
-        fail(f"the cheapest route is {' -> '.join(best)} by {margin:.1f}. The "
-             f"handback still cannot happen without breaking the link first.")
-
-    # And the surcharge must never outrank a genuinely shorter path, or the
-    # swarm would route the long way round to spare a relay.
-    if RELAY_SURCHARGE < 1.0:
-        ok(f"the surcharge is {RELAY_SURCHARGE}, under one hop, so it breaks "
-           f"ties and can never beat a shorter path")
-    else:
-        fail(f"a surcharge of {RELAY_SURCHARGE} can outrank a real hop")
+        fail(f"the cheapest route is {' -> '.join(best)} at "
+             f"{route_key(best, {mover})}. The handback still cannot happen "
+             f"without breaking the link first.")
 
     # The way home must not fly through anybody.
     worst = 1e9

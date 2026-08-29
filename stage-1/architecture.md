@@ -106,7 +106,7 @@ Link-state, chosen because it fits in a paragraph of the proposal and is exactly
 | route hysteresis | a new route must win for 2 consecutive computations before it replaces the current one |
 | application packet rate | 5 Hz per node |
 | store-and-forward queue | 512 packets per node, oldest dropped first |
-| `relay_surcharge` | 0.5, added per temporary relay on a path |
+| route key | `(hops, temporary relays on the path)`, compared left to right |
 
 Each node floods its neighbour table, builds a graph, and runs Dijkstra to `gcs`. Data forwards hop by hop. A node with no route holds what it cannot send.
 
@@ -126,10 +126,14 @@ A tie. A tie never wins twice, so the route through the relay is never replaced,
 So the cost gains one term:
 
 ```
-cost(path) = hops + relay_surcharge * (temporary relays on the path)
+key(path) = (hops, temporary relays on the path)
 ```
 
-3.0 against 3.5, so the recovered path wins on its own merits and installs itself normally. The surcharge is deliberately **under one hop**: it breaks ties and can never make the swarm route the long way round to spare a relay. `check_geometry.py` enumerates every loop-free path and asserts both halves, the tie without the surcharge and the strict win with it, so neither can quietly stop being true.
+Dijkstra compares that pair left to right. `(3, 0)` against `(3, 1)`, so the recovered path wins on its own merits and installs itself normally.
+
+The first version of this was a scalar, hops plus 0.5 per relay, and round 6 finding 9 is right that it only behaves while a path holds at most one relay. Two relays on a three hop path come to 4.0, which ties a four hop path holding none, and at three relays the shorter path loses. Stage 1 never elects a second relay while the first is still held, so none of the seven scenarios would have shown it, and the rule would have gone into the proposal wrong.
+
+A pair needs no weight and cannot be wrong at a larger relay count. Fewer hops always wins. Relay count only ever decides a tie. `check_geometry.py` enumerates every loop-free path, asserts the tie on hop count alone and the strict win on the pair, and then checks the ordering property over every hop count to 7 against every relay count a path that long could carry.
 
 What this expresses is real, not a trick to make one route win: a route as short as another but which ties up a surveyor is worse, and hop count has no way to say so. Fixing it with geometry, by nudging a position until one route happens to be shorter, would have brought the same bug back with the next topology.
 
@@ -228,7 +232,7 @@ Without this a swarm that loses a link once is permanently one vehicle short, wh
 
 **Make before break.** The old link is never torn down until its replacement has carried real traffic. Round 5 finding 1 is right that "a route exists that avoids the relay" is not enough on its own: acting on the mere existence of an alternate breaks the installed next hop before the alternate is selected.
 
-1. The coordinator sees a route to `gcs` that does not use the relay. With the surcharge above it is now also the **cheapest** route, so it wins hysteresis and installs itself.
+1. The epoch owner sees a route to `gcs` that does not use the relay. On the route key above it is also the **cheapest** route, so it wins hysteresis and installs itself.
 2. Coordinator sends `PREPARE_RELEASE(e, new_path)`. **The relay keeps forwarding.** Nothing has been given up yet.
 3. The staying members send observations over the new path.
 4. The GCS acknowledges, naming the observation ids it received and the path they arrived on.
@@ -442,7 +446,7 @@ Common geometry, identical to `relay_kill` in every respect except the injected 
 
 What happens. `uav_3` and `uav_4` lose their route exactly as in `relay_kill`, elect, and `uav_3` flies 195.0 m to the slot at (317.3, -36.8, 75). That slot sits **52.4 m** from the still-flying `uav_2`, far past the 15 m clearance, because the band puts every relay above every mission corridor. The route returns inside the same 32.5 s budget.
 
-At `t = 240 s` the radio comes back, and this is where round 5 finding 1 landed. On hop count the recovered route and the relay route both cost three, a tie never wins hysteresis, and the relay could never be released. The `relay_surcharge` in section 3 breaks it: 3.0 against 3.5, so `uav_4 -> uav_2 -> uav_1 -> gcs` installs itself on its own merits.
+At `t = 240 s` the radio comes back, and this is where round 5 finding 1 landed. On hop count the recovered route and the relay route both cost three, a tie never wins hysteresis, and the relay could never be released. The route key in section 3 breaks it: `(3, 0)` against `(3, 1)`, so `uav_4 -> uav_2 -> uav_1 -> gcs` installs itself on its own merits.
 
 Then the handback runs make before break. `uav_3` keeps forwarding while observations go over the new path, the GCS acknowledges naming that path, and only then does `uav_3` fly home. The old link is live throughout, so there is no second outage. Its flight out and back never comes within 38.1 m of another vehicle.
 
