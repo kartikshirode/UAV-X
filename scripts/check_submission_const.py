@@ -15,6 +15,12 @@ REQUIRED_SECTIONS = [
     "regulat",
 ]
 
+# Round 6, the conclusion pass. W1's chunk gates need a scenario to run, and it
+# must not be one of the nine: harness_check proves the harness works and says
+# nothing about the rubric. Citing it as evidence would be citing a hover.
+# check_docs.py knows it is exempt from both directions of the scenario check.
+HARNESS_RUNS = ["harness_check"]
+
 REQUIRED_RUNS = [
     "survey_baseline", "relay_required", "direct_only", "relay_kill",
     "link_loss", "encounter", "encounter_noyield", "mission_integrated",

@@ -596,6 +596,21 @@ else:
                          f"the queue size was derived from")
                     continue
 
+        # A run that swapped is a run whose timings mean nothing, and
+        # time_to_reconnect_s is graded. The schema can require the field; only
+        # this can say what value is acceptable.
+        res = record.get("resources") or {}
+        if res.get("swap_used_mib", 0) > 0:
+            fail(f"{scenario}: the machine swapped {res['swap_used_mib']} MiB "
+                 f"during this run, so every timing in it is a measurement of "
+                 f"the swap file")
+            continue
+        if res.get("samples", 0) < 10:
+            fail(f"{scenario}: resources.samples is {res.get('samples')}. Too "
+                 f"few samples and a healthy peak reads the same as one nobody "
+                 f"watched.")
+            continue
+
         want_scenario = f"scenarios/{scenario}.yaml"
         if record.get("scenario_path") != want_scenario:
             fail(f"{scenario}: {path.name} records a run of "

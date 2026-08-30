@@ -21,7 +21,8 @@
     "injected_events",
     "requested_duration_s",
     "elapsed_sim_s",
-    "source_tree_sha256"
+    "source_tree_sha256",
+    "resources"
   ],
   "additionalProperties": true,
   "properties": {
@@ -375,6 +376,36 @@
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
       "description": "sha256 of the ROS graph snapshot captured during this run. Round 6 finding 6: uavx_invalidate_latest deleted only latest.jsonl, so a run that missed its graph capture was certified against the previous scenario's graph. The seam check compares this against the file it was handed, so a reused snapshot fails rather than passes."
+    },
+    "resources": {
+      "type": "object",
+      "description": "Peak memory and swap, sampled through the run. The plan has asked for this since W1 and the schema never carried it, so nothing could have checked it. Four PX4 instances plus gzserver plus our nodes have to fit in roughly 11 GB of WSL memory and nobody has measured them under load. A run that swaps is a run whose timings mean nothing, which matters because time_to_reconnect_s is a graded number.",
+      "required": [
+        "peak_rss_mib",
+        "swap_used_mib",
+        "samples"
+      ],
+      "properties": {
+        "peak_rss_mib": {
+          "type": "number",
+          "minimum": 0,
+          "description": "highest total resident set across all simulator and swarm processes."
+        },
+        "swap_used_mib": {
+          "type": "number",
+          "minimum": 0,
+          "description": "zero is the claim. Anything above it means the box was over budget."
+        },
+        "samples": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "how many times it was sampled. Zero samples and a healthy peak read identically."
+        },
+        "peak_at_s": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
     }
   },
   "allOf": [
