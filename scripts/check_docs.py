@@ -199,10 +199,59 @@ print("\n--- the plan and the gate")
 gate = read("scripts/gate.sh")
 plan = text["stage-1/plan.md"]
 
+# Round 6, the conclusion pass. Each week's gate is now a list of calls to
+# chunk functions, so reading gate_wN's body alone would find no scenarios at
+# all and every check below would pass on an empty string. Inline the chunks.
+chunk_bodies = {m.group(1): m.group(2) for m in
+                re.finditer(r"^(w\d_\w+)\(\)\s*\{(.*?)^\}", gate, re.M | re.S)}
+
+# A scenario reached through a shell variable is still a scenario the gate
+# runs. Without this the checks below read "${W1_SCENARIO}" and conclude the
+# gate runs nothing, which is the wrong answer in the reassuring direction.
+gate_vars = dict(re.findall(r'^(\w+)="([^"$]+)"$', gate, re.M))
+
+
+def expand(text: str) -> str:
+    for name, value in gate_vars.items():
+        text = text.replace("${" + name + "}", value)
+    return text
+
+
+chunk_bodies = {k: expand(v) for k, v in chunk_bodies.items()}
+
+helpers = {m.group(1): m.group(2) for m in
+           re.finditer(r"^(run_scenario|check_run|gate_test)\(\)\s*\{(.*?)^\}",
+                       gate, re.M | re.S)}
+for name, body in list(chunk_bodies.items()):
+    for hname, hbody in helpers.items():
+        if re.search(r"(^|\s)" + hname + r"\s", body):
+            chunk_bodies[name] = chunk_bodies[name] + "\n" + expand(hbody)
+
 gate_weeks = {}
 for m in re.finditer(r"^gate_w(\d)\(\)\s*\{(.*?)^\}", gate, re.M | re.S):
-    gate_weeks[int(m.group(1))] = m.group(2)
-gate_scenarios = {w: set(re.findall(r"run_scenario\s+scenarios/(\w+)\.yaml", body))
+    body = m.group(2)
+    for name in re.findall(r"^\s*(w\d_\w+)\s*$", body, re.M):
+        body += "\n" + chunk_bodies.get(name, "")
+    gate_weeks[int(m.group(1))] = body
+
+before = len(problems)
+called = set()
+for body in gate_weeks.values():
+    called |= set(re.findall(r"^\s*(w\d_\w+)\s*$", body, re.M))
+orphans = sorted(set(chunk_bodies) - called)
+for c in orphans:
+    fail(f"{c} is defined in gate.sh and no week gate calls it, so the work it "
+         f"checks is optional however the plan describes it")
+guard(before, f"all {len(chunk_bodies)} gate chunks are reached by a week gate")
+
+# Every chunk must also be reachable on its own, or "run one chunk" is a
+# promise the dispatch does not keep.
+before = len(problems)
+dispatched = set(re.findall(r"^\s*\d+\.\d+\)\s*echo\s+(w\d_\w+)", gate, re.M))
+for c in sorted(set(chunk_bodies) - dispatched):
+    fail(f"{c} has no chunk id in gate.sh, so it cannot be run on its own")
+guard(before, f"all {len(chunk_bodies)} chunks have an id you can run alone")
+gate_scenarios = {w: set(re.findall(r"run_scenario\s+\"?scenarios/(\w+)\.yaml", body))
                   for w, body in gate_weeks.items()}
 
 plan_weeks = {}
@@ -224,6 +273,11 @@ guard(before, "every scenario the plan promises is run by the gate that owns it"
 before = len(problems)
 all_run = set().union(*gate_scenarios.values()) if gate_scenarios else set()
 frozen = set(re.findall(r"^### `(\w+)\.yaml`", arch, re.M))
+# harness_check proves the harness and is never evidence for a rubric row, so
+# it is deliberately outside both the frozen geometry and the W5 run list.
+sys.path.insert(0, str(REPO / "scripts"))
+from check_submission_const import HARNESS_RUNS               # noqa: E402
+all_run -= set(HARNESS_RUNS)
 for s in sorted(frozen - all_run):
     fail(f"architecture.md freezes scenarios/{s}.yaml and no gate ever runs it")
 guard(before, f"all {len(frozen)} frozen scenarios are run by a gate")
@@ -255,6 +309,52 @@ for s in sorted(extra):
          f"evidence for nothing")
 guard(before, f"the {len(REQUIRED_RUNS)} runs W5 requires are exactly the ones "
               f"the gates produce")
+
+# Round 6, the conclusion pass, and the check that would have caught W1 six
+# rounds ago. The plan-to-gate check above compares scenario files only, so a
+# deliverable that is not a scenario was invisible to it. W1 promises seven
+# things and produces no scenario at all, which put the whole week outside
+# every check in this file.
+#
+# The plan states its deliverables as chunk tables now, one row per chunk:
+#
+#     | `1.3` | the run record writer, and `scripts/validate_record.py` | ... |
+#
+# Every row must name a chunk the gate dispatches, and every module or script
+# in that row must appear in that chunk's function. A row nothing enforces is
+# a promise, and the gate is the only contract in this project.
+before = len(problems)
+rows = re.findall(r"^\|\s*`(\d\.\d)`\s*\|([^|]*)\|", plan, re.M)
+if len(rows) < 20:
+    fail(f"plan.md lists {len(rows)} chunk rows and gate.sh dispatches "
+         f"{len(chunk_bodies)}. If the plan stopped stating deliverables as "
+         f"chunk rows, this check silently stopped checking anything.")
+dispatch = dict(re.findall(r"^\s*(\d+\.\d+)\)\s*echo\s+(w\d_\w+)", gate, re.M))
+for chunk_id, produces in rows:
+    fn = dispatch.get(chunk_id)
+    if not fn:
+        fail(f"plan.md names chunk {chunk_id} and gate.sh dispatches no such "
+             f"chunk, so nothing runs it")
+        continue
+    body = chunk_bodies.get(fn, "")
+    names = [n for n in re.findall(r"`([A-Za-z0-9_./]+)`", produces)
+             if "/" in n or n.endswith((".sh", ".py", ".yaml", ".json"))
+             or n.startswith("uavx_")]
+    for name in names:
+        leaf = name.split("/")[-1]
+        stem = leaf.removesuffix(".yaml")
+        # A package name covers the node inside it: uavx_sim/scenario_runner is
+        # gated by building and testing uavx_sim.
+        pkg = name.split("/")[0]
+        if not any(x in body for x in (leaf, stem, name, pkg)):
+            fail(f"plan.md chunk {chunk_id} promises {name} and {fn}() in "
+                 f"gate.sh never mentions it")
+for chunk_id in sorted(dispatch):
+    if chunk_id not in {r[0] for r in rows}:
+        fail(f"gate.sh dispatches chunk {chunk_id} and plan.md has no row for "
+             f"it, so the work it checks is undocumented")
+guard(before, f"all {len(rows)} chunk rows in plan.md match a gate chunk that "
+              f"names the same artifacts")
 
 # Artifacts the plan promises must be checked by something the gate calls.
 before = len(problems)
