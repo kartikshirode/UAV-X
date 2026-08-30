@@ -250,7 +250,10 @@ def build_package(dest: Path) -> dict:
         }
         rec.update(evidence_blocks(scenario))
         (runs / f"{rid}.jsonl").write_text(json.dumps(rec), encoding="utf-8")
-        manifest_runs[scenario] = str((runs / f"{rid}.jsonl").resolve())
+        # Round 7 finding 3: this wrote an absolute path, which is exactly
+        # what the checker now refuses. Repo-relative under runs/, with
+        # UAVX_RUNS_ROOT pointing the checker at this temp tree.
+        manifest_runs[scenario] = f"runs/{rid}.jsonl"
 
     (dest / "evidence-manifest.json").write_text(
         json.dumps({"runs": manifest_runs}, indent=2), encoding="utf-8")
@@ -267,8 +270,12 @@ def build_package(dest: Path) -> dict:
                            "package can be built. A suite that silently skips "
                            "its own oracle is the bug this file exists to stop.")
 
+    # Round 7 finding 3: the checker revalidated nine run records and nothing
+    # required them to be sent, so the evidence behind every number in the
+    # proposal could stay on the machine that produced it.
     attachments = []
-    for name in ("proposal.pdf", "INSTALL.md", "demo.mp4", archive.name):
+    for name in (list(manifest_runs.values())
+                 + ["proposal.pdf", "INSTALL.md", "demo.mp4", archive.name]):
         p = dest / name
         attachments.append({"name": name, "bytes": p.stat().st_size,
                             "sha256": sha256_bytes(p.read_bytes())})
@@ -406,15 +413,55 @@ def _no_smoke(dest, built):
 # it, so nothing could have failed for its absence.
 @case("a run that swapped", "the machine swapped")
 def _swapped(dest, built):
-    p = Path(built["manifest_runs"]["mission_integrated"])
+    p = (dest / built["manifest_runs"]["mission_integrated"])
     rec = json.loads(p.read_text(encoding="utf-8"))
     rec["resources"]["swap_used_mib"] = 512.0
     p.write_text(json.dumps(rec), encoding="utf-8")
 
 
+# Round 7 finding 3. Path("/repo") / "C:/x" is "C:/x", so an absolute path
+# escaped the repository and the checker happily validated a file the judge
+# would never receive.
+@case("evidence pointing at an absolute path outside the package",
+      "an absolute path or a ..")
+def _evidence_absolute(dest, built):
+    man = json.loads((dest / "evidence-manifest.json").read_text(encoding="utf-8"))
+    man["runs"]["relay_kill"] = str((dest / man["runs"]["relay_kill"]).resolve())
+    (dest / "evidence-manifest.json").write_text(json.dumps(man, indent=2),
+                                                 encoding="utf-8")
+
+
+@case("evidence walking out of the package with dot dot",
+      "an absolute path or a ..")
+def _evidence_traversal(dest, built):
+    man = json.loads((dest / "evidence-manifest.json").read_text(encoding="utf-8"))
+    man["runs"]["relay_kill"] = "runs/../../elsewhere/relay_kill.jsonl"
+    (dest / "evidence-manifest.json").write_text(json.dumps(man, indent=2),
+                                                 encoding="utf-8")
+
+
+@case("evidence that is checked and never sent", "and not the runs behind them")
+def _evidence_undelivered(dest, built):
+    man = json.loads((dest / "attachment-manifest.json").read_text(encoding="utf-8"))
+    man["attachments"] = [i for i in man["attachments"]
+                          if not str(i["name"]).startswith("runs/")]
+    (dest / "attachment-manifest.json").write_text(json.dumps(man, indent=2),
+                                                   encoding="utf-8")
+
+
+# Round 7 finding 5: the peak was required to exist and compared with nothing.
+@case("a run that needed more memory than the target has",
+      "against a 10500 MiB ceiling")
+def _over_memory(dest, built):
+    p = (dest / built["manifest_runs"]["mission_integrated"])
+    rec = json.loads(p.read_text(encoding="utf-8"))
+    rec["resources"]["peak_rss_mib"] = 20000.0
+    p.write_text(json.dumps(rec), encoding="utf-8")
+
+
 @case("a required run record emptied", "fails the run-record schema")
 def _empty_run(dest, built):
-    Path(built["manifest_runs"]["relay_kill"]).write_text("{}", encoding="utf-8")
+    (dest / built["manifest_runs"]["relay_kill"]).write_text("{}", encoding="utf-8")
 
 
 # Round 6 finding 5. The three evidence blocks were defined and required by
@@ -422,7 +469,7 @@ def _empty_run(dest, built):
 @case("the outage run with its observation evidence removed",
       "missing 'observations'")
 def _no_observations(dest, built):
-    p = Path(built["manifest_runs"]["link_loss"])
+    p = (dest / built["manifest_runs"]["link_loss"])
     rec = json.loads(p.read_text(encoding="utf-8"))
     del rec["observations"]
     p.write_text(json.dumps(rec), encoding="utf-8")
@@ -430,7 +477,7 @@ def _no_observations(dest, built):
 
 @case("the handback run with no epoch owner", "missing 'epoch_owner'")
 def _no_owner(dest, built):
-    p = Path(built["manifest_runs"]["link_loss"])
+    p = (dest / built["manifest_runs"]["link_loss"])
     rec = json.loads(p.read_text(encoding="utf-8"))
     del rec["handback"]["epoch_owner"]
     p.write_text(json.dumps(rec), encoding="utf-8")
@@ -440,7 +487,7 @@ def _no_owner(dest, built):
 @case("delivered counts that match while the ids do not",
       "delivered_ids")
 def _wrong_ids(dest, built):
-    p = Path(built["manifest_runs"]["queue_drain"])
+    p = (dest / built["manifest_runs"]["queue_drain"])
     rec = json.loads(p.read_text(encoding="utf-8"))
     rec["observations"]["delivered_ids"] = [
         f"uav_9:{i}" for i in range(len(rec["observations"]["generated_ids"]))]
@@ -449,7 +496,7 @@ def _wrong_ids(dest, built):
 
 @case("a run produced from different source", "The evidence and the code do not match")
 def _wrong_source(dest, built):
-    p = Path(built["manifest_runs"]["mission_integrated"])
+    p = (dest / built["manifest_runs"]["mission_integrated"])
     rec = json.loads(p.read_text(encoding="utf-8"))
     rec["source_tree_sha256"] = "9" * 64
     p.write_text(json.dumps(rec), encoding="utf-8")
@@ -457,7 +504,7 @@ def _wrong_source(dest, built):
 
 @case("a run whose injected event never fired", "never fired")
 def _unfired(dest, built):
-    p = Path(built["manifest_runs"]["relay_kill"])
+    p = (dest / built["manifest_runs"]["relay_kill"])
     rec = json.loads(p.read_text(encoding="utf-8"))
     rec["injected_events"] = [{"type": "kill", "target": "uav_2",
                                "requested_t": 70, "observed_t": None}]
@@ -466,7 +513,7 @@ def _unfired(dest, built):
 
 @case("a run cut short of its requested duration", "of a requested")
 def _short(dest, built):
-    p = Path(built["manifest_runs"]["survey_baseline"])
+    p = (dest / built["manifest_runs"]["survey_baseline"])
     rec = json.loads(p.read_text(encoding="utf-8"))
     rec["elapsed_sim_s"] = 20
     p.write_text(json.dumps(rec), encoding="utf-8")
@@ -559,6 +606,7 @@ def _bad_human(dest, built):
 
 def run_checker(dest: Path) -> tuple:
     env = dict(os.environ, UAVX_SUBMISSION_DIR=str(dest),
+                           UAVX_RUNS_ROOT=str(dest),
                UAVX_RUNS_DIR=str(dest / "runs"),
                PYTHONPATH=str(stub_uavx_eval(dest)),
                UAVX_SPEC_CHECKER=str(dest / "stub_spec.py"))

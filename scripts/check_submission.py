@@ -48,7 +48,7 @@ from source_tree_hash import blob_id                      # noqa: E402
 import check_human_preflight                              # noqa: E402
 # One definition, shared with scripts/test_submission_fixtures.py. Round 5
 # finding 2: these lists were copied into the fixture by hand and drifted.
-from check_submission_const import (REQUIRED_RUNS, REQUIRED_SECTIONS,
+from check_submission_const import (PEAK_RSS_CEILING_MIB, REQUIRED_RUNS, REQUIRED_SECTIONS,
                                    REQUIRED_COMPLIANCE)  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
@@ -56,6 +56,10 @@ REPO = Path(__file__).resolve().parent.parent
 # at a tampered copy and prove it says no. A checker nobody has watched reject
 # something is not evidence, and this repo has shipped two of those.
 SUB = Path(os.environ.get("UAVX_SUBMISSION_DIR") or (REPO / "submission"))
+# Where run records live. Overridable only so the fixture suite can build a
+# package in a temp tree; W5 uses the repository. Round 7 finding 3: evidence
+# paths are resolved under this root and may not escape it.
+RUNS_ROOT = Path(os.environ.get("UAVX_RUNS_ROOT") or REPO).resolve()
 RUNS = Path(os.environ.get("UAVX_RUNS_DIR") or (REPO / "runs"))
 
 # Techfest Stage 1, from context.md: a 6-8 page technical proposal with software
@@ -548,7 +552,25 @@ else:
         if not rel:
             fail(f"evidence manifest names no run for {scenario}")
             continue
-        path = REPO / rel
+        # Round 7 finding 3: this was REPO / rel, and Path("/repo") / "C:/x"
+        # is "C:/x". An absolute path escaped the repository entirely and a
+        # ../ walked out of it, so a record prepared anywhere on the machine
+        # could satisfy the package while the judge received no copy of it.
+        rel = str(rel).replace("\\", "/")
+        if Path(rel).is_absolute() or rel.startswith("/") or ".." in Path(rel).parts:
+            fail(f"{scenario}: the evidence manifest names {rel!r}. Run records "
+                 f"are named by a path inside runs/, because an absolute path "
+                 f"or a .. points at a file that is not in the package.")
+            continue
+        if not rel.startswith("runs/"):
+            fail(f"{scenario}: {rel} is not under runs/. Evidence lives in one "
+                 f"place so that what is checked and what is sent are the same "
+                 f"files.")
+            continue
+        path = (RUNS_ROOT / rel).resolve()
+        if RUNS_ROOT not in path.parents:
+            fail(f"{scenario}: {rel} resolves outside {RUNS_ROOT}")
+            continue
         if not path.is_file():
             fail(f"{scenario}: {rel} does not exist")
             continue
@@ -600,6 +622,16 @@ else:
         # time_to_reconnect_s is graded. The schema can require the field; only
         # this can say what value is acceptable.
         res = record.get("resources") or {}
+        # Round 7 finding 5: the peak was required to exist and never
+        # compared with anything, so a record reporting 20 GB resident and no
+        # swap passed. The stated capacity risk was the one thing never tested.
+        if res.get("peak_rss_mib", 0) > PEAK_RSS_CEILING_MIB:
+            fail(f"{scenario}: peak resident memory was "
+                 f"{res['peak_rss_mib']:.0f} MiB against a "
+                 f"{PEAK_RSS_CEILING_MIB:.0f} MiB ceiling. The run fitted on "
+                 f"the machine that produced it and will not fit on the "
+                 f"target.")
+            continue
         if res.get("swap_used_mib", 0) > 0:
             fail(f"{scenario}: the machine swapped {res['swap_used_mib']} MiB "
                  f"during this run, so every timing in it is a measurement of "
@@ -690,6 +722,24 @@ else:
     # never had to be sent.
     listed = {i.get("name") for i in att.get("attachments", [])}
     listed |= {i.get("name") for i in att.get("delivered_by_link", [])}
+
+    # Round 7 finding 3, the other half. The checker revalidated every named
+    # run record and nothing required those records to be in the email, so the
+    # evidence behind every number in the proposal could stay on this machine.
+    if evidence is not None and archive is not None:
+        named = [str(v).replace("\\", "/") for v in
+                 (evidence.get("runs") or {}).values()]
+        inside = archive_names if "archive_names" in dir() else set()
+        missing_ev = [r for r in named
+                      if r not in listed
+                      and Path(r).name not in listed
+                      and f"uavx-source/{r}" not in inside
+                      and r not in inside]
+        if missing_ev:
+            fail(f"{len(missing_ev)} run record(s) are named as evidence and "
+                 f"are in neither the archive nor the delivery manifest, so "
+                 f"the judge gets the numbers and not the runs behind them: "
+                 f"{missing_ev[:3]}")
     needed = ["proposal.pdf", "INSTALL.md"]
     if archive is not None:
         needed.append(archive.name)

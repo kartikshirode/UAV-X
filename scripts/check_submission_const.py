@@ -46,3 +46,14 @@ REQUIRED_COMPLIANCE = [
     ("DGCA", "the authority"),
     ("simulation only", "the plain statement that Stage 1 and 2 fly nothing"),
 ]
+
+
+# Round 7 finding 5. The plan has said since W1 that four PX4 instances,
+# gzserver and our nodes have to fit in roughly 11 GB of WSL memory, and both
+# gates checked only that a peak was recorded and that swap was zero. A record
+# claiming 20,000 MiB resident passed.
+#
+# 11821 MiB is what this machine reports free, measured 26 August. The ceiling
+# is 10,500, leaving room for the shell running the gate and for the sampler
+# itself. A run above it fits here and does not fit on the target.
+PEAK_RSS_CEILING_MIB = 10500.0
