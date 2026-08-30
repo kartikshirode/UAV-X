@@ -356,6 +356,34 @@ for chunk_id in sorted(dispatch):
 guard(before, f"all {len(rows)} chunk rows in plan.md match a gate chunk that "
               f"names the same artifacts")
 
+# Round 7 finding 10: plan.md said the W4 fallback is link_loss with the
+# release rule disabled and decisions.md said a deterministic priority list
+# fixed at startup. Those are different systems supporting different claims,
+# and the week-agent cannot ask which one is meant. One sentence, three files.
+before = len(problems)
+FALLBACK = "run `link_loss` with the release rule disabled"
+loop = (REPO / ".claude" / "weekly-loop.md").read_text(encoding="utf-8")
+decisions = (REPO / "stage-1" / "decisions.md").read_text(encoding="utf-8")
+for name, body in (("stage-1/plan.md", plan),
+                   ("stage-1/decisions.md", decisions),
+                   (".claude/weekly-loop.md", loop)):
+    if FALLBACK.lower() not in body.lower():
+        fail(f"{name} does not state the W4 fallback. All three carry it "
+             f"verbatim, because an unattended tick implements whichever one "
+             f"it reads.")
+if "deterministic priority list" in decisions.lower():
+    fail("stage-1/decisions.md still names the old fallback, a deterministic "
+         "priority list. Two fallbacks is the same as none.")
+guard(before, "the W4 fallback is stated once, in all three documents")
+
+# And the dates, which round 7 finding 9 found stale in decisions.md.
+before = len(problems)
+for want in ("5 Sep", "12 Sep", "19 Sep", "26 Sep"):
+    if want not in decisions:
+        fail(f"stage-1/decisions.md has no gate dated {want}. The four week "
+             f"dates live in plan.md and the gate table has to match them.")
+guard(before, "the decision gate dates match the four active weeks")
+
 # Artifacts the plan promises must be checked by something the gate calls.
 before = len(problems)
 gate_reach = gate

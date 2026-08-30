@@ -36,7 +36,21 @@ One design constraint comes with the choice. The gate goes behind an interface w
 
 Finding 5 said this was the input most likely to invalidate everything else. Answer: solo, roughly 5 hours daily, with parallel work split across separate working sessions rather than across people.
 
-32 days at 5 hours is about 160 hours. That's enough for the plan, with two consequences. Nothing in the schedule can assume two things happening at once on the same machine, since multi-vehicle SITL will eat the CPU while it runs. And W5 is 4 days, not 5, so the proposal is drafted a section at a time as each week's metric lands rather than written at the end.
+Revised 30 August, because the arithmetic under it stopped being true. It read 32 days at 5 hours, about 160 hours, and it was written when the plan started on 26 August with a five week shape. Nothing was built in those first four days.
+
+28 days at 5 hours is about 140 hours, and round 7 finding 9 is right that carrying the old figure hid roughly 20 of them. The four weeks are 30 hours each, leaving about 20 for the reruns that every week has had.
+
+Two consequences, both unchanged. Nothing in the schedule can assume two things happening at once on the same machine, since multi-vehicle SITL eats the CPU while it runs. And there is no packaging week, so each week drafts its own proposal section, cuts its own footage and amends `INSTALL.md` as its work lands.
+
+W4 is where this bites. It holds eight chunks, five full simulations and the freeze, install and send sequence in seven days, and it is the week with no later week to recover from. So the two send days are reserved first and are not available to the build. If the build half runs past 24 September, the order of sacrifice is fixed here rather than decided under pressure:
+
+| Give up | Costs | Keep |
+| --- | --- | --- |
+| `4.6`, the no-yield control | part of the 10% safety row; the monitor still runs in `4.5` | everything else |
+| `4.5` and `4.6` together | the 10% safety row | the 60% that lives in comms, roles and recovery |
+| `4.4`, the queue drain case | part of the 15% fault recovery row; `4.2` and `4.3` still show recovery | the integrated run |
+
+`4.7`, the integrated mission, is never given up. It is the working proof-of-concept simulation the organisers ask for by name, and without it there is no submission to send.
 
 ## D4. Four vehicles
 
@@ -51,7 +65,7 @@ One gate per week. The pass condition is `bash scripts/gate.sh <N>` exiting 0, a
 | W1 | 5 Sep | `gate.sh 1` | Four vehicles fly a commanded takeoff and land, and the run harness writes a valid run record | The simulator already runs 4 vehicles headless, so a failure here is our code, not the stack. Fix it; do not drop to 2 vehicles. Two vehicles cannot hold an anchor, a relay and a spare, so W3 and W4 could not run at all. |
 | W2 | 12 Sep | `gate.sh 2` | The swarm covers the frozen survey box, measured from actual poses | Fix it or halt. Not the box, which is frozen, and not the vehicle count: D4 fixes it at 4, and 3 or fewer cannot hold an anchor, a relay and two survey drones, so W3 and W4 could not run at all. |
 | W3 | 19 Sep | `gate.sh 3` | `uav_4` reaches the GCS only by relay, and cannot reach it at all with forwarding off | Hard stop, because this is the submission. W4 gives up days to it, never the reverse. |
-| W4 | 26 Sep | `gate.sh 4` | The relay dies, the swarm elects a replacement, repositions it and rebuilds the chain, with no separation violations | Fall back to a deterministic priority list fixed at startup instead of a live election. It still recovers and still demos; the proposal describes what it is. |
+| W4 | 26 Sep | `gate.sh 4` | The relay dies, the swarm elects a replacement, repositions it and rebuilds the chain, with no separation violations | Run `link_loss` with the release rule disabled and claim the routing recovery only, which is still the named failure demonstrated. Say so in the proposal rather than implying more. Round 7 finding 10: this row and the plan named two different fallbacks, supporting two different claims, and an unattended tick could have taken either. check_docs.py now holds all three documents to this sentence. |
 | `4.8` | 26 Sep | `gate.sh 4.8` | The package is real, and a human has recorded the send | It exits 2 while the package is complete but unsent, which is the normal state before a human sends it. Send on 26 Sep regardless; the deadline is the 27th and email gives no upload confirmation. |
 
 The W3 control run is the one worth defending. A delivery ratio of 1.0 proves nothing by itself, because that is also what a silently open gate produces. The pair of runs together is the evidence.

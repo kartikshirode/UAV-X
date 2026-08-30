@@ -66,6 +66,12 @@ Handed to every week-agent. The repo's non-negotiables.
 
 Review state, meaning which round has run and what it found, lives in `.claude/review-status.json`. Do not write it into a document; `scripts/check_docs.py` fails any document that does.
 
+## The one fallback
+
+If the role-release half of W4 does not land: run `link_loss` with the release rule disabled and claim the routing recovery only. Say so in the proposal rather than implying more. Time comes from W2's slack under standing rule 6, never from W3.
+
+Copied verbatim from [stage-1/plan.md](../stage-1/plan.md) and [stage-1/decisions.md](../stage-1/decisions.md), which is the point. Round 7 finding 10: those two named different fallbacks, a disabled release rule and a fixed priority list, and an unattended tick could have implemented either.
+
 ## Blocked triggers
 
 Report BLOCKED rather than working around any of these:
@@ -83,6 +89,6 @@ Report BLOCKED rather than working around any of these:
 checkpoint_every: 1
 ```
 
-Four weeks and W3 carries the submission, so a human read between every week is worth the pause. Drop to 2 only if the first two ticks come back clean.
+Four weeks. W3 carries the communication claim, which is the largest single row, and W4 carries the send, so a human read between every week is worth the pause. Drop to 2 only if the first two ticks come back clean.
 
 A tick is still a week. Inside one, work chunk by chunk: `bash scripts/gate.sh chunks` lists all 25 and `bash scripts/gate.sh 1.3` runs one. A week-agent that finishes a chunk runs that chunk's gate before starting the next, so a break is found where it was made rather than at the end of the week.
