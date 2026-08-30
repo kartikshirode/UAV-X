@@ -446,14 +446,14 @@ w3_relay() {
     --require "delivery_ratio>=0.95" \
     --require "delivery_ratio_by_node.uav_4>=0.95" \
     --require "delivered_hops_by_node.uav_4>=2" \
-    --require "app_packets_sent_by_node.uav_4>=100"
+    --require "app_packets_sent_by_node.uav_4>=1080"   # 240 s x 5 Hz, less 10%
 }
 
 w3_control() {
   run_scenario scenarios/direct_only.yaml
   check_run scenarios/direct_only.yaml \
     --require "delivery_ratio_by_node.uav_4==0" \
-    --require "app_packets_sent_by_node.uav_4>=100"
+    --require "app_packets_sent_by_node.uav_4>=1080"   # 240 s x 5 Hz, less 10%
 }
 
 w3_rehearsals() {
@@ -578,6 +578,11 @@ w4_queue_drain() {
     --require "injected_event_observed==true" \
     --require "outage_duration_s>=45" \
     --require "observations.generated>=450" \
+    --require "observations.generated_during_outage>=450" \
+    --require "observations.delivered_after_restore>=450" \
+    --require "observations.outage_start_s==60" \
+    --require "observations.outage_end_s==105" \
+    --require "observations.drain_start_s>=observations.outage_end_s" \
     --require "observations_set_equal==true" \
     --require "observations.unexpected_count==0" \
     --require "observations.evicted==0" \
@@ -638,7 +643,8 @@ w4_integrated() {
     --require "coverage_source==pose_samples" \
     --require "coverage_fraction_at_kill<=0.80" \
     --require "injected_event_observed==true" \
-    --require "observations.generated>=100" \
+    --require "observations.generated>=1080" \
+    --require "observations.generated_during_outage>=1" \
     --require "observations.evicted==0" \
     --require "observations.expired==0" \
     --require "observations_set_equal==true" \

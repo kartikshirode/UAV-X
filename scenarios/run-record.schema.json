@@ -193,7 +193,13 @@
         "evicted",
         "peak_queue_depth",
         "backlog_drain_s",
-        "control_queue_max_delay_s"
+        "control_queue_max_delay_s",
+        "outage_start_s",
+        "outage_end_s",
+        "generated_during_outage",
+        "delivered_after_restore",
+        "drain_start_s",
+        "drain_end_s"
       ],
       "properties": {
         "generated_ids": {
@@ -202,7 +208,8 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
           },
-          "description": "origin_id:sequence for every observation the swarm produced during the run."
+          "description": "Every observation id created in this run, as origin:sequence. Round 7 finding 4: this and delivered_ids both allowed the empty array, and set equality between two empty sets is true, so a node that produced nothing satisfied the delivered-once claim exactly as well as one that worked.",
+          "minItems": 1
         },
         "delivered_ids": {
           "type": "array",
@@ -210,15 +217,16 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
           },
-          "description": "origin_id:sequence for every observation the GCS accepted, deduplicated. Set equality with generated_ids is the claim."
+          "description": "origin_id:sequence for every observation the GCS accepted, deduplicated. Set equality with generated_ids is the claim.",
+          "minItems": 1
         },
         "generated": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 1
         },
         "unique_delivered": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 1
         },
         "duplicated": {
           "type": "integer",
@@ -263,6 +271,33 @@
             "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
           },
           "description": "delivered but never generated. Empty is the claim."
+        },
+        "outage_start_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "outage_end_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "generated_during_outage": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "ids created between outage_start_s and outage_end_s. Round 7 finding 8: generated>=450 could be met by producing them before the route went down, which tests nothing about a queue holding data through an outage."
+        },
+        "delivered_after_restore": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "drain_start_s": {
+          "type": "number",
+          "minimum": 0,
+          "description": "when the route came back, which is when the drain clock starts."
+        },
+        "drain_end_s": {
+          "type": "number",
+          "minimum": 0,
+          "description": "when the GCS acknowledged the last backlogged observation. End to end, not local queue empty. Round 7 finding 8: the bound was ambiguous between the two, and they differ by the forwarding latency of the whole path, which is the part that is hard."
         }
       }
     },

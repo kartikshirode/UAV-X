@@ -122,7 +122,10 @@ def evidence_blocks(scenario: str) -> dict:
     if scenario not in OUTAGE_SCENARIOS:
         return out
 
-    ids = [f"uav_{n}:{i}" for n in (3, 4) for i in range(225)]
+    # 240 s at 5 Hz from two survey origins. Round 7 finding 4: the gate asked
+    # for 100 of the 1200 a correct run produces, so a node sending a twelfth
+    # of the traffic met every ratio.
+    ids = [f"uav_{n}:{i}" for n in (3, 4) for i in range(600)]
     out.update({
         "observations": {
             "generated_ids": ids,
@@ -137,6 +140,15 @@ def evidence_blocks(scenario: str) -> dict:
             "control_queue_max_delay_s": 0.004,
             "missing_ids": [],
             "unexpected_ids": [],
+            # Round 7 finding 8: generated>=450 could be satisfied by ids made
+            # before the route went down, which tests nothing about a queue
+            # holding data through an outage.
+            "outage_start_s": 60.0,
+            "outage_end_s": 105.0,
+            "generated_during_outage": 450,
+            "delivered_after_restore": 450,
+            "drain_start_s": 105.0,
+            "drain_end_s": 107.1,
         },
         "relay_slot": {
             "commanded": [317.3, -36.8, 75.0],
@@ -466,6 +478,28 @@ def _over_memory(dest, built):
     p = (dest / built["manifest_runs"]["mission_integrated"])
     rec = json.loads(p.read_text(encoding="utf-8"))
     rec["resources"]["peak_rss_mib"] = 20000.0
+    p.write_text(json.dumps(rec), encoding="utf-8")
+
+
+# Round 7 findings 4 and 8, the two ways a queue claim passed without a queue.
+@case("empty observation sets, which are trivially equal",
+      "fails the run-record schema")
+def _empty_sets(dest, built):
+    p = (dest / built["manifest_runs"]["queue_drain"])
+    rec = json.loads(p.read_text(encoding="utf-8"))
+    rec["observations"]["generated_ids"] = []
+    rec["observations"]["delivered_ids"] = []
+    rec["observations"]["generated"] = 0
+    rec["observations"]["unique_delivered"] = 0
+    p.write_text(json.dumps(rec), encoding="utf-8")
+
+
+@case("450 ids produced before the route ever went down",
+      "fails the run-record schema")
+def _preloaded_ids(dest, built):
+    p = (dest / built["manifest_runs"]["queue_drain"])
+    rec = json.loads(p.read_text(encoding="utf-8"))
+    del rec["observations"]["generated_during_outage"]
     p.write_text(json.dumps(rec), encoding="utf-8")
 
 
