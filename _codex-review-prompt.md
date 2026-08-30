@@ -1,3 +1,5 @@
+> **Superseded on 30 August 2026.** This was written for the five week plan and for a repo with no fixture suites. Rounds 2 to 6 used it. Round 7 onward uses `_codex-context.md` and `_codex-prompt.md`, which split the standing context away from the round's instructions. Kept for the record, because six rounds of findings refer to it.
+
 # Codex review prompt
 
 Copy everything below the line into Codex, running in this repo. Reuse it unchanged for every round. Round number is the only thing that changes, and Codex reads the previous round's findings file to avoid repeating itself.
