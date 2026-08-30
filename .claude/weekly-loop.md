@@ -62,7 +62,7 @@ Handed to every week-agent. The repo's non-negotiables.
 7. Git: commit on `main`, never push, amend, force, branch or tag. No AI attribution, no `Co-Authored-By`, no emoji.
 8. Prose in files follows the `humanizer` skill. Em dashes and en dashes never appear.
 9. Third-party code stays in `~/ws_uavx`. Our packages live in `uavx_ws/src/` and are committed. Build output goes to ext4, never `/mnt/c`.
-10. Each week drafts its own proposal section as its metric lands. W5 has no room to write six pages.
+10. Each week drafts its own proposal section, cuts its own demo footage and amends `INSTALL.md` as its work lands. There is no packaging week to write six pages in; the tail is a freeze and a send.
 
 Review state, meaning which round has run and what it found, lives in `.claude/review-status.json`. Do not write it into a document; `scripts/check_docs.py` fails any document that does.
 
@@ -83,4 +83,6 @@ Report BLOCKED rather than working around any of these:
 checkpoint_every: 1
 ```
 
-Five weeks and W3 carries the submission, so a human read between every week is worth the pause. Drop to 2 only if the first two ticks come back clean.
+Four weeks and W3 carries the submission, so a human read between every week is worth the pause. Drop to 2 only if the first two ticks come back clean.
+
+A tick is still a week. Inside one, work chunk by chunk: `bash scripts/gate.sh chunks` lists all 25 and `bash scripts/gate.sh 1.3` runs one. A week-agent that finishes a chunk runs that chunk's gate before starting the next, so a break is found where it was made rather than at the end of the week.

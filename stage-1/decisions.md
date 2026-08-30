@@ -1,6 +1,6 @@
 # Stage 1 decisions
 
-Locked 26 August 2026. Every item here was an open fork in [handoff.md](../handoff.md) or a finding in [round 1 of the review](../_plan-review-round1.md). They are closed. The point of writing them down is so week 3 doesn't reopen week 1.
+Locked 26 August 2026, dates revised 29 August when the plan went from five weeks to four. The calls below did not change; only when they fall due did. Every item here was an open fork in [handoff.md](../handoff.md) or a finding in [round 1 of the review](../_plan-review-round1.md). They are closed. The point of writing them down is so week 3 doesn't reopen week 1.
 
 ## D1. Environment: WSL2 Ubuntu 22.04
 
@@ -48,11 +48,11 @@ One gate per week. The pass condition is `bash scripts/gate.sh <N>` exiting 0, a
 
 | Week | Date | Gate | What it proves | If it fails |
 | --- | --- | --- | --- | --- |
-| W1 | 1 Sep | `gate.sh 1` | Four vehicles fly a commanded takeoff and land, and the run harness writes a valid run record | The simulator already runs 4 vehicles headless, so a failure here is our code, not the stack. Fix it; do not drop to 2 vehicles. Two vehicles cannot hold an anchor, a relay and a spare, so W3 and W4 could not run at all. |
-| W2 | 8 Sep | `gate.sh 2` | The swarm covers the frozen survey box, measured from actual poses | Fix it or halt. Not the box, which is frozen, and not the vehicle count: D4 fixes it at 4, and 3 or fewer cannot hold an anchor, a relay and two survey drones, so W3 and W4 could not run at all. |
-| W3 | 15 Sep | `gate.sh 3` | `uav_4` reaches the GCS only by relay, and cannot reach it at all with forwarding off | Hard stop, because this is the submission. W4 gives up days to it, never the reverse. |
-| W4 | 22 Sep | `gate.sh 4` | The relay dies, the swarm elects a replacement, repositions it and rebuilds the chain, with no separation violations | Fall back to a deterministic priority list fixed at startup instead of a live election. It still recovers and still demos; the proposal describes what it is. |
-| W5 | 26 Sep | `gate.sh 5` | The package is real, and a human has recorded the send | `gate.sh 5` exits 2 while the package is complete but unsent, which is the normal state before a human sends it. Send on 26 Sep regardless; the deadline is the 27th and email gives no upload confirmation. |
+| W1 | 5 Sep | `gate.sh 1` | Four vehicles fly a commanded takeoff and land, and the run harness writes a valid run record | The simulator already runs 4 vehicles headless, so a failure here is our code, not the stack. Fix it; do not drop to 2 vehicles. Two vehicles cannot hold an anchor, a relay and a spare, so W3 and W4 could not run at all. |
+| W2 | 12 Sep | `gate.sh 2` | The swarm covers the frozen survey box, measured from actual poses | Fix it or halt. Not the box, which is frozen, and not the vehicle count: D4 fixes it at 4, and 3 or fewer cannot hold an anchor, a relay and two survey drones, so W3 and W4 could not run at all. |
+| W3 | 19 Sep | `gate.sh 3` | `uav_4` reaches the GCS only by relay, and cannot reach it at all with forwarding off | Hard stop, because this is the submission. W4 gives up days to it, never the reverse. |
+| W4 | 26 Sep | `gate.sh 4` | The relay dies, the swarm elects a replacement, repositions it and rebuilds the chain, with no separation violations | Fall back to a deterministic priority list fixed at startup instead of a live election. It still recovers and still demos; the proposal describes what it is. |
+| `4.8` | 26 Sep | `gate.sh 4.8` | The package is real, and a human has recorded the send | It exits 2 while the package is complete but unsent, which is the normal state before a human sends it. Send on 26 Sep regardless; the deadline is the 27th and email gives no upload confirmation. |
 
 The W3 control run is the one worth defending. A delivery ratio of 1.0 proves nothing by itself, because that is also what a silently open gate produces. The pair of runs together is the evidence.
 

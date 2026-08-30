@@ -5,7 +5,7 @@
   "verdict": "NOT READY",
   "findings": 9,
   "findings_addressed": 9,
-  "state": "round 6 fixes applied and verified; round 7 not yet run",
+  "state": "round 6 fixes applied and verified; plan then rebuilt into four weeks and 25 chunks on 29 August. Round 7 not yet run and should read the new plan, not the old one.",
   "review_files": [
     "_plan-review-round1.md",
     "_plan-review-round2.md",
@@ -24,5 +24,12 @@
     "bash 5.1 on the target exits 0 when a script fails to parse after one successful command, and bash -n exits 0 on the same file. scripts/check_shell.sh reads stderr instead.",
     "stage-1/setup/04-px4.sh carried CRLF in the working tree, so PX4 setup would have died on line 1 under bash. Found by check_shell.sh on its first run on the WSL target.",
     "grep under MSYS strips carriage returns, so the first version of that checker was clean from Git Bash and correct from WSL."
-  ]
+  ],
+  "plan_shape": {
+    "weeks": 4,
+    "chunks": 25,
+    "starts": "2026-08-30",
+    "sends": "2026-09-26",
+    "why": "the first four days produced no implementation, so the packaging tail was distributed into the weeks rather than cutting scope. W4 keeps 5 build days for the 45% of the rubric that lives there."
+  }
 }

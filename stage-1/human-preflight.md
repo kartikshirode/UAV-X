@@ -2,7 +2,7 @@
 
 **The loop must not start until every box below has a dated receipt in `submission/human-preflight.json`.**
 
-Round 3 finding 4: these were filed as "open items, not blocking". They are not backlog. An unregistered or ineligible entrant has no valid submission however good the simulation is, and eligibility can disqualify the entry at any stage, including after Stage 1 results. Building for five weeks and then discovering the entry was never valid is the worst outcome available, and it is entirely preventable this week.
+Round 3 finding 4: these were filed as "open items, not blocking". They are not backlog. An unregistered or ineligible entrant has no valid submission however good the simulation is, and eligibility can disqualify the entry at any stage, including after Stage 1 results. Building for four weeks and then discovering the entry was never valid is the worst outcome available, and it is entirely preventable this week.
 
 None of these can be done by an agent. All of them need you.
 

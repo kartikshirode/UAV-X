@@ -1,6 +1,6 @@
 # UAV-X handoff
 
-Written 26 August 2026. Stage 1 is due **27 September 2026**, so there are 32 days. This file is where a fresh session starts; everything else links from here.
+Written 26 August 2026, rewritten 29 August. Stage 1 is due **27 September 2026**, so there are 29 days. This file is where a fresh session starts; everything else links from here.
 
 ## What this is
 
@@ -16,7 +16,7 @@ Repo: github.com/kartikshirode/UAV-X. This project is its own repository and doe
 
 ## Where we are
 
-Day 1, 26 August. Planning is done and the environment is most of the way up. No project code has been written, on purpose: the plan goes through Codex first.
+Day 4, 29 August. Six Codex rounds are done, 54 findings fixed, and the acceptance harness is finished. No project code has been written yet, which is now the problem rather than the plan: the original week 1 is spent and the plan has been rebuilt into four weeks starting 30 August. See [stage-1/plan.md](stage-1/plan.md), Why four weeks and not five.
 
 **Decided and locked** in [stage-1/decisions.md](stage-1/decisions.md): WSL2 Ubuntu 22.04 with ROS 2 Humble, PX4 v1.15 and Gazebo Classic; the comms layer gates at the ROS 2 application layer; solo entry at 4 to 6 hours a day; 4 vehicles.
 
@@ -35,7 +35,7 @@ It took seven failed runs. Four of them presented as something other than their 
 
 What this does not prove: nothing has flown. Four vehicles airborne together is the W1 gate and is still ahead.
 
-**The plan is built for the loop and the harness exists.** Five weeks, each ending in `bash scripts/gate.sh <N>`. That script is the only definition of any threshold; the plan, decisions and loop config describe it and never restate it. The frozen design is [stage-1/architecture.md](stage-1/architecture.md).
+**The plan is built for the loop and the harness exists.** Four weeks and 25 chunks. A week ends in `bash scripts/gate.sh <N>`; a chunk is `bash scripts/gate.sh <N>.<M>` and is the unit you actually work in. That script is the only definition of any threshold; the plan, decisions and loop config describe it and never restate it. The frozen design is [stage-1/architecture.md](stage-1/architecture.md).
 
 **Reviews.** The plan goes through Codex, gets fixed, and goes back. Which round has run, what it found and what is left is in `.claude/review-status.json`, and nowhere else. `scripts/check_docs.py` fails any document that writes that state into prose, because four documents were carrying four different versions of it and the loop hands those files to a week-agent that cannot tell which sentence is current.
 

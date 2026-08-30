@@ -245,6 +245,8 @@ def build_package(dest: Path) -> dict:
             "requested_duration_s": 240,
             "elapsed_sim_s": 240,
             "source_tree_sha256": tree,
+            "resources": {"peak_rss_mib": 9200.0, "swap_used_mib": 0.0,
+                          "samples": 240, "peak_at_s": 118.0},
         }
         rec.update(evidence_blocks(scenario))
         (runs / f"{rid}.jsonl").write_text(json.dumps(rec), encoding="utf-8")
@@ -398,6 +400,16 @@ def _no_smoke(dest, built):
     r["smoke_run_id"] = ""
     (dest / "fresh-install-receipt.json").write_text(json.dumps(r, indent=2),
                                                      encoding="utf-8")
+
+
+# The plan has asked for memory sampling since W1 and the schema never carried
+# it, so nothing could have failed for its absence.
+@case("a run that swapped", "the machine swapped")
+def _swapped(dest, built):
+    p = Path(built["manifest_runs"]["mission_integrated"])
+    rec = json.loads(p.read_text(encoding="utf-8"))
+    rec["resources"]["swap_used_mib"] = 512.0
+    p.write_text(json.dumps(rec), encoding="utf-8")
 
 
 @case("a required run record emptied", "fails the run-record schema")
