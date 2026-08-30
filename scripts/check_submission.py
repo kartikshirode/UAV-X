@@ -495,6 +495,11 @@ else:
              f"worked on the machine that built it' is not the claim.")
     elif not target.get("name"):
         fail("the receipt records a target kind and no target name")
+    elif target.get("kind") == "clean-prefix" and not target.get("isolated_home"):
+        fail("the install receipt records a clean prefix with no isolated "
+             "home. Round 7 finding 2: a prefix on this machine still sees "
+             "~/.uavx-setup, so setup-all.sh skips every dependency step and "
+             "the fresh install reuses a machine that was already provisioned.")
     elif not r.get("smoke_run_id"):
         fail("the receipt records no smoke run id. An install that builds and "
              "never flies is not an install a judge can use.")

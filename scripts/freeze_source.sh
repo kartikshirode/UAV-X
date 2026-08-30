@@ -29,11 +29,21 @@ cd "$UAVX_REPO"
 # These, and nothing else. `git archive HEAD` with no paths would sweep in
 # submission/, meaning the archive would carry the demo video and the proposal
 # and then be attached beside them.
-ARCHIVE_PATHS=(uavx_ws scenarios scripts stage-1 LICENSE THIRD-PARTY.md)
+# Round 7 finding 2: INSTALL.md was a deliverable, was not in this list, and
+# the install rehearsal claimed to follow it while actually running
+# setup-all.sh. The instructions a judge is given were never the instructions
+# anything executed.
+ARCHIVE_PATHS=(uavx_ws scenarios scripts stage-1 INSTALL.md LICENSE THIRD-PARTY.md)
 
 if [ -n "$(git status --porcelain)" ]; then
   gdie "the working tree is dirty. Commit first: a freeze of uncommitted work binds nothing."
 fi
+
+# Round 7 finding 2: INSTALL.md was a deliverable that was not in the archive,
+# so the instructions being certified were instructions nobody could read.
+for want in INSTALL.md LICENSE THIRD-PARTY.md; do
+  git cat-file -e "HEAD:${want}" 2>/dev/null     || gdie "${want} is not committed, so it cannot be in the archive. It is a deliverable; the judge gets the archive."
+done
 
 C="$(git rev-parse HEAD)"
 mkdir -p submission

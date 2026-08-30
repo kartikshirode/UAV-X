@@ -53,17 +53,38 @@ COMMIT="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1],encoding=
 [ "$ARCHIVE_SHA" = "$WANT_SHA" ] \
   || gdie "the archive on disk hashes to ${ARCHIVE_SHA:0:16} and the manifest says ${WANT_SHA:0:16}. Re-freeze before installing."
 
+# Round 7 finding 2. Without a distro this removed a directory and left the
+# setup stamps under the existing $HOME, so setup-all.sh skipped every
+# dependency step and the "fresh install" reused a machine that was already
+# provisioned. That is the one claim this script exists to make.
+#
+# So the target always gets its own HOME, and therefore its own stamp dir.
+# A clean prefix with a fresh HOME is weaker than a disposable distro and
+# it is honest about which it was; a clean prefix sharing our HOME proves
+# nothing and is refused.
 if [ -n "$DISTRO" ]; then
   TARGET_KIND="wsl-distro"
   TARGET_NAME="$DISTRO"
 else
   TARGET_KIND="clean-prefix"
   TARGET_NAME="$TARGET"
+  if [ "${UAVX_FRESH_ALLOW_LOCAL:-0}" != "1" ]; then
+    gdie "no UAVX_FRESH_DISTRO set. Installing onto this machine with its own setup stamps present is not a fresh install, and W5 certifies that it is. Import a disposable distro, or set UAVX_FRESH_ALLOW_LOCAL=1 to accept the weaker clean-prefix claim deliberately."
+  fi
 fi
 
+# Its own HOME, so no stamp from this machine is visible to the install.
+TARGET_HOME="${TARGET}/home"
+
 STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# Clear it inside the environment it will be used in, not only from here.
+# With a distro set, removing a host path leaves the distro untouched.
+if [ -n "$DISTRO" ]; then
+  wsl.exe -d "$DISTRO" -- bash -lc "rm -rf '${TARGET}' && mkdir -p '${TARGET_HOME}'" \
+    || gdie "could not clear ${TARGET} inside ${DISTRO}"
+fi
 rm -rf "$TARGET"
-mkdir -p "$TARGET" "$OUT"
+mkdir -p "$TARGET" "$TARGET_HOME" "$OUT"
 
 printf 'target_kind=%s\ntarget=%s\narchive_sha256=%s\ncommit=%s\nstarted=%s\n\n' \
   "$TARGET_KIND" "$TARGET_NAME" "$ARCHIVE_SHA" "$COMMIT" "$STARTED" > "$TRANSCRIPT"
@@ -86,10 +107,12 @@ run_step() {
 
 # Everything below runs on the target. With a distro set, that means inside it.
 on_target() {
+  # HOME is redirected either way, so ~/.uavx-setup starts empty and
+  # setup-all.sh cannot skip a step because this machine already ran it.
   if [ -n "$DISTRO" ]; then
-    wsl.exe -d "$DISTRO" -- bash -lc "$*"
+    wsl.exe -d "$DISTRO" -- bash -lc "export HOME='${TARGET_HOME}'; mkdir -p \"\$HOME\"; $*"
   else
-    bash -lc "$*"
+    HOME="${TARGET_HOME}" bash -lc "$*"
   fi
 }
 
@@ -102,8 +125,17 @@ run_step "unpack the frozen archive into a clean target" \
 
 # The submitted instructions, not ours. If INSTALL.md does not work, the judge
 # hits the same wall and this is where we find out.
+# Round 7 finding 2: this step was labelled "the submitted INSTALL.md
+# path" and ran stage-1/setup/setup-all.sh, which is our path and not the
+# one a judge is handed. INSTALL.md was not even in the archive. The
+# label was the only thing claiming the delivered instructions work.
+[ -d "${SRC}" ] \
+  || gdie "the archive unpacked and ${SRC} is not there, so nothing was installed"
+[ -f "${SRC}/INSTALL.md" ] \
+  || gdie "the archive carries no INSTALL.md. It is a deliverable and it is what a judge runs first."
+
 run_step "the submitted INSTALL.md path" \
-  on_target "cd '${SRC}' && bash stage-1/setup/setup-all.sh"
+  on_target "cd '${SRC}' && bash scripts/run_install_md.sh INSTALL.md"
 
 run_step "colcon build from the unpacked archive" \
   on_target "cd '${SRC}' && colcon build --base-paths uavx_ws --build-base '${TARGET}/build' --install-base '${TARGET}/install' --symlink-install"
@@ -129,15 +161,15 @@ printf '\n=== installed version set\n%s\n[exit 0]\n' "$VERSIONS" >> "$TRANSCRIPT
 ENDED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 TRANSCRIPT_SHA="$(sha256sum "$TRANSCRIPT" | cut -d' ' -f1)"
 
-python3 - "$RECEIPT" "$TARGET_KIND" "$TARGET_NAME" "$ARCHIVE_SHA" "$COMMIT" \
+python3 - "$RECEIPT" "$TARGET_KIND" "$TARGET_NAME" "$TARGET_HOME" "$ARCHIVE_SHA" "$COMMIT" \
          "$STARTED" "$ENDED" "$TRANSCRIPT_SHA" "$SMOKE_RUN" "${STEPS[@]}" <<'PY'
 import json, os, sys, tempfile
-(receipt, kind, name, archive_sha, commit, started, ended, tsha,
+(receipt, kind, name, home, archive_sha, commit, started, ended, tsha,
  smoke, *steps) = sys.argv[1:]
 data = {
     "kind": "archive-install",
     "result": "pass",
-    "target": {"kind": kind, "name": name},
+    "target": {"kind": kind, "name": name, "isolated_home": home},
     "archive_sha256": archive_sha,
     "commit_sha": commit,
     "started": started,

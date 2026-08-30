@@ -100,7 +100,8 @@ def stub_fresh_install(dest: Path, archive_sha: str, commit: str) -> None:
     (dest / "fresh-install-receipt.json").write_text(json.dumps({
         "kind": "archive-install",
         "result": "pass",
-        "target": {"kind": "clean-prefix", "name": "/tmp/uavx-fresh-install"},
+        "target": {"kind": "clean-prefix", "name": "/tmp/uavx-fresh-install",
+                   "isolated_home": "/tmp/uavx-fresh-install/home"},
         "archive_sha256": archive_sha,
         "commit_sha": commit,
         "started": "2026-09-26T00:00:00Z",
@@ -384,6 +385,15 @@ def _typed_install(dest, built):
         "archive_sha256": sha256_bytes(built["archive"].read_bytes()),
         "result": "pass",
     }, indent=2), encoding="utf-8")
+
+
+@case("an install onto this machine with its own setup stamps",
+      "no isolated home")
+def _no_isolation(dest, built):
+    r = json.loads((dest / "fresh-install-receipt.json").read_text(encoding="utf-8"))
+    del r["target"]["isolated_home"]
+    (dest / "fresh-install-receipt.json").write_text(json.dumps(r, indent=2),
+                                                     encoding="utf-8")
 
 
 @case("an install receipt naming no clean target", "names no clean target")
