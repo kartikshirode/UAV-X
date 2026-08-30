@@ -208,6 +208,18 @@ run_scenario() {
 
 # The checker verifies provenance before it looks at any metric, so a stale or
 # hand-written file cannot satisfy a gate. See uavx_eval/check.py.
+# W1 only. Round 7 finding 1: the chunks below asserted through check_run,
+# which runs uavx_eval.check, and uavx_eval is built in W2.2. A correct W1
+# could not pass its own gates, which made the whole per-chunk promise false
+# before a simulator was started. This asserts the same expressions against the
+# same record with nothing W1 has not built.
+check_run_w1() {
+  local scenario="$1"; shift
+  python3 "${UAVX_REPO}/scripts/validate_record.py" \
+    "${UAVX_RUNS_DIR}/latest.jsonl" "$@" \
+    || gdie "the run record does not hold up for ${scenario}"
+}
+
 check_run() {
   local scenario="$1"; shift
   python3 -m uavx_eval.check "${UAVX_RUNS_DIR}/latest.jsonl" \
@@ -263,6 +275,10 @@ w1_flight() {
 
 w1_record() {
   gsay "W1.3: the run record writer and its atomic publish"
+  # Round 7 finding 1: the chunks ran a scenario file no chunk produced.
+  [ -f "${UAVX_REPO}/${W1_SCENARIO}" ] \
+    || gdie "no ${W1_SCENARIO}. It is a W1.3 deliverable: four vehicles at their layer altitudes for 60 s with one injected event at t=30. See architecture.md section 1b."
+  python3 "${UAVX_REPO}/scripts/check_scenario.py" "${W1_SCENARIO}" \n    --duration 60 --vehicles 4 --needs-injected-event \n    || gdie "${W1_SCENARIO} is not the scenario chunks 1.4 to 1.7 are written for"
   uavx_invalidate_latest
   [ ! -f "${UAVX_RUNS_DIR}/latest.jsonl" ] \
     || gdie "latest.jsonl survived invalidation, so a stale record can satisfy a later gate"
@@ -280,7 +296,7 @@ w1_runner() {
   gsay "W1.4: the runner honours the scenario and tears down cleanly"
   gate_test uavx_sim
   run_scenario "${W1_SCENARIO}"
-  check_run "${W1_SCENARIO}" \
+  check_run_w1 "${W1_SCENARIO}" \
     --require "completion==complete" \
     --require "pose_sample_count>=100" \
     --require "vehicle_ids_observed==uav_1,uav_2,uav_3,uav_4"
@@ -299,7 +315,7 @@ w1_injector() {
   # Requested and observed, both. An injector that logs an intention and
   # never acts satisfies any check that only asks whether the event is listed,
   # and every fault scenario in W4 rests on this one mechanism.
-  check_run "${W1_SCENARIO}" \
+  check_run_w1 "${W1_SCENARIO}" \
     --require "injected_event_observed==true" \
     --require "injected_event_count>=1"
 }
@@ -317,7 +333,7 @@ w1_resources() {
   # 4 px4 processes plus gzserver plus our nodes in roughly 11 GB, which
   # nobody has measured under load. If this is going to fail it should fail in
   # W1 with two vehicles worth of headroom, not in W4 with the integrated run.
-  check_run "${W1_SCENARIO}" \
+  check_run_w1 "${W1_SCENARIO}" \
     --require "resources.peak_rss_mib>0" \
     --require "resources.swap_used_mib==0" \
     --require "resources.samples>=10"
@@ -515,7 +531,7 @@ w4_link_loss() {
     --require "relay_role_released==true" \
     --require "mover_returned_to_station==true" \
     --require "outage_count_after_release==0" \
-    --require "handback.prepared_path==uav_4>uav_2>uav_1>gcs" \
+    --require "handback.prepared_path==uav_4,uav_2,uav_1,gcs" \
     --require "handback.confirmed_at<handback.release_at" \
     --require "handback.observation_gap_count==0" \
     --require "relay_slot.clearance_m>=15" \

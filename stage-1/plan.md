@@ -99,13 +99,15 @@ The five messages and the two script interfaces are frozen in [architecture.md](
 | --- | --- | --- |
 | `1.1` | `uavx_ws/src/uavx_msgs`: `SwarmPacket`, `LinkState`, `RoleAssignment`, `Hello`, `RunMetrics` | do the five types resolve, and does `SwarmPacket` carry the identity fields every delivered-once claim rests on |
 | `1.2` | `scripts/run_smoke.sh` | do four vehicles get airborne together, headless |
-| `1.3` | the run record writer, and `scripts/validate_record.py` to check it | does what it writes satisfy `scenarios/run-record.schema.json`, and is `latest.jsonl` published only after a clean exit |
+| `1.3` | `scenarios/harness_check.yaml`, the run record writer, and `scripts/validate_record.py` to check it | does the scenario exist and say what the later chunks assume, does what the writer produces satisfy `scenarios/run-record.schema.json`, and is `latest.jsonl` published only after a clean exit |
 | `1.4` | `uavx_sim/scenario_runner` and `scripts/run_scenario.sh` | does it honour the scenario's duration, record the right vehicles, and leave nothing running |
 | `1.5` | the generic event injector, moved here from W4 | does an injected event fire and get observed, or is it only listed |
 | `1.6` | the ROS graph snapshot, captured while a scenario is up | will `scripts/seam_graph.py` accept it: types on every endpoint, one `ros2 node info` result per node, tied to the run it came from |
 | `1.7` | peak memory and swap sampling in every record | do four PX4 instances, gzserver and our nodes fit in 11 GB without swapping |
 
-They run against `scenarios/harness_check.yaml`, four vehicles hovering for 60 s with one injected event. It proves the harness and is never cited as evidence for anything, which is why it sits outside the nine runs W5 requires.
+They run against `scenarios/harness_check.yaml`, four vehicles hovering for 60 s with one injected event. It proves the harness and is never cited as evidence for anything, which is why it sits outside the nine runs W5 requires. Chunk 1.3 produces it and `scripts/check_scenario.py` holds it to the duration, vehicle count and injected event the later chunks assume: `pose_sample_count>=100` is a claim about a 60 second run, and against a 5 second scenario it is a much weaker claim that nothing would have flagged.
+
+W1 asserts through `scripts/validate_record.py`, not through `uavx_eval.check`. Round 7 finding 1: the chunks reached `uavx_eval` by way of the gate's own helper and `uavx_eval` is built in chunk 2.2, so a correct W1 could not pass its own gates. The two checkers are not redundant. The validator checks a record against the schema and the values asked of it; `uavx_eval.check` additionally verifies provenance against the working tree, which is what W2 onward needs and what chunk 2.2 proves by making it reject a record.
 
 `1.7` is here rather than later on purpose. Nobody has measured this stack under load, and if it does not fit, finding out in W1 with two vehicles of headroom is recoverable. Finding out during `mission_integrated` is not.
 
