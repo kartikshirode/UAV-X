@@ -65,6 +65,63 @@ Both files are invalidated before launch now, and the graph pass takes `--expect
 
 Outside processes are matched by exact name, `/link_layer`, `/metrics_collector` and `/scenario_runner`. Substring matching let a node called `uav_2/link_layer_helper` inherit the link layer's exemption and read ground truth.
 
+## 1b. The five messages, and the two script interfaces
+
+Round 6, the conclusion pass. Every audit read this file from section 2 onward, so the first thing W1 builds was the least specified thing in the project: five message names in one plan bullet, and two script names in another. An agent starting Monday would have invented all seven.
+
+### `uavx_msgs`
+
+Field names are binding. `check_geometry.py` and the gate assert on them, and `uavx_eval` reads them out of the record.
+
+**`SwarmPacket`**, the only thing that crosses the seam.
+
+| Field | Type | Why |
+| --- | --- | --- |
+| `origin_id` | `string` | which vehicle first produced it. Not the sender; a relayed packet keeps its origin |
+| `sequence` | `uint32` | monotonic per origin, so a gap is visible |
+| `created_at` | `float64` | when it was observed, not when it was sent |
+| `expires_at` | `float64` | `created_at` plus `observation_lifetime`, 300 s |
+| `kind` | `uint8` | `OBSERVATION`, `HELLO`, `LSA`, `ROLE`, `ACK`. Control and observations queue separately and this is how the queue is chosen |
+| `dest_id` | `string` | `gcs` for observations. Empty for a broadcast |
+| `hop_count` | `uint8` | incremented by each forwarder, capped at `lsa_ttl` |
+| `path` | `string[]` | node ids in order, appended by each forwarder. This is what makes `handback.prepared_path` checkable |
+| `payload` | `uint8[]` | 256 bytes for an observation |
+
+`(origin_id, sequence)` is the identity. Deduplication at the GCS is on that pair and nothing else, which is what makes "delivered once" a set comparison rather than a count.
+
+**`Hello`**: `sender_id`, `sent_at`, `position` (3 floats), `seq`.
+**`LinkState`**: `originator_id`, `lsa_seq` (uint32), `neighbours` (string[]), `sent_at`, `ttl` (uint8).
+**`RoleAssignment`**: `epoch` (uint32), `node_id`, `role` (uint8: `SURVEY`, `RELAY`, `GCS_ANCHOR`), `slot` (3 floats), `lease_expires_at`, `sender_id`. `sender_id` is what lets the gate assert a release came from the epoch owner and not from a node that used to be one.
+**`RunMetrics`**: the per-run summary the record writer serialises. One field per top-level key in `scenarios/run-record.schema.json`, which is the contract; this message exists so the collector can publish progress mid-run without inventing a second shape.
+
+### `scripts/run_scenario.sh`
+
+The gate, both rehearsal wrappers and `fresh_install.sh` all call this, and between them they use every flag below. They were written against a script that does not exist yet, so this is the contract they are owed.
+
+| Flag | Meaning |
+| --- | --- |
+| `<scenario>` | positional, path to the scenario YAML. Required |
+| `--run-id <id>` | use this id rather than minting one. The recording rehearsal mints the id first so it can burn it into the frame, and then requires the record to carry it back |
+| `--record <path>` | capture video to this file, headless. `gzclient` is never launched |
+| `--record-seconds <n>` | how much to capture. The run continues past it |
+| `--overlay-text <s>` | burn this into every frame. Without it a clip cannot be tied to a run |
+| `--runs-dir <dir>` | where records go, default `runs/`. `fresh_install.sh` points this at the clean target so a smoke run there does not overwrite ours |
+
+It writes `<runs-dir>/<run_id>.jsonl`, then publishes `latest.jsonl` and `latest-graph.json` by atomic rename, only after every process has exited. Exit 0 means the scenario ran to its duration and both files are on disk.
+
+### `scripts/run_smoke.sh`
+
+| Flag | Meaning |
+| --- | --- |
+| `--vehicles <n>` | how many to bring up. The gate asks for 4 |
+| `--runs-dir <dir>` | as above |
+
+Takeoff, hold, land, headless, through `scripts/sitl_multi.sh`. It writes a run record like any other run. Exit 0 means every vehicle reached its hold altitude and landed.
+
+### `scenarios/harness_check.yaml`
+
+The scenario W1's chunks run against. Four vehicles hover at their layer altitudes for 60 s with one injected event at `t = 30 s`, and that is all. It exists to prove the harness and is never cited as evidence: `check_submission_const.HARNESS_RUNS` keeps it out of the nine runs W5 requires, and `check_docs.py` exempts it from the frozen-geometry check for the same reason. A hover proves nothing about the rubric.
+
 ## 2. Link model
 
 For an ordered pair at 3D distance `d`:
@@ -538,6 +595,8 @@ Without it, a run where the two vehicles happened to miss each other is indistin
 The gate requires, on the yield run: at least one yield event **naming `uav_4`**, a non-zero hold duration, `min_pairwise_separation_m` at or above 10, zero contacts, a non-zero contact-monitor sample count so the zero means something, enough pose samples, and both vehicles completing. On the control run it requires a violation.
 
 ## 7. Run record contract
+
+`scripts/validate_record.py` checks a record against this schema and nothing else. W1 needs it because `uavx_eval.check` does not exist until W2, and a record writer with nothing to check it is a record writer nobody has checked. It deliberately reads no metric: metrics mean nothing until provenance holds, and provenance is all a writer is responsible for.
 
 Round 2 finding 5: nothing tied `runs/latest.jsonl` to the run that had just happened, so a stale green file survived a crashed simulation and a checker could be satisfied by a metrics writer that never saw a vehicle.
 
