@@ -1,24 +1,25 @@
 {
   "_why": "Round 4 finding 9. Review state was written into prose in four documents, and prose does not update itself. handoff.md said round 3 had not run after round 3 had run and been fixed, and listed three of its findings as still open. decisions.md still had round 2 outstanding. The autonomous loop hands those files to a week-agent, which has no way to tell which sentence is current. So the state lives here, in one place, and check_docs.py fails any document that states it in prose.",
-  "latest_round": 6,
+  "latest_round": 7,
   "reviewer": "Codex",
   "verdict": "NOT READY",
-  "findings": 9,
-  "findings_addressed": 9,
-  "state": "round 6 fixes applied and verified; plan then rebuilt into four weeks and 25 chunks on 29 August. Round 7 not yet run and should read the new plan, not the old one.",
+  "findings": 10,
+  "findings_addressed": 10,
+  "state": "round 7 fixes applied and verified on both platforms; round 8 not yet run. W1 is now runnable from a clean checkout, which round 7 finding 1 found it was not.",
   "review_files": [
     "_plan-review-round1.md",
     "_plan-review-round2.md",
     "_plan-review-round3.md",
     "_plan-review-round4.md",
     "_plan-review-round5.md",
-    "_plan-review-round6.md"
+    "_plan-review-round6.md",
+    "_plan-review-round7.md"
   ],
   "open_findings": [],
   "source_verified": {
-    "date": "2026-08-29",
+    "date": "2026-08-30",
     "how": "scripts/check_competition_spec.py against techfest.org/api/compis/",
-    "result": "obligations unchanged against the capture; registrations 45 at the round 6 audit and 48 now, against roughly 15 qualifying"
+    "result": "a new problem statement was published at a new url on 30 August. One word changed, TechFest to Techfest; no obligation, deadline, deliverable or criterion moved. Registrations 51."
   },
   "found_while_fixing": [
     "bash 5.1 on the target exits 0 when a script fails to parse after one successful command, and bash -n exits 0 on the same file. scripts/check_shell.sh reads stderr instead.",
