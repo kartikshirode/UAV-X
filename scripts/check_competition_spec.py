@@ -99,6 +99,71 @@ def write_receipt(live: dict) -> None:
     }, indent=2) + "\n", encoding="utf-8", newline="\n")
 
 
+def fetch_pdf(url: str):
+    """Download the problem statement, and be sure it arrived whole.
+
+    Round 6, the conclusion pass. This fired for real on 30 August, reporting
+    that the PDF had been replaced at the same URL. It had not: five downloads
+    in a row matched the baseline. One transfer had come back short, and
+    hashing whatever curl left on disk turned a truncated download into "the
+    rules have changed".
+
+    That is the loudest false alarm this repo can produce. It arrives during
+    W5, it looks exactly like the thing you must not ignore, and the second
+    time it cries wolf nobody reads it. So the body has to be complete before
+    its hash means anything: a 200, the right content type, a PDF header, the
+    %%EOF trailer, and the byte count the server said it was sending.
+
+    Returns (bytes, final_url), or (None, None) after printing why.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as fh:
+        tmp = Path(fh.name)
+    try:
+        # Not `-o /dev/null` plus a second GET: /dev/null is not a path curl can
+        # open on Windows, so the HEAD failed there and reported the PDF as
+        # missing. A checker that cries wolf on the wrong platform gets ignored
+        # on the right one.
+        res = subprocess.run(
+            ["curl", "-sSL", "--fail", "--max-time", "180", "--retry", "3",
+             "--retry-delay", "2", "--retry-all-errors", "-o", str(tmp),
+             "-w", "%{content_type} %{http_code} %{size_download} "
+                   "%{size_header} %{url_effective}", url],
+            capture_output=True, text=True, timeout=300)
+        parts = res.stdout.strip().split(" ")
+        while len(parts) < 5:
+            parts.append("")
+        ctype, code, size_dl, _hdr, final = parts[:5]
+        final = final or url
+        if res.returncode != 0 or code != "200":
+            print(f"  FAIL  the problem statement URL answered {code or '?'}: "
+                  f"{url}")
+            return None, None
+        if "pdf" not in ctype.lower():
+            print(f"  FAIL  the problem statement URL serves {ctype!r}, not a PDF")
+            return None, None
+        body = tmp.read_bytes()
+    finally:
+        tmp.unlink(missing_ok=True)
+
+    if not body.startswith(b"%PDF"):
+        print(f"  FAIL  what {final} served does not begin with a PDF header")
+        return None, None
+    # A PDF ends with %%EOF. A transfer cut short almost never does, and this is
+    # the cheapest way to tell a short read from a real edit.
+    if b"%%EOF" not in body[-2048:]:
+        print(f"  FAIL  the download from {final} has no %%EOF trailer, so it "
+              f"arrived truncated. Nothing can be concluded from its hash.")
+        return None, None
+    try:
+        if int(size_dl) != len(body):
+            print(f"  FAIL  curl reported {size_dl} bytes and {len(body)} "
+                  f"landed on disk")
+            return None, None
+    except ValueError:
+        pass
+    return body, final
+
+
 def check_problem_statement(url: str, skip: bool) -> bool:
     """The bytes, not the address.
 
@@ -112,38 +177,29 @@ def check_problem_statement(url: str, skip: bool) -> bool:
         print("  note  problem statement not fetched this run (--skip-pdf)")
         return True
 
-    # One request, following redirects, with the body to a real file and the
-    # metadata to stdout. Not `-o /dev/null` plus a second GET: /dev/null is not
-    # a path curl can open on Windows, so the HEAD failed there and reported the
-    # PDF as missing. A checker that cries wolf on the wrong platform gets
-    # ignored on the right one.
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as fh:
-        tmp = Path(fh.name)
-    try:
-        res = subprocess.run(
-            ["curl", "-sSL", "--max-time", "180", "--retry", "2",
-             "-o", str(tmp), "-w", "%{content_type} %{http_code} %{url_effective}",
-             url], capture_output=True, text=True, timeout=300)
-        parts = res.stdout.strip().split(" ")
-        ctype, code = (parts + ["", ""])[0], (parts + ["", ""])[1]
-        final = parts[2] if len(parts) > 2 else url
-        if res.returncode != 0 or code != "200":
-            print(f"  FAIL  the problem statement URL answered {code or '?'}: {url}")
-            return False
-        if "pdf" not in ctype.lower():
-            print(f"  FAIL  the problem statement URL serves {ctype!r}, not a PDF")
-            return False
-        body = tmp.read_bytes()
-    finally:
-        tmp.unlink(missing_ok=True)
-
-    if not body.startswith(b"%PDF"):
-        print(f"  FAIL  what {final} served does not begin with a PDF header")
+    body, final = fetch_pdf(url)
+    if body is None:
         return False
     got = hashlib.sha256(body).hexdigest()
 
     base = json.loads(BASELINE.read_text(encoding="utf-8")) if BASELINE.is_file() else {}
     want = base.get("problem_statement_sha256")
+    want_url = base.get("problem_statement_url")
+
+    # Round 6, the conclusion pass. On 30 August this reported "replaced at the
+    # same URL" when the organisers had in fact published a new file at a NEW
+    # url: Django appended _1 because the old name was taken. The old url still
+    # served the old bytes, so following the message led straight to the wrong
+    # conclusion, that the checker was crying wolf. Say which of the two
+    # happened, because they are investigated differently.
+    if want_url and url != want_url:
+        print(f"\n  FAIL  the record links a different problem statement than "
+              f"the one this repo was built against."
+              f"\n        was {want_url}"
+              f"\n        now {url}"
+              f"\n        The old url may still serve the old file, so compare "
+              f"the two documents rather than re-reading either one alone.")
+        return False
     if want is None:
         base["problem_statement_sha256"] = got
         base["problem_statement_url"] = url
@@ -154,8 +210,24 @@ def check_problem_statement(url: str, skip: bool) -> bool:
         print(f"  note  first capture of the problem statement, {got[:16]}")
         return True
     if got != want:
+        # Confirm before crying wolf. A genuine replacement hashes the same on
+        # the second fetch; a short read does not.
+        again, _ = fetch_pdf(url)
+        if again is None:
+            print("  FAIL  the problem statement hash moved and the confirming "
+                  "download did not complete. Run this again on a better "
+                  "connection before concluding anything.")
+            return False
+        confirm = hashlib.sha256(again).hexdigest()
+        if confirm != got:
+            print(f"  FAIL  two downloads of the problem statement produced "
+                  f"two different hashes, {got[:16]} and {confirm[:16]}. The "
+                  f"file is not being served consistently, so this check "
+                  f"cannot say whether it changed.")
+            return False
         print(f"\n  FAIL  the problem statement PDF has been replaced at the "
-              f"same URL.\n        was {want}\n        now {got}\n"
+              f"same URL, confirmed by two downloads."
+              f"\n        was {want}\n        now {got}\n"
               f"        Read the new one before doing any more work.")
         return False
     print(f"  ok    problem statement bytes unchanged, {got[:16]}")

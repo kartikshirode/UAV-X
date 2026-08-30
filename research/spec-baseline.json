@@ -1,5 +1,13 @@
 {
-  "problem_statement_sha256": "9084355dca4dbbb4baa7cd60cd87ac2cd185557b18c6835e1d1e13280573dace",
-  "problem_statement_url": "https://techfest.org/media/compiProbStatement/UAV-X__Resilient_BVLOS_Swarm_Challenge_compressed.pdf",
-  "_why": "Round 5 finding 8: comparing the URL string cannot see a PDF replaced at the same address."
+  "problem_statement_sha256": "9b56bd9055a771bd684e92180beb9626b960ef6d4a3fc80e83c6cfe20e5f63e5",
+  "problem_statement_url": "https://techfest.org/media/compiProbStatement/UAV-X__Resilient_BVLOS_Swarm_Challenge_1_compressed.pdf",
+  "_why": "Round 5 finding 8: comparing the URL string cannot see a PDF replaced at the same address.",
+  "_history": [
+    {
+      "date": "2026-08-30",
+      "was_url": "https://techfest.org/media/compiProbStatement/UAV-X__Resilient_BVLOS_Swarm_Challenge_compressed.pdf",
+      "was_sha256": "9084355dca4dbbb4baa7cd60cd87ac2cd185557b18c6835e1d1e13280573dace",
+      "what_changed": "a new problem statement was published at a new url. Extracted text is identical across all 396 lines except one: TechFest became Techfest. No obligation, deadline, deliverable or judging criterion moved."
+    }
+  ]
 }
