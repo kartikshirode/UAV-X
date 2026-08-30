@@ -334,6 +334,41 @@ def _wrong_scenario(g):
     return g
 
 
+# Round 7 finding 6, reproduced by the reviewer and confirmed here: both of
+# these returned "respect the seam" on a graph carrying a swarm side channel.
+@case("the observer carrying swarm payload on a side topic",
+      "mission_integrated", 4, "not in its allowlist")
+def _observer_sidechannel(g):
+    g["/metrics_collector"]["publishers"].append(
+        ep("/swarm/sidechannel", PACKET))
+    return g
+
+
+@case("the radio reading swarm payload off a side topic",
+      "mission_integrated", 4, "not in its allowlist")
+def _radio_sidechannel(g):
+    g["/link_layer"]["subscribers"].append(ep("/swarm/sidechannel", PACKET))
+    return g
+
+
+@case("an outside process on a topic nobody listed", "mission_integrated", 4,
+      "not in its allowlist")
+def _outside_unlisted(g):
+    g["/metrics_collector"]["subscribers"].append(
+        ep("/telemetry/raw", "std_msgs/msg/String"))
+    return g
+
+
+@case("SwarmPacket outside the seam, on an allowlisted topic",
+      "mission_integrated", 4, "not a tx or rx topic")
+def _packet_on_allowed_topic(g):
+    # /rosout is legitimately in the observer's allowlist. Rule 6 still bans
+    # swarm payload on it, and that rule had never been applied to the three
+    # processes outside the swarm.
+    g["/metrics_collector"]["publishers"].append(ep("/rosout", PACKET))
+    return g
+
+
 def run_record_for(snapshot: Path, meta: dict, dest: Path) -> Path:
     """The run record a correct capture would have been written beside.
 

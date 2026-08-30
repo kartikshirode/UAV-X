@@ -148,5 +148,51 @@
     "scenario",
     "run_id",
     "source_tree_sha256"
-  ]
+  ],
+  "_outside_allowlist_note": "Round 7 finding 6. check_outside rejected an outside process only when it touched the exact tx or rx topics, and allowed every other topic. A SwarmPacket published by /metrics_collector on /swarm/sidechannel returned 'respect the seam', which is the 25% communication row passing on a graph where the swarm has an out-of-band channel. Rule 6 bans SwarmPacket outside the tx/rx set for swarm nodes and nothing applied it to the three processes that sit outside. Everything an outside process holds is listed here now, and anything unlisted is a violation.",
+  "outside_allowlist": {
+    "/link_layer": {
+      "publishers": [
+        "/uavx/*/rx",
+        "/rosout"
+      ],
+      "subscribers": [
+        "/uavx/*/tx",
+        "/gazebo/model_states",
+        "/parameter_events"
+      ],
+      "services": [
+        "/link_layer/*"
+      ],
+      "actions": []
+    },
+    "/metrics_collector": {
+      "publishers": [
+        "/rosout"
+      ],
+      "subscribers": [
+        "/gazebo/model_states",
+        "/uavx/*/tx",
+        "/uavx/*/rx",
+        "/parameter_events"
+      ],
+      "services": [
+        "/metrics_collector/*"
+      ],
+      "actions": []
+    },
+    "/scenario_runner": {
+      "publishers": [
+        "/rosout"
+      ],
+      "subscribers": [
+        "/gazebo/model_states",
+        "/parameter_events"
+      ],
+      "services": [
+        "/scenario_runner/*"
+      ],
+      "actions": []
+    }
+  }
 }

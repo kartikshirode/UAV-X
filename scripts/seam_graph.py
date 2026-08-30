@@ -64,6 +64,8 @@ def load_manifest(scenario: str) -> dict:
     return {
         "vehicles": m["vehicles"],
         "outside": set(m["outside_processes"]),
+        # Round 7 finding 6: what each outside process is allowed to hold.
+        "outside_allow": m.get("outside_allowlist", {}),
         "packet_type": m["swarm_packet_type"],
         "infra_pub": set(m["ros_infrastructure"]["publish"]),
         "infra_sub": set(m["ros_infrastructure"]["subscribe"]),
@@ -286,7 +288,8 @@ def check(graph: dict, man: dict) -> list:
         ep = graph[node]
 
         if node in man["outside"]:
-            v += check_outside(node, ep, vehicles, packet)
+            v += check_outside(node, ep, vehicles, packet,
+                                        (man.get("outside_allow") or {}).get(node))
             continue
         if node not in man["expected"]:
             continue  # already reported above; do not double-count its topics
@@ -359,7 +362,7 @@ def check_endpoint(node, own, kind, topic, typ, man, packet) -> list:
     return []
 
 
-def check_outside(node, ep, vehicles, packet) -> list:
+def check_outside(node, ep, vehicles, packet, allow=None) -> list:
     """The three processes that sit outside the swarm still have limits.
 
     The link layer is the radio and the collector is the observer. Neither may
@@ -371,6 +374,36 @@ def check_outside(node, ep, vehicles, packet) -> list:
     rx = {f"/uavx/{x}/rx" for x in vehicles + ["gcs"]}
     pubs = [e["topic"] for e in ep.get("publishers", [])]
     subs = [e["topic"] for e in ep.get("subscribers", [])]
+
+    # Round 7 finding 6. Everything below this was a deny list: it named the
+    # topics an outside process must not hold and permitted every other one.
+    # /metrics_collector publishing SwarmPacket on /swarm/sidechannel passed,
+    # and that is a side channel for the swarm with the observer carrying it.
+    #
+    # Two rules, in this order, because the second explains the first.
+    if allow:
+        for kind in KINDS:
+            listed = allow.get(kind, [])
+            for e in ep.get(kind, []):
+                topic = e["topic"] if isinstance(e, dict) else e
+                if not any(fnmatch.fnmatch(topic, pat) for pat in listed):
+                    v.append(f"{node} holds {topic} as a {kind[:-1]}, which is "
+                             f"not in its allowlist in seam_manifests.json. An "
+                             f"outside process may only hold what it is listed "
+                             f"for; anything else is a channel nobody reviewed.")
+
+    # And no SwarmPacket anywhere but the seam, whoever is holding it. This is
+    # rule 6 applied to the outside processes, which it never was.
+    for kind in KINDS:
+        for e in ep.get(kind, []):
+            if not isinstance(e, dict) or e.get("type") != packet:
+                continue
+            topic = e["topic"]
+            if topic not in tx and topic not in rx:
+                v.append(f"{node} carries {packet} on {topic}, which is not a "
+                         f"tx or rx topic. Swarm payload outside the seam is "
+                         f"the bypass rule 6 exists for, and it does not stop "
+                         f"applying because the process is outside the swarm.")
 
     if node == "/link_layer":
         for t in pubs:
