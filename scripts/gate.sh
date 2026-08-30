@@ -333,8 +333,14 @@ w1_resources() {
   # 4 px4 processes plus gzserver plus our nodes in roughly 11 GB, which
   # nobody has measured under load. If this is going to fail it should fail in
   # W1 with two vehicles worth of headroom, not in W4 with the integrated run.
+  #
+  # Round 7 finding 5: the peak was required to be above zero and compared with
+  # nothing, so a record claiming 20 GB resident passed. 10500 MiB of the 11821
+  # this machine reports free, leaving room for the gate's own shell and the
+  # sampler. Kept in step with PEAK_RSS_CEILING_MIB in check_submission_const.py.
   check_run_w1 "${W1_SCENARIO}" \
     --require "resources.peak_rss_mib>0" \
+    --require "resources.peak_rss_mib<10500" \
     --require "resources.swap_used_mib==0" \
     --require "resources.samples>=10"
 }
