@@ -20,7 +20,7 @@ From the official rules, stated twice:
 
 > Project staff, research staff, consultants, interns, or other personnel directly engaged with the PUSHPAK Project, Drone Centre, or the organizing/host institutions are not eligible, whether participating individually or as part of a team.
 
-Organising and host institutions are IIT Bombay, IISER Bhopal and VJTI Mumbai. Solo entry, so this is one check rather than five.
+The conservative declaration names IIT Bombay, IISER Bhopal and VJTI Mumbai. Solo entry, so this is one check rather than five.
 
 Record: an explicit declaration that you hold no such attachment.
 
@@ -30,7 +30,7 @@ Join the UAV-X WhatsApp group: https://chat.whatsapp.com/EdOZigIfR4s0LvBl4N49XB
 
 Organiser clarifications land there before anywhere else. If the video format or the source delivery method is answered for someone else, it is answered for you.
 
-Record: the date joined, and the date you last read it. W5 refuses a channel nobody has looked at in a fortnight. The rules say changes are communicated through official channels, and an API diff does not read a chat group.
+Record: the date joined, and the date you last read it. The final package check refuses a channel nobody has looked at in a fortnight. The rules say changes are communicated through official channels, and an API diff does not read a chat group.
 
 ## 4. The organiser questions
 
@@ -43,7 +43,7 @@ Record: the date sent, the date you last checked for a reply, and either the ans
 
 ## 5. Delivery method, decided
 
-Round 3 is right that finding out in W5 that the intended attachment cannot be delivered risks the submission itself. A three minute video plus a source archive will exceed most mail servers.
+Round 3 is right that finding out during the submission tail that the intended attachment cannot be delivered risks the submission itself. A three minute video plus a source archive will exceed most mail servers.
 
 Decide now, and record it:
 
@@ -51,7 +51,7 @@ Decide now, and record it:
 - **Delivery route** for anything above it, meaning a repository link, a shared drive link, or a split archive
 - **Fallback** if the organisers say attachments only
 
-`check_submission.py` checks the package against this budget in W5, so the number has to exist before then.
+`check_submission.py` checks the package against this budget in `4.8`, so the number has to exist before then.
 
 ## 6. Regulatory sign-off
 

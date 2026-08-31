@@ -2,7 +2,7 @@
 """Validate submission/human-preflight.json against its schema.
 
 Called by `gate.sh preflight`, which will not run a week without it, and again
-by check_submission.py in W5, which needs the delivery budget out of it.
+by check_submission.py in chunk 4.8, which needs the delivery budget out of it.
 
 Round 4 finding 7: preflight read three fields out of this file and accepted any
 truthy object for the rest, so a half-written receipt passed. Registration with

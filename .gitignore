@@ -19,6 +19,7 @@ log/
 slurm-*.out
 slurm-*.err
 out/
+.uavx-spec-check-receipt.json
 
 # os
 Thumbs.db

@@ -32,6 +32,7 @@ END = "# <<< spec-decision"
 
 HARNESS = """set -uo pipefail
 UAVX_REPO={repo}
+python3() {{ {python} "$@"; }}
 gsay() {{ printf 'SAY %s\\n' "$*"; }}
 gdie() {{ printf 'DIE %s\\n' "$*"; exit 1; }}
 spec_decision() {{
@@ -53,10 +54,10 @@ CASES = [
     (3, False, "pass", "offline, last real check inside seven days"),
     (1, False, "die", "record unreadable, or nobody has read it in over a week"),
     (2, False, "die", "the record changed"),
-    (0, True, "pass", "W5, record verified online"),
-    (3, True, "die", "W5 cannot send on an offline check"),
-    (1, True, "die", "W5, record unreadable"),
-    (2, True, "die", "W5, the record changed"),
+    (0, True, "pass", "send check, record verified online"),
+    (3, True, "die", "send check cannot run offline"),
+    (1, True, "die", "send check, record unreadable"),
+    (2, True, "die", "send check, the record changed"),
 ]
 
 
@@ -103,7 +104,9 @@ def main() -> int:
         tmp = Path(tmp)
         script = tmp / "harness.sh"
         script.write_text(
-            HARNESS.format(repo=str(REPO).replace("\\", "/"), block=block),
+            HARNESS.format(repo=str(REPO).replace("\\", "/"),
+                           python=str(Path(sys.executable)).replace("\\", "/"),
+                           block=block),
             encoding="utf-8", newline="\n")
 
         for code, strict, expect, why in CASES:
@@ -114,13 +117,16 @@ def main() -> int:
                 encoding="utf-8", newline="\n")
 
             env = dict(os.environ)
+            git_usr = Path(r"C:\Program Files\Git\usr\bin")
+            if git_usr.is_dir():
+                env["PATH"] = str(git_usr) + os.pathsep + env.get("PATH", "")
             env["UAVX_SPEC_CHECKER"] = str(stub)
             env["UAVX_SPEC_STRICT"] = "1" if strict else "0"
             res = subprocess.run([bash, str(script)], capture_output=True,
                                  text=True, env=env, cwd=str(REPO))
 
             got = "pass" if res.returncode == 0 else "die"
-            label = f"exit {code}, {'W5' if strict else 'W1-W4'}"
+            label = f"exit {code}, {'send' if strict else 'build'}"
             if got != expect:
                 print(f"  FAIL  {label}: {why}\n"
                       f"        wanted the gate to {expect}, it chose {got}\n"
@@ -128,13 +134,13 @@ def main() -> int:
                 bad += 1
                 continue
 
-            # The mode has to match the week, not just the outcome. W5 passing
+            # The mode has to match the chunk, not just the outcome. The send check passing
             # --allow-offline would accept a stale record and still exit 0 here.
             args = log.read_text(encoding="utf-8") if log.is_file() else ""
             offline = "--allow-offline" in args
             if strict and offline:
-                print(f"  FAIL  {label}: W5 ran the checker with "
-                      f"--allow-offline. W5 is the run that has to be online.")
+                print(f"  FAIL  {label}: the send check ran with "
+                      f"--allow-offline. Chunk 4.8 has to be online.")
                 bad += 1
                 continue
             if not strict and not offline:

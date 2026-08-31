@@ -26,7 +26,7 @@ Round 5 finding 8 found three ways past it, all now closed.
     fine". Offline has its own exit code and is only tolerated if the record
     was actually reached recently.
 
-    python3 scripts/check_competition_spec.py                # W5: the real one
+    python3 scripts/check_competition_spec.py                # chunk 4.8: online
     python3 scripts/check_competition_spec.py --allow-offline --skip-pdf
 
 Exit 0 verified online, 1 unusable or too long since a real check, 2 the record
@@ -44,7 +44,12 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 SAVED = REPO / "research" / "techfest-uav-x.json"
-RECEIPT = REPO / "research" / "spec-check-receipt.json"
+# Round 8 found strict W4 preflight updating the tracked receipt immediately
+# before freeze_source.sh refused the dirty tree. Keep the committed file as a
+# seed for a new checkout, but put current freshness state in an ignored file.
+# An online verification must not make its own source freeze impossible.
+SEED_RECEIPT = REPO / "research" / "spec-check-receipt.json"
+RECEIPT = REPO / ".uavx-spec-check-receipt.json"
 BASELINE = REPO / "research" / "spec-baseline.json"
 API = "https://techfest.org/api/compis/"
 COMPI_ID = "uav-x"
@@ -66,7 +71,7 @@ def fetch() -> list:
     # encoding, which on this machine is cp1252, and the organisers write their
     # stage headings with an en dash. That turned one character into mojibake
     # and reported "the rules have changed" when nothing had. A false alarm here
-    # is worse than useless: it arrives during W5 and it looks exactly like the
+    # is worse than useless: it arrives during the submission tail and it looks exactly like the
     # thing you must not ignore.
     out = subprocess.run(
         ["curl", "-sSL", "--max-time", "60", "--retry", "3",
@@ -80,10 +85,11 @@ def fetch() -> list:
 
 
 def receipt_age_days():
-    if not RECEIPT.is_file():
+    path = RECEIPT if RECEIPT.is_file() else SEED_RECEIPT
+    if not path.is_file():
         return None
     try:
-        d = json.loads(RECEIPT.read_text(encoding="utf-8"))
+        d = json.loads(path.read_text(encoding="utf-8"))
         when = datetime.fromisoformat(d["checked_at"].replace("Z", "+00:00"))
     except (json.JSONDecodeError, KeyError, ValueError):
         return None
@@ -109,7 +115,7 @@ def fetch_pdf(url: str):
     rules have changed".
 
     That is the loudest false alarm this repo can produce. It arrives during
-    W5, it looks exactly like the thing you must not ignore, and the second
+    the submission tail, it looks exactly like the thing you must not ignore, and the second
     time it cries wolf nobody reads it. So the body has to be complete before
     its hash means anything: a 200, the right content type, a PDF header, the
     %%EOF trailer, and the byte count the server said it was sending.
@@ -238,10 +244,10 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-pdf", action="store_true",
                     help="do not download the linked problem statement. For the "
-                         "weekly preflight; W5 fetches it.")
+                         "weekly preflight; chunk 4.8 fetches it.")
     ap.add_argument("--allow-offline", action="store_true",
                     help="tolerate an unreachable API, but only if a real check "
-                         "happened recently. Never pass this in W5.")
+                         "happened recently. Never pass this in chunk 4.8.")
     a = ap.parse_args()
 
     saved = json.loads(SAVED.read_text(encoding="utf-8"))

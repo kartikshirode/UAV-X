@@ -28,9 +28,11 @@ Eleven were unchanged. The twelfth had moved:
 
 This one touches eligibility, which is the rule that ends a run. The disqualifier covers anyone attached to "the organizing/host institutions", and that set just got smaller. The declaration in [stage-1/human-preflight.md](stage-1/human-preflight.md) still names VJTI anyway: declaring no attachment to an institution that turns out not to be involved costs nothing, and the reverse is a disqualification at any stage.
 
-Nothing else about the challenge moved. No deliverable, deadline, weight or address changed. But a field nobody was watching did change inside 24 hours, which is the argument for watching them.
+Nothing else about the challenge moved in that check. No deliverable, deadline, weight or address changed. But a field nobody was watching did change inside 24 hours, which is the argument for watching them.
 
-That check now runs in preflight every week, and again in W5 without its offline flag, so the package is verified against what the organisers say on the day rather than what they said on 26 August. It exists because of one line in the rules: the organisers reserve the right to modify, postpone or cancel any stage.
+**Re-verified 31 August, and the organiser wording moved again.** The API removed "and presented by IISERB" from the `about` field. It now says the mission is funded by MeitY, hosted by IIT Bombay and run in collaboration with IISER Bhopal. No deadline, deliverable, rubric row, contact, team rule or problem-statement byte changed. The saved record now carries that wording.
+
+That check now runs in preflight every week, and again in the final package check without its offline flag, so the package is verified against what the organisers say on the day rather than what they said on 26 August. It exists because of one line in the rules: the organisers reserve the right to modify, postpone or cancel any stage.
 
 ## The challenge, in organiser words
 
@@ -40,7 +42,7 @@ From the FAQ, the sharpest single statement of what gets built:
 
 > An autonomous UAV swarm that surveys disaster locations, maintains end-to-end communication with a Ground Control Station through a resilient multi-hop aerial network, and reconfigures dynamically as UAVs fail or lose connectivity, all in simulation.
 
-Funded by MeitY under PUSHPAK, the National Mission on Drone Technology. Hosted by IIT Bombay. Presented by IISERB with IISER Bhopal and VJTI Mumbai.
+Funded by MeitY under PUSHPAK, the National Mission on Drone Technology. Hosted by IIT Bombay, in collaboration with IISER Bhopal.
 
 The organisers say plainly that this is not a hackathon. It runs about 4 months, through evaluation and mentoring, toward field-ready prototypes, and winners go into a Prototype Development Support Programme from December 2026.
 

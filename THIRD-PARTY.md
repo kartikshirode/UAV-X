@@ -8,7 +8,7 @@ Every licence below was read off the copy actually installed on the machine that
 
 ## Components
 
-One row per enforced pin in `versions.lock`. Not one row per project: `check_submission.py` requires every enforced key to appear here by name, so a pin added to the lock and not to this table fails the W5 gate rather than quietly shipping unlicensed.
+One row per enforced pin in `versions.lock`. Not one row per project: `check_submission.py` requires every enforced key to appear here by name, so a pin added to the lock and not to this table fails the final package gate rather than quietly shipping unlicensed.
 
 | Component | Lock key | Version | Licence | Upstream |
 | --- | --- | --- | --- | --- |

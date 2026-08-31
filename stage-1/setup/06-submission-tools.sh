@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The tools W3 and W5 need to read what they are about to send. Run last.
+# The tools W3 and chunk 4.8 need to read what they are about to send. Run last.
 #
 # This step exists because of round 6 finding 2, and the shape of that bug is
 # worth keeping written down. The packages were added to 01-base.sh, which is
@@ -18,7 +18,7 @@ if already_did submission-tools; then say "submission tools already done, skippi
 
 say "poppler and ffmpeg"
 # check_submission.py reads the proposal with pdftotext and pdfinfo, and proves
-# the demo decodes with ffprobe and ffmpeg. Without these four W5 cannot check
+# the demo decodes with ffprobe and ffmpeg. Without these four the package cannot check
 # the two deliverables a judge actually opens.
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends poppler-utils ffmpeg

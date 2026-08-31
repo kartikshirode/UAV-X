@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "UAV-X human preflight receipt",
-  "description": "Round 3 finding 4 made registration and eligibility block the loop. Round 4 finding 7 found the block was shallow: preflight checked three fields and let a plausible-looking partial file through, and nothing ever read the delivery budget it recorded, so an oversized package could reach W5 with no accepted way to send it. Every field here is one a human has to go and do, and the dates are what make a claim checkable later. See stage-1/human-preflight.md.",
+  "description": "Round 3 finding 4 made registration and eligibility block the loop. Round 4 finding 7 found the block was shallow: preflight checked three fields and let a plausible-looking partial file through, and nothing ever read the delivery budget it recorded, so an oversized package could reach the send step with no accepted route. Every field here is one a human has to go and do, and the dates make a claim checkable later. See stage-1/human-preflight.md.",
   "type": "object",
   "required": [
     "registered",
@@ -65,7 +65,7 @@
         "last_checked": {
           "type": "string",
           "format": "date",
-          "description": "When the WhatsApp group was last read. The rules say changes are communicated through official channels, and round 5 finding 8 is right that an API diff does not read a channel. W5 refuses a stale one."
+          "description": "When the WhatsApp group was last read. The rules say changes are communicated through official channels, and round 5 finding 8 is right that an API diff does not read a channel. The final package check refuses a stale one."
         }
       }
     },
@@ -110,7 +110,7 @@
         "attachment_limit_mb": {
           "type": "number",
           "minimum": 1,
-          "description": "What the mail provider actually allows. W5 totals the attachment manifest against this."
+          "description": "What the mail provider actually allows. The final package check totals the attachment manifest against this."
         },
         "route": {
           "type": "string",
@@ -131,7 +131,7 @@
         "by",
         "statement"
       ],
-      "description": "Round 5 finding 9: W5 searched the proposal for the six letters 'regulat', which a sentence saying the system is unregulated would satisfy. A machine can check that the citations are present and resolve; only a person can say the analysis is right, so a person signs it.",
+      "description": "Round 5 finding 9: the old package check searched the proposal for the six letters 'regulat', which a sentence saying the system is unregulated would satisfy. A machine can check that the citations are present and resolve; only a person can say the analysis is right, so a person signs it.",
       "properties": {
         "done": {
           "type": "string",
