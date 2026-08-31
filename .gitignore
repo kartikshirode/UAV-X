@@ -20,6 +20,10 @@ slurm-*.out
 slurm-*.err
 out/
 .uavx-spec-check-receipt.json
+# Loop state, not repository content. .claude/weekly-loop.md names this
+# path; a committed one would make the next tick treat a fresh clone as
+# a week that died mid-run.
+.claude/.weekly-loop-sentinel
 
 # os
 Thumbs.db
