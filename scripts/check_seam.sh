@@ -62,6 +62,19 @@ VIOLATIONS=0
 viol() { printf '  VIOLATION  %s\n' "$*"; VIOLATIONS=$((VIOLATIONS + 1)); }
 pass() { printf '  ok         %s\n' "$*"; }
 
+# Round 8, found while reviewing the static exemptions. The old glob treated
+# every path containing `link_layer` as the privileged radio module, so a file
+# named `not_link_layer/model.py` could read ground truth without a violation.
+# Match the package path, not a suggestive substring. The evaluator package is
+# the only other privileged tree.
+privileged_source() {
+  local rel="${1#"$SRC/"}"
+  case "$rel" in
+    uavx_comms/link_layer.py|uavx_comms/link_layer/*.py|uavx_eval/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # ------------------------------------------------------------------- static
 if [ "$MODE" = "static" ]; then
   [ -d "$SRC" ] || gdie "no source at ${SRC}. Nothing to check yet."
@@ -77,9 +90,7 @@ if [ "$MODE" = "static" ]; then
   # have made a correct implementation unbuildable.
   GROUND_TRUTH_RX='/gazebo/model_states|gazebo_msgs|ModelStates|GetModelState'
   while IFS= read -r f; do
-    case "$f" in
-      */uavx_comms/*link_layer*|*/uavx_eval/*) continue ;;
-    esac
+    privileged_source "$f" && continue
     if grep -nE "$GROUND_TRUTH_RX" "$f" >/dev/null 2>&1; then
       viol "$(realpath --relative-to="$UAVX_REPO" "$f") reads simulator ground truth. Only the link layer and uavx_eval may."
     fi
@@ -88,9 +99,7 @@ if [ "$MODE" = "static" ]; then
   # A swarm process may only ever name its own vehicle. Anything constructing an
   # endpoint for a second vehicle id is either the link layer or a bypass.
   while IFS= read -r f; do
-    case "$f" in
-      */uavx_comms/*link_layer*|*/uavx_eval/*) continue ;;
-    esac
+    privileged_source "$f" && continue
     # `|| true` is load bearing. grep exits 1 when a file names no vehicle at
     # all, which is the normal case, and under `set -o pipefail` that failure
     # propagates out of the command substitution and `set -e` kills the script
@@ -106,9 +115,7 @@ if [ "$MODE" = "static" ]; then
   # Services and actions between swarm nodes bypass the link layer entirely, so
   # they carry swarm data over a channel the radio model never sees.
   while IFS= read -r f; do
-    case "$f" in
-      */uavx_comms/*link_layer*|*/uavx_eval/*) continue ;;
-    esac
+    privileged_source "$f" && continue
     if grep -nE 'create_service|create_client|ActionServer|ActionClient' "$f" >/dev/null 2>&1; then
       viol "$(realpath --relative-to="$UAVX_REPO" "$f") creates a service or action. Swarm traffic goes through tx/rx only."
     fi

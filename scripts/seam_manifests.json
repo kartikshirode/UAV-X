@@ -136,7 +136,9 @@
       ]
     },
     "metrics_collector": {
-      "publishers": [],
+      "publishers": [
+        "/uavx_eval/metrics"
+      ],
       "subscribers": [
         "*model_states*"
       ]
@@ -153,11 +155,19 @@
   "outside_allowlist": {
     "/link_layer": {
       "publishers": [
-        "/uavx/*/rx",
+        "/uavx/uav_1/rx",
+        "/uavx/uav_2/rx",
+        "/uavx/uav_3/rx",
+        "/uavx/uav_4/rx",
+        "/uavx/gcs/rx",
         "/rosout"
       ],
       "subscribers": [
-        "/uavx/*/tx",
+        "/uavx/uav_1/tx",
+        "/uavx/uav_2/tx",
+        "/uavx/uav_3/tx",
+        "/uavx/uav_4/tx",
+        "/uavx/gcs/tx",
         "/gazebo/model_states",
         "/parameter_events"
       ],
@@ -168,12 +178,11 @@
     },
     "/metrics_collector": {
       "publishers": [
-        "/rosout"
+        "/rosout",
+        "/uavx_eval/metrics"
       ],
       "subscribers": [
         "/gazebo/model_states",
-        "/uavx/*/tx",
-        "/uavx/*/rx",
         "/parameter_events"
       ],
       "services": [

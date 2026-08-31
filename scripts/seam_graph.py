@@ -61,11 +61,15 @@ def load_manifest(scenario: str) -> dict:
     s = m["scenarios"][scenario]
     expected = [f"/{v}/{p}" for v in m["vehicles"] for p in s["per_vehicle"]]
     expected += s["extra"]
+    outside_allow = m.get("outside_allowlist", {})
+    missing_allow = sorted(set(m["outside_processes"]) - set(outside_allow))
+    if missing_allow:
+        die(f"outside_allowlist has no rows for {', '.join(missing_allow)}")
     return {
         "vehicles": m["vehicles"],
         "outside": set(m["outside_processes"]),
         # Round 7 finding 6: what each outside process is allowed to hold.
-        "outside_allow": m.get("outside_allowlist", {}),
+        "outside_allow": outside_allow,
         "packet_type": m["swarm_packet_type"],
         "infra_pub": set(m["ros_infrastructure"]["publish"]),
         "infra_sub": set(m["ros_infrastructure"]["subscribe"]),
@@ -136,7 +140,9 @@ def read_snapshot(path: Path, scenario: str, expect_run: Path = None) -> dict:
     for node, ep in g.items():
         for kind in KINDS:
             for e in ep.get(kind, []):
-                if not isinstance(e, dict) or "topic" not in e or "type" not in e:
+                if (not isinstance(e, dict) or "topic" not in e or "type" not in e
+                        or not isinstance(e["topic"], str) or not e["topic"].strip()
+                        or not isinstance(e["type"], str) or not e["type"].strip()):
                     die(f"{path}: {node} lists {kind} without a message type. "
                         f"Types are what rule 6 is enforced from; a snapshot "
                         f"without them cannot be checked and must not pass.")
@@ -237,7 +243,11 @@ def read_live() -> dict:
             if cur and t.startswith("/"):
                 topic, _, typ = t.rpartition(":")
                 d[cur].append({"topic": (topic or t).strip(),
-                               "type": typ.strip()})
+                                   "type": typ.strip()})
+        for kind in KINDS:
+            if any(not e["topic"] or not e["type"] for e in d[kind]):
+                die(f"ros2 node info {n} returned an endpoint without a topic "
+                    f"and type")
         out[n] = d
     return out
 
@@ -322,6 +332,10 @@ def check_endpoint(node, own, kind, topic, typ, man, packet) -> list:
         return [f"{node} exposes {kind[:-1]} {topic}; swarm traffic goes "
                 f"through tx and rx only"]
 
+    if node == "/gcs/gcs_node" and topic.startswith("/gcs/"):
+        return [f"{node} holds {topic}; the GCS has no PX4 namespace and may "
+                f"use only its tx and rx endpoints"]
+
     # The allowlist decides first, and its answer is the more useful message.
     # Checking the message type ahead of it reported a node reading a
     # neighbour's rx as "SwarmPacket on the wrong topic", which is true and
@@ -370,6 +384,9 @@ def check_outside(node, ep, vehicles, packet, allow=None) -> list:
     traffic at all.
     """
     v = []
+    if allow is None:
+        return [f"{node} has no outside-process allowlist. The graph cannot be "
+                f"checked from a deny list."]
     tx = {f"/uavx/{x}/tx" for x in vehicles + ["gcs"]}
     rx = {f"/uavx/{x}/rx" for x in vehicles + ["gcs"]}
     pubs = [e["topic"] for e in ep.get("publishers", [])]

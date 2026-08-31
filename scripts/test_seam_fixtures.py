@@ -37,6 +37,7 @@ LOG = "rcl_interfaces/msg/Log"
 PARAM = "rcl_interfaces/msg/ParameterEvent"
 TRUTH = "gazebo_msgs/msg/ModelStates"
 SETPOINT = "px4_msgs/msg/TrajectorySetpoint"
+METRICS = "uavx_msgs/msg/RunMetrics"
 
 CASES: list = []
 STATIC_CASES: list = []
@@ -116,7 +117,8 @@ def clean_graph(week: int) -> dict:
         "services": [], "actions": [],
     }
     g["/metrics_collector"] = {
-        "publishers": [], "subscribers": [ep("/gazebo/model_states", TRUTH)],
+        "publishers": [ep("/uavx_eval/metrics", METRICS)],
+        "subscribers": [ep("/gazebo/model_states", TRUTH)],
         "services": [], "actions": [],
     }
     # One capture command per node, which is what a real capture writes and
@@ -369,6 +371,37 @@ def _packet_on_allowed_topic(g):
     return g
 
 
+@case("metrics collector reading swarm tx traffic", "mission_integrated", 4,
+      "not in its allowlist")
+def _metrics_swarm_traffic(g):
+    g["/metrics_collector"]["subscribers"].append(
+        ep("/uavx/uav_1/tx", PACKET))
+    return g
+
+
+@case("outside allowlist wildcard cannot cross a namespace",
+      "mission_integrated", 4, "not in its allowlist")
+def _outside_nested_topic(g):
+    g["/link_layer"]["subscribers"].append(
+        ep("/uavx/uav_1/private/tx", PACKET))
+    return g
+
+
+@case("GCS node cannot open a PX4 namespace", "relay_required", 3,
+      "GCS has no PX4 namespace")
+def _gcs_px4(g):
+    g["/gcs/gcs_node"]["subscribers"].append(
+        ep("/gcs/fmu/out/status", "px4_msgs/msg/VehicleStatus"))
+    return g
+
+
+@case("an endpoint with a blank message type", "relay_required", 3,
+      "CANNOT:without a message type")
+def _blank_type(g):
+    g["/uav_1/router"]["publishers"].append(ep("/rosout", ""))
+    return g
+
+
 def run_record_for(snapshot: Path, meta: dict, dest: Path) -> Path:
     """The run record a correct capture would have been written beside.
 
@@ -447,6 +480,14 @@ def _s_service(src: Path):
 def _s_link_layer(src: Path):
     (src / "uavx_comms" / "link_layer").mkdir(parents=True)
     (src / "uavx_comms" / "link_layer" / "model.py").write_text(
+        "sub = self.create_subscription(ModelStates, '/gazebo/model_states', cb, 10)\n",
+        encoding="utf-8")
+
+
+@static_case("a module merely named like the link layer", "ground truth")
+def _s_link_layer_lookalike(src: Path):
+    (src / "uavx_comms" / "not_link_layer").mkdir(parents=True)
+    (src / "uavx_comms" / "not_link_layer" / "model.py").write_text(
         "sub = self.create_subscription(ModelStates, '/gazebo/model_states', cb, 10)\n",
         encoding="utf-8")
 
