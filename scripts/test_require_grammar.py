@@ -26,6 +26,13 @@ from validate_record import COMPARISONS, check_require        # noqa: E402
 
 RECORD = {
     "completion": "complete",
+    # Chunk 1.4. Seventeen gate expressions read `==true` and the grammar had
+    # no boolean case at all, so every one of them failed against a correct
+    # record while `!=false` passed whichever way the flag was set.
+    "injected_event_observed": True,
+    "observations_set_equal": True,
+    "relay_role_released": False,
+    "separation_violations": 0,
     "pose_sample_count": 600,
     "elapsed_sim_s": 60.0,
     "vehicle_ids_observed": ["uav_1", "uav_2", "uav_3", "uav_4"],
@@ -45,6 +52,25 @@ RECORD = {
 }
 
 CASES = [
+    # Booleans. A flag is not a number and not a string, and both of the
+    # other branches got it wrong in a different direction.
+    ("injected_event_observed==true", True, "a true flag against true"),
+    ("relay_role_released==true", False, "a false flag against true, caught"),
+    ("relay_role_released==false", True, "a false flag against false"),
+    ("injected_event_observed==false", False, "a true flag against false, caught"),
+    ("injected_event_observed!=false", True, "a true flag is not false"),
+    ("relay_role_released!=false", False, "!= no longer passes either way"),
+    ("injected_event_observed==1", False, "true is not the number one"),
+    ("relay_role_released==0", False, "false is not the number zero"),
+    ("separation_violations==0", True, "a real zero still compares as a number"),
+    ("injected_event_observed>=1", False, "a flag has no order"),
+    ("completion==true", False, "a string field against a boolean literal"),
+    ("pose_sample_count==true", False, "a number field against a boolean literal"),
+    ("observations_set_equal==injected_event_observed", True,
+     "two flags that agree"),
+    ("observations_set_equal==relay_role_released", False,
+     "two flags that disagree, caught"),
+
     ("completion==complete", True, "string equality"),
     ("completion==crashed", False, "string inequality caught"),
     ("pose_sample_count>=100", True, "numeric floor"),

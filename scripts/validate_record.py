@@ -78,13 +78,66 @@ def flat(value):
     return value
 
 
+BOOLEAN_LITERALS = {"true": True, "false": False}
+
+
 def finite_number(value):
-    """Return a float for a finite number, or None for a non-number."""
+    """Return a float for a finite number, or None for a non-number.
+
+    Chunk 1.4. `bool` is a subclass of `int`, so this used to return 1.0 for
+    True and 0.0 for False. That made `separation_violations==0` pass on a
+    record carrying `false`, which is a type confusion in the direction of
+    accepting garbage. A flag is not a measurement.
+    """
+    if isinstance(value, bool):
+        return None
     try:
         number = float(value)
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+def boolean_result(got, op, want_text):
+    """Compare a boolean field, or say why the pair cannot be compared.
+
+    Chunk 1.4, found while building the event injector. Seventeen gate
+    expressions read `==true` and nothing in the grammar handled a JSON
+    boolean. `str(True)` is "True", so every one of them failed against a
+    correct record, and `!=false` passed whichever way the flag was set.
+    `relay_slot.band_reserved` is schema-typed boolean, so that requirement
+    could not be satisfied by any record the schema would also accept.
+
+    Returns (handled, error_text). handled is False when neither side is
+    boolean and the caller should carry on with its numeric and string
+    branches.
+    """
+    # The right side is either the text of a literal or, when the expression
+    # compares two fields, another record value that is already a bool.
+    if isinstance(want_text, bool):
+        want = want_text
+        want_text = str(want_text).lower()
+    else:
+        want_text = str(want_text)
+        want = BOOLEAN_LITERALS.get(want_text)
+    got_is_bool = isinstance(got, bool)
+    if want is None and not got_is_bool:
+        return False, ""
+
+    if op not in ("==", "!="):
+        return True, (f"is {got!r}, and {op} is an ordered comparison. "
+                      f"true and false have no order; use == or !=.")
+    if want is None:
+        return True, (f"is the boolean {str(got).lower()}, and {want_text!r} "
+                      f"is not true or false. A flag compares only against "
+                      f"a flag.")
+    if not got_is_bool:
+        return True, (f"is {got!r}, which is not a boolean, and {want_text} "
+                      f"is. Nothing here guesses which one was meant.")
+    ok = (got == want) if op == "==" else (got != want)
+    if ok:
+        return True, ""
+    return True, f"is {str(got).lower()}, wanted {op} {want_text}"
 
 
 def check_require(record: dict, expr: str) -> str:
@@ -113,6 +166,12 @@ def check_require(record: dict, expr: str) -> str:
         else:
             want_val = want
             label = repr(want)
+
+        # Booleans first. They are neither numbers nor useful as strings,
+        # and both of the branches below get them wrong.
+        handled, why = boolean_result(got, op, want_val)
+        if handled:
+            return "" if not why else f"{key} {why}"
 
         got_n, want_n = finite_number(got), finite_number(want_val)
         if op in (">=", "<=", ">", "<"):

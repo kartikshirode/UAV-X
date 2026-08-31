@@ -231,6 +231,12 @@ path=~regular_expression
 path<other.path     path>=other.path
 ```
 
+A field whose value is a JSON boolean compares only against the literals
+`true` and `false`, and only with `==` and `!=`; an ordered operator on a flag
+is an error, because true and false have no order. A boolean is never treated
+as 1 or 0, so a count field carrying `false` cannot satisfy a comparison
+against zero.
+
 `==` and `!=` compare numbers as numbers when both sides parse as finite
 numbers, otherwise strings. The ordered operators are numeric only, and fail
 with a diagnostic when either side is not a finite number. A list is compared
