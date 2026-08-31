@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>uavx_sim</name>
+  <version>0.1.0</version>
+  <description>
+    The harness every later week writes into. Scenario loading, event
+    injection, ROS graph capture, resource sampling and the run record
+    writer. It flies vehicles and measures the machine; it carries no swarm
+    traffic, so nothing here may touch a tx or rx endpoint.
+  </description>
+  <maintainer email="megamindsresearch@gmail.com">kartikshirode</maintainer>
+  <license>MIT</license>
+
+  <depend>rclpy</depend>
+  <depend>uavx_msgs</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
