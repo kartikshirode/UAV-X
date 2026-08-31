@@ -53,6 +53,13 @@ def main() -> int:
          "headless must be true"),
         ("scenario name mismatch", lambda d: d.update(name="other"), 1,
          "does not match"),
+        ("numeric scenario name", lambda d: d.update(name=7), 1,
+         "non-empty string"),
+        ("GCS listed as a vehicle", lambda d: d["vehicles"].append("gcs"), 1,
+         "invalid vehicle id"),
+        ("event exactly at scenario end",
+         lambda d: d["injected_events"][0].update(at_s=d["duration_s"]), 1,
+         "outside the scenario"),
     ]
 
     failures = 0

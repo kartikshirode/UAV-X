@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-VEHICLE_ID = re.compile(r"^(?:uav_[0-9]+|gcs)$")
+VEHICLE_ID = re.compile(r"^uav_[0-9]+$")
 EVENT_TYPES = {"kill", "comms_blackout", "gps_degrade"}
 
 
@@ -71,7 +71,10 @@ def main() -> int:
             bad += 1
 
     name = doc.get("name")
-    if isinstance(name, str) and name != path.stem:
+    if not isinstance(name, str) or not name:
+        print(f"  FAIL  name must be a non-empty string, got {name!r}")
+        bad += 1
+    elif name != path.stem:
         print(f"  FAIL  scenario name {name!r} does not match {path.stem!r}")
         bad += 1
 
@@ -126,7 +129,7 @@ def main() -> int:
         at = event.get("at_s")
         if (isinstance(at, bool) or not isinstance(at, (int, float))
                 or not math.isfinite(float(at)) or at < 0
-                or (isinstance(duration, (int, float)) and at > duration)):
+                or (isinstance(duration, (int, float)) and at >= duration)):
             print(f"  FAIL  injected_events[{index}] at_s is outside the scenario: {at!r}")
             bad += 1
 

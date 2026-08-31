@@ -161,12 +161,15 @@ for doc, body in text.items():
         fail(f"{doc} states a vehicle range: {m.group(0).strip()[:80]}. D4 fixes it at exactly 4, and the frozen geometry has four positions.")
 guard(before, "the vehicle count of 4 is not contradicted anywhere")
 
-# W5 is four days, 23 to 26 September.
+# Round 8 found active W5 labels after the five-week plan had been compressed
+# to four. A week-agent could read them as work after W4, when no such tick
+# exists. Historical review files are not in DOCS; active documents use 4.8.
 before = len(problems)
 for doc, body in text.items():
-    if re.search(r"(5|five) days.{0,40}(proposal|video|W5)", body, re.I):
-        fail(f"{doc} says W5 has five days; it has four, 23 to 26 September")
-guard(before, "W5 is described as four days everywhere")
+    if re.search(r"\bW5\b", body):
+        fail(f"{doc} still labels active work as W5. The plan has four weeks; "
+             f"the packaging and send chunk is 4.8.")
+guard(before, "no active document invents a fifth week")
 
 # Radio parameters must match check_geometry.py, which is what proves them.
 arch = text["stage-1/architecture.md"]
@@ -214,6 +217,7 @@ gate_vars = dict(re.findall(r'^(\w+)="([^"$]+)"$', gate, re.M))
 def expand(text: str) -> str:
     for name, value in gate_vars.items():
         text = text.replace("${" + name + "}", value)
+        text = re.sub(rf"\${name}\b", value, text)
     return text
 
 
@@ -223,9 +227,18 @@ helpers = {m.group(1): m.group(2) for m in
            re.finditer(r"^(run_scenario|check_run|gate_test)\(\)\s*\{(.*?)^\}",
                        gate, re.M | re.S)}
 for name, body in list(chunk_bodies.items()):
-    for hname, hbody in helpers.items():
-        if re.search(r"(^|\s)" + hname + r"\s", body):
-            chunk_bodies[name] = chunk_bodies[name] + "\n" + expand(hbody)
+    # Helpers call helpers. Expand to a fixed point so a chunk that calls
+    # prepare_w1_run also gains run_scenario's body for the contract checks.
+    added = set()
+    for _ in range(len(helpers)):
+        before_body = chunk_bodies[name]
+        for hname, hbody in helpers.items():
+            if (re.search(r"(^|\s)" + hname + r"\s", chunk_bodies[name])
+                    and hname not in added):
+                chunk_bodies[name] += "\n" + expand(hbody)
+                added.add(hname)
+        if chunk_bodies[name] == before_body:
+            break
 
 gate_weeks = {}
 for m in re.finditer(r"^gate_w(\d)\(\)\s*\{(.*?)^\}", gate, re.M | re.S):
@@ -251,6 +264,20 @@ dispatched = set(re.findall(r"^\s*\d+\.\d+\)\s*echo\s+(w\d_\w+)", gate, re.M))
 for c in sorted(set(chunk_bodies) - dispatched):
     fail(f"{c} has no chunk id in gate.sh, so it cannot be run on its own")
 guard(before, f"all {len(chunk_bodies)} chunks have an id you can run alone")
+
+# Round 8 found three standalone W1 chunks reading latest files made by an
+# earlier chunk. They passed as part of a week and failed when invoked by id,
+# which broke the plan's unit-of-work promise. Any chunk reading a latest
+# artifact must launch a scenario itself or call a preparation helper.
+before = len(problems)
+for name, body in sorted(chunk_bodies.items()):
+    if "latest." not in body and "latest-graph" not in body:
+        continue
+    if not any(call in body for call in
+               ("run_scenario ", "run_scenario.sh", "prepare_w1_run")):
+        fail(f"{name} reads a latest run artifact and launches no scenario, so "
+             f"its chunk id depends on a previous chunk's leftover files")
+guard(before, "every chunk that reads a latest artifact can produce it alone")
 gate_scenarios = {w: set(re.findall(r"run_scenario\s+\"?scenarios/(\w+)\.yaml", body))
                   for w, body in gate_weeks.items()}
 
@@ -274,7 +301,7 @@ before = len(problems)
 all_run = set().union(*gate_scenarios.values()) if gate_scenarios else set()
 frozen = set(re.findall(r"^### `(\w+)\.yaml`", arch, re.M))
 # harness_check proves the harness and is never evidence for a rubric row, so
-# it is deliberately outside both the frozen geometry and the W5 run list.
+# it is deliberately outside both the frozen geometry and final run list.
 sys.path.insert(0, str(REPO / "scripts"))
 from check_submission_const import HARNESS_RUNS               # noqa: E402
 all_run -= set(HARNESS_RUNS)
@@ -295,7 +322,7 @@ for s in sorted(all_run - frozen):
 guard(before, f"all {len(all_run)} scenarios the gate runs have frozen geometry")
 
 # The submission's required run list and the gate's have to be the same set,
-# or W5 asks for evidence no week produces, or accepts a week that produced
+# or the package asks for evidence no week produces, or accepts a week that produced
 # less than it ran.
 before = len(problems)
 sys.path.insert(0, str(REPO / "scripts"))
@@ -305,9 +332,9 @@ extra = all_run - set(REQUIRED_RUNS)
 for s in sorted(missing):
     fail(f"check_submission_const.REQUIRED_RUNS names {s} and no gate runs it")
 for s in sorted(extra):
-    fail(f"gate.sh runs {s} and W5 never asks for its record, so the run is "
+    fail(f"gate.sh runs {s} and the final package never asks for its record, so the run is "
          f"evidence for nothing")
-guard(before, f"the {len(REQUIRED_RUNS)} runs W5 requires are exactly the ones "
+guard(before, f"the {len(REQUIRED_RUNS)} runs the final package requires are exactly the ones "
               f"the gates produce")
 
 # Round 6, the conclusion pass, and the check that would have caught W1 six
@@ -355,6 +382,25 @@ for chunk_id in sorted(dispatch):
              f"it, so the work it checks is undocumented")
 guard(before, f"all {len(rows)} chunk rows in plan.md match a gate chunk that "
               f"names the same artifacts")
+
+# Round 8 found chunk 1.3 invoking run_scenario.sh before chunk 1.4 produced
+# it. The early call also needed graph and resource fields assigned to still
+# later chunks. Hold the executable itself to the dependency order so this
+# exact cycle cannot return under a different function name.
+before = len(problems)
+runner_rows = [chunk_id for chunk_id, produces in rows
+               if "scripts/run_scenario.sh" in produces]
+if len(runner_rows) != 1:
+    fail(f"plan.md must assign scripts/run_scenario.sh to exactly one chunk, "
+         f"found {runner_rows}")
+else:
+    owner = tuple(int(part) for part in runner_rows[0].split("."))
+    for chunk_id, fn in dispatch.items():
+        current = tuple(int(part) for part in chunk_id.split("."))
+        if current < owner and "run_scenario.sh" in chunk_bodies.get(fn, ""):
+            fail(f"chunk {chunk_id} calls scripts/run_scenario.sh before chunk "
+                 f"{runner_rows[0]} produces it")
+guard(before, "no chunk calls the scenario runner before its producing chunk")
 
 # Round 7 finding 10: plan.md said the W4 fallback is link_loss with the
 # release rule disabled and decisions.md said a deterministic priority list

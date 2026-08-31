@@ -31,6 +31,7 @@ import json
 import math
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -135,6 +136,46 @@ def check_require(record: dict, expr: str) -> str:
             f"{' '.join(COMPARISONS)}.")
 
 
+def semantic_errors(record: dict) -> list[str]:
+    """Checks JSON Schema cannot express in the small local validator."""
+    errors = []
+    requested = finite_number(record.get("requested_duration_s"))
+    elapsed = finite_number(record.get("elapsed_sim_s"))
+    if (record.get("completion") == "complete" and requested is not None
+            and elapsed is not None and elapsed < 0.95 * requested):
+        errors.append(f"complete run covered {elapsed}s of requested {requested}s, "
+                      f"below the accepted 95 percent duration")
+
+    try:
+        started = datetime.fromisoformat(
+            str(record.get("started_at", "")).replace("Z", "+00:00"))
+        ended = datetime.fromisoformat(
+            str(record.get("ended_at", "")).replace("Z", "+00:00"))
+        if ended < started:
+            errors.append("ended_at is earlier than started_at")
+    except (TypeError, ValueError):
+        pass
+
+    vehicles = record.get("vehicle_ids_observed")
+    if isinstance(vehicles, list) and len(set(vehicles)) != len(vehicles):
+        errors.append("vehicle_ids_observed contains duplicate ids")
+
+    if requested is not None:
+        for index, event in enumerate(record.get("injected_events") or []):
+            if not isinstance(event, dict):
+                continue
+            requested_t = finite_number(event.get("requested_t"))
+            observed_t = finite_number(event.get("observed_t"))
+            if requested_t is not None and not 0 <= requested_t < requested:
+                errors.append(f"injected_events[{index}].requested_t is outside "
+                              f"the requested run")
+            if event.get("observed_t") is not None and observed_t is not None:
+                if elapsed is not None and not 0 <= observed_t <= elapsed:
+                    errors.append(f"injected_events[{index}].observed_t is outside "
+                                  f"the elapsed run")
+    return errors
+
+
 def main() -> int:
     args = sys.argv[1:]
     requires = []
@@ -164,6 +205,7 @@ def main() -> int:
         return 2
 
     errors = validate(record, schema)
+    errors += semantic_errors(record)
     if errors:
         print(f"  FAIL  {path.name} does not satisfy the run record contract:")
         for e in errors[:12]:

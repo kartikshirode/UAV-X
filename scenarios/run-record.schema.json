@@ -21,6 +21,7 @@
     "injected_events",
     "requested_duration_s",
     "elapsed_sim_s",
+    "clock_source",
     "source_tree_sha256",
     "resources"
   ],
@@ -170,10 +171,16 @@
       "minimum": 1,
       "description": "Simulated time actually elapsed. uavx_eval.check rejects a run shorter than 95% of requested_duration_s."
     },
+    "clock_source": {
+      "enum": [
+        "ros_sim_time"
+      ],
+      "description": "All numeric event, protocol and metric timestamps use ROS simulated time from /clock. Only started_at and ended_at use wall time."
+    },
     "source_tree_sha256": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
-      "description": "Hash of the source that can change what a simulation does, from scripts/source_tree_hash.py: uavx_ws/, scenarios/, scripts/ and stage-1/setup/. Deliberately narrower than the repository, so editing a sentence of prose does not invalidate a week of runs, and deliberately wider than commit_sha, which ignores uncommitted code. W5 requires this to equal the source_tree_sha256 in submission/source-manifest.json, which is what ties the evidence to the code being submitted."
+      "description": "Hash of the source that can change what a simulation does, from scripts/source_tree_hash.py: uavx_ws/, scenarios/, scripts/ and stage-1/setup/. Deliberately narrower than the repository, so editing a sentence of prose does not invalidate a week of runs, and deliberately wider than commit_sha, which ignores uncommitted code. The final package check requires this to equal the source_tree_sha256 in submission/source-manifest.json, which ties the evidence to the code being submitted."
     },
     "contact_monitor_samples": {
       "type": "integer",
@@ -335,6 +342,25 @@
               }
             }
           }
+        },
+        "backlog_custodian": {
+          "type": "string",
+          "pattern": "^uav_[0-9]+$",
+          "description": "Lowest-id member that collected retained copies while the component had no GCS route. Required for queue_drain."
+        },
+        "custodied_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
+          },
+          "description": "Observation ids created during the outage and held by backlog_custodian."
+        },
+        "custodied": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Size of custodied_ids, recomputed by the evaluator and submission checker."
         }
       }
     },
@@ -481,6 +507,31 @@
     }
   },
   "allOf": [
+    {
+      "if": {
+        "properties": {
+          "scenario_path": {
+            "enum": [
+              "scenarios/queue_drain.yaml"
+            ]
+          }
+        },
+        "required": [
+          "scenario_path"
+        ]
+      },
+      "then": {
+        "properties": {
+          "observations": {
+            "required": [
+              "backlog_custodian",
+              "custodied_ids",
+              "custodied"
+            ]
+          }
+        }
+      }
+    },
     {
       "if": {
         "properties": {

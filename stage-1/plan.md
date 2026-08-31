@@ -21,16 +21,16 @@ Checked against the live record, not against memory. `scripts/check_competition_
 
 It earned its place immediately. On its first real run it caught VJTI Mumbai being removed from the published collaborator list, inside 24 hours of the capture, and that is the sentence the eligibility rule points at. Nothing else has moved.
 
-Preflight runs it every week and tolerates being offline only while a genuine check is less than a week old. W5 runs it with no flags at all.
+Preflight runs it every week and tolerates being offline only while a genuine check is less than a week old. The submission chunk runs it with no flags at all.
 
-Five deliverables, one email, and each one has a row in the W5 gate:
+Five deliverables, one email, and each one has a row in the final package check:
 
 | Asked for | Where it comes from |
 | --- | --- |
 | 6 to 8 page technical proposal with software architecture | drafted a section per week, checked for page count, length and content |
 | A working proof-of-concept simulation | `mission_integrated`, the one run where the subsystems have to compose |
 | Source code | `git archive` of the frozen commit, every file rechecked against it |
-| Installation instructions | `INSTALL.md`, rehearsed in W3 and bound in W5 |
+| Installation instructions | root `INSTALL.md`, copied to `submission/` during the freeze and bound in `4.8` |
 | Demo video | recorded against a rehearsed capture path, decoded end to end |
 
 Three things in the rules are not in the rubric and are easy to skip. All three are cheap and all three are now gated: the solution must **comply with Indian aviation and safety law**, so the proposal carries a BVLOS regulatory section; the entrant is responsible for **not infringing third-party IP**, so the archive carries `LICENSE` and `THIRD-PARTY.md`; and the **published record can change**, so it gets refetched.
@@ -99,13 +99,15 @@ The five messages and the two script interfaces are frozen in [architecture.md](
 | --- | --- | --- |
 | `1.1` | `uavx_ws/src/uavx_msgs`: `SwarmPacket`, `LinkState`, `RoleAssignment`, `Hello`, `RunMetrics` | do the five types resolve, and does `SwarmPacket` carry the identity fields every delivered-once claim rests on |
 | `1.2` | `scripts/run_smoke.sh` | do four vehicles get airborne together, headless |
-| `1.3` | `scenarios/harness_check.yaml`, the run record writer, and `scripts/validate_record.py` to check it | does the scenario exist and say what the later chunks assume, does what the writer produces satisfy `scenarios/run-record.schema.json`, and is `latest.jsonl` published only after a clean exit |
-| `1.4` | `uavx_sim/scenario_runner` and `scripts/run_scenario.sh` | does it honour the scenario's duration, record the right vehicles, and leave nothing running |
-| `1.5` | the generic event injector, moved here from W4 | does an injected event fire and get observed, or is it only listed |
-| `1.6` | the ROS graph snapshot, captured while a scenario is up | will `scripts/seam_graph.py` accept it: types on every endpoint, one `ros2 node info` result per node, tied to the run it came from |
-| `1.7` | peak memory and swap sampling in every record | do four PX4 instances, gzserver and our nodes fit in 11 GB without swapping |
+| `1.3` | `scenarios/harness_check.yaml` and `uavx_sim/test/test_scenario_contract.py` | does the scenario loader reject malformed files before any simulator starts, and does the harness file say what the final W1 run assumes |
+| `1.4` | the generic event injector and `uavx_sim/test/test_event_injector.py` | does an injected event change the target and get observed, or is it only listed |
+| `1.5` | the ROS graph capture and `uavx_sim/test/test_graph_snapshot.py` | does it reject missing node details and publish a complete snapshot atomically |
+| `1.6` | the process-group resource sampler and `uavx_sim/test/test_resource_sampler.py` | does it include child processes rather than reporting a reassuring fraction of the load |
+| `1.7` | `uavx_sim/scenario_runner`, the run record writer, and `scripts/run_scenario.sh` | does the complete harness honour duration and vehicles, publish a valid record and graph only on success, fire its event, measure resources and leave nothing running |
 
-They run against `scenarios/harness_check.yaml`, four vehicles hovering for 60 s with one injected event. It proves the harness and is never cited as evidence for anything, which is why it sits outside the nine runs W5 requires. Chunk 1.3 produces it and `scripts/check_scenario.py` holds it to the duration, vehicle count and injected event the later chunks assume: `pose_sample_count>=100` is a claim about a 60 second run, and against a 5 second scenario it is a much weaker claim that nothing would have flagged.
+They run against `scenarios/harness_check.yaml`, four vehicles hovering for 60 s with one injected event. It proves the harness and is never cited as evidence for anything, which is why it sits outside the nine runs the final package requires. Chunk 1.3 produces it and `scripts/check_scenario.py` holds it to the duration, vehicle count and injected event the integration run assumes: `pose_sample_count>=100` is a claim about a 60 second run, and against a 5 second scenario it is a much weaker claim that nothing would have flagged.
+
+The order is deliberate. The injector, graph capture and resource sampler can be proved against focused tests without a complete runner. Chunk 1.7 is the first live scenario. It is also the first chunk that owns `scripts/run_scenario.sh`, so no earlier gate depends on an executable or a final record shape that has not been built yet. Round 8 found the old 1.3 doing exactly that, while the graph and resource fields it required belonged to 1.6 and 1.7.
 
 W1 asserts through `scripts/validate_record.py`, not through `uavx_eval.check`. Round 7 finding 1: the chunks reached `uavx_eval` by way of the gate's own helper and `uavx_eval` is built in chunk 2.2, so a correct W1 could not pass its own gates. The two checkers are not redundant. The validator checks a record against the schema and the values asked of it; `uavx_eval.check` additionally verifies provenance against the working tree, which is what W2 onward needs and what chunk 2.2 proves by making it reject a record.
 
@@ -178,7 +180,7 @@ Five build days and two to send. That split is what distributing the packaging b
 
 `4.6` is a control in the same way `3.5` is. A separation monitor that never fires has not been shown to work.
 
-`4.8` is the old W5. Everything in it is automated and tested: `freeze_source.sh`, `fresh_install.sh`, `check_submission.py` and `test_submission_fixtures.py`. What is left for a human is the final read of the proposal, the video cut, and sending the email.
+`4.8` contains the old packaging tail. Everything in it is automated and tested: `freeze_source.sh`, `fresh_install.sh`, `check_submission.py` and `test_submission_fixtures.py`. What is left for a human is the final read of the proposal, the video cut, and sending the email.
 
 **Fallback, if the role-release half does not land.** Run `link_loss` with the release rule disabled and claim the routing recovery only, which is still the named failure demonstrated. Say so in the proposal rather than implying more. Time comes from W2's slack under standing rule 6, never from W3.
 
@@ -194,7 +196,7 @@ Nothing here is authored in the last two days. Each row lands in the week that p
 | --- | --- |
 | `submission/proposal.pdf`, 6 to 8 pages, citing the run id behind every number | a section a week, W1 to W4 |
 | `submission/demo.mp4`, opening on the failure and the recovery | footage a week, cut in `4.8` |
-| `submission/INSTALL.md` | W1, then amended by any week that changes the build |
+| root `INSTALL.md`, copied byte for byte to `submission/INSTALL.md` by the freeze | W1, then amended by any week that changes the build |
 | `submission/uavx-source.zip` and `source-manifest.json`, by `scripts/freeze_source.sh` | `4.8` |
 | `submission/fresh-install-receipt.json` and its transcript, by `scripts/fresh_install.sh` | `4.8` |
 | `LICENSE` and `THIRD-PARTY.md` inside the archive | done |

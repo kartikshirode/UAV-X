@@ -52,9 +52,13 @@ fi
 check "ros-${ROS_DISTRO_NAME} installed" test -f "/opt/ros/${ROS_DISTRO_NAME}/setup.bash"
 check "ros2 cli"                          command -v ros2
 check "colcon"                            command -v colcon
+# Round 8 split the W1 harness into focused component tests before the live
+# integration. Those gates invoke pytest by name, so verify the runner exists
+# instead of discovering a missing test tool after the package has built.
+check "pytest"                            python3 -c "import pytest"
 
 # Round 6 finding 2: this script reported a healthy stack on a machine where
-# none of the four existed, and the first thing to notice was W5 failing to
+# none of the four existed, and the first thing to notice was the package check failing to
 # read its own proposal. An environment check that omits a required tool is
 # the same failure as the old Gazebo one, green while the work cannot be done.
 say "submission tools"

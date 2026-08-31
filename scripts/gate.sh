@@ -30,11 +30,11 @@ chunk_fn() {
   case "$1" in
     1.1) echo w1_msgs ;;
     1.2) echo w1_flight ;;
-    1.3) echo w1_record ;;
-    1.4) echo w1_runner ;;
-    1.5) echo w1_injector ;;
-    1.6) echo w1_snapshot ;;
-    1.7) echo w1_resources ;;
+    1.3) echo w1_scenario_contract ;;
+    1.4) echo w1_injector ;;
+    1.5) echo w1_snapshot ;;
+    1.6) echo w1_resources ;;
+    1.7) echo w1_runner ;;
     2.1) echo w2_mission_tests ;;
     2.2) echo w2_eval_tests ;;
     2.3) echo w2_pure_tests ;;
@@ -86,7 +86,8 @@ gate_preflight() {
   # so the loop refuses to start without a receipt. See stage-1/human-preflight.md.
   # Round 4 finding 7: this used to check three fields by hand and accept any
   # truthy object for the rest, so a half-written receipt passed. It now runs
-  # against submission/human-preflight.schema.json, which is also what W5 reads
+  # against submission/human-preflight.schema.json, which the final package
+  # check also reads
   # the delivery budget out of.
   gsay "preflight: human dependencies"
   python3 "${UAVX_REPO}/scripts/check_human_preflight.py" \
@@ -113,8 +114,8 @@ gate_preflight() {
   # Round 6 finding 8: this ran with --allow-offline and `|| gdie`, so exit 3,
   # the code that means "offline, but a real check happened inside the last
   # seven days", killed the week. That is the documented fallback for the WSL
-  # DNS drops, and it could never once have worked. W1 to W4 take 0 or 3. W5
-  # calls this function with UAVX_SPEC_STRICT=1 and takes only 0.
+  # DNS drops, and it could never once have worked. Build chunks take 0 or 3.
+  # The submission chunk sets UAVX_SPEC_STRICT=1 and takes only 0.
   gsay "preflight: the published competition record"
   # Overridable only so test_gate_preflight.py can hand it a checker that
   # returns each documented code on demand. Every real week runs the real one.
@@ -124,7 +125,7 @@ gate_preflight() {
   if [ "${UAVX_SPEC_STRICT:-0}" = "1" ]; then
     python3 "$spec_checker" || spec_rc=$?
     [ "$spec_rc" -eq 0 ] \
-      || gdie "W5 checks the published record online. It exited ${spec_rc}; 1 means it could not be read, 2 means it changed, 3 means nobody has read it today. None of those is a state to send from."
+      || gdie "The submission chunk checks the published record online. It exited ${spec_rc}; 1 means it could not be read, 2 means it changed, 3 means nobody has read it today. None of those is a state to send from."
   else
     python3 "$spec_checker" --allow-offline || spec_rc=$?
     case "$spec_rc" in
@@ -208,6 +209,7 @@ run_scenario() {
   uavx_invalidate_latest
   gsay "scenario: ${scenario}"
   bash "${UAVX_REPO}/scripts/run_scenario.sh" "${scenario}" \
+    --runs-dir "${UAVX_RUNS_DIR}" \
     || gdie "scenario run failed: ${scenario}"
   [ -f "${UAVX_RUNS_DIR}/latest.jsonl" ] \
     || gdie "scenario finished and produced no runs/latest.jsonl"
@@ -248,30 +250,28 @@ check_run() {
 #
 # They exercise scenarios/harness_check.yaml, which exists to prove the
 # harness and is never cited as evidence for anything. It is deliberately
-# outside the nine runs W5 requires.
+# outside the nine runs the final package requires.
 
 W1_SCENARIO="scenarios/harness_check.yaml"
+
+run_w1_contract_test() {
+  local rel="$1"
+  local path="${UAVX_WS_SRC}/${rel}"
+  [ -f "$path" ] \
+    || gdie "missing ${rel}. A named W1 component needs its own rejection tests."
+  python3 -m pytest -q "$path" \
+    || gdie "contract test failed: ${rel}"
+}
 
 w1_msgs() {
   uavx_require_overlay
   gsay "W1.1: the five messages exist and carry their fields"
   gate_test uavx_msgs
-  # ros2 interface show, not a file listing. A .msg on disk that never got
-  # generated is the same shape as the Gazebo packages that were installed
-  # without their binaries.
-  for t in SwarmPacket LinkState RoleAssignment Hello RunMetrics; do
-    ros2 interface show "uavx_msgs/msg/${t}" >/dev/null 2>&1 \
-      || gdie "uavx_msgs/msg/${t} does not resolve. It is named in stage-1/architecture.md section 2."
-    printf "  ok    uavx_msgs/msg/%s\n" "$t"
-  done
-  # The identity fields the store-and-forward claim rests on. Round 5
-  # finding 5: an observation without origin and sequence cannot be counted
-  # once, and every delivered-once assertion downstream becomes unprovable.
-  for f in origin_id sequence created_at expires_at; do
-    ros2 interface show uavx_msgs/msg/SwarmPacket 2>/dev/null | grep -c "$f" >/dev/null \
-      || gdie "SwarmPacket has no ${f}. See architecture.md, What \"delivered once\" means."
-  done
-  printf "  ok    SwarmPacket carries origin_id, sequence, created_at, expires_at\n"
+  # Round 8. Name resolution plus four substring searches allowed changed
+  # widths, constants, field order and four entirely different messages.
+  # Compare generated interfaces with all five frozen blocks instead.
+  python3 "${UAVX_REPO}/scripts/check_message_contract.py" \
+    || gdie "the generated messages differ from architecture.md section 1b"
 }
 
 w1_flight() {
@@ -280,63 +280,29 @@ w1_flight() {
     || gdie "smoke run failed"
 }
 
-w1_record() {
-  gsay "W1.3: the run record writer and its atomic publish"
+w1_scenario_contract() {
+  gsay "W1.3: the scenario loader rejects bad input"
   # Round 7 finding 1: the chunks ran a scenario file no chunk produced.
   [ -f "${UAVX_REPO}/${W1_SCENARIO}" ] \
     || gdie "no ${W1_SCENARIO}. It is a W1.3 deliverable: four vehicles at their layer altitudes for 60 s with one injected event at t=30. See architecture.md section 1b."
-  python3 "${UAVX_REPO}/scripts/check_scenario.py" "${W1_SCENARIO}" \n    --duration 60 --vehicles 4 --needs-injected-event \n    || gdie "${W1_SCENARIO} is not the scenario chunks 1.4 to 1.7 are written for"
-  uavx_invalidate_latest
-  [ ! -f "${UAVX_RUNS_DIR}/latest.jsonl" ] \
-    || gdie "latest.jsonl survived invalidation, so a stale record can satisfy a later gate"
-  bash "${UAVX_REPO}/scripts/run_scenario.sh" "${W1_SCENARIO}" \
-    || gdie "the harness scenario did not run"
-  [ -f "${UAVX_RUNS_DIR}/latest.jsonl" ] \
-    || gdie "the run finished and published no latest.jsonl"
-  # Against the schema, which is the provenance contract, not against our
-  # opinion of what a record looks like.
-  python3 "${UAVX_REPO}/scripts/validate_record.py" "${UAVX_RUNS_DIR}/latest.jsonl" \
-    || gdie "the record the writer produced does not satisfy scenarios/run-record.schema.json"
-}
-
-w1_runner() {
-  gsay "W1.4: the runner honours the scenario and tears down cleanly"
-  gate_test uavx_sim
-  run_scenario "${W1_SCENARIO}"
-  check_run_w1 "${W1_SCENARIO}" \
-    --require "completion==complete" \
-    --require "pose_sample_count>=100" \
-    --require "vehicle_ids_observed==uav_1,uav_2,uav_3,uav_4"
-  # Nothing may be left running. A later gate inheriting this gzserver would
-  # measure a simulator it did not start.
-  for proc in gzserver gzclient px4; do
-    if pgrep -x "$proc" >/dev/null 2>&1; then
-      gdie "${proc} is still running after the scenario returned. The runner does not tear down."
-    fi
-  done
-  printf "  ok    nothing left running\n"
+  python3 "${UAVX_REPO}/scripts/check_scenario.py" "${W1_SCENARIO}" \
+    --duration 60 --vehicles 4 --needs-injected-event \
+    || gdie "${W1_SCENARIO} is not the scenario chunk 1.7 is written for"
+  run_w1_contract_test "uavx_sim/test/test_scenario_contract.py"
 }
 
 w1_injector() {
-  gsay "W1.5: the event injector fires and is observed"
-  # Requested and observed, both. An injector that logs an intention and
-  # never acts satisfies any check that only asks whether the event is listed,
-  # and every fault scenario in W4 rests on this one mechanism.
-  check_run_w1 "${W1_SCENARIO}" \
-    --require "injected_event_observed==true" \
-    --require "injected_event_count>=1"
+  gsay "W1.4: the event injector has an observed-effect test"
+  run_w1_contract_test "uavx_sim/test/test_event_injector.py"
 }
 
 w1_snapshot() {
-  gsay "W1.6: the graph snapshot the seam checker reads"
-  bash "${UAVX_REPO}/scripts/check_seam.sh" --snapshot \
-    "${UAVX_RUNS_DIR}/latest-graph.json" --scenario harness_check \
-    --expect-run "${UAVX_RUNS_DIR}/latest.jsonl" \
-    || gdie "the captured graph is not one the seam checker will accept. Types on every endpoint, one node info result per node, and the run it belongs to."
+  gsay "W1.5: graph capture is complete and atomically published"
+  run_w1_contract_test "uavx_sim/test/test_graph_snapshot.py"
 }
 
 w1_resources() {
-  gsay "W1.7: memory and swap sampled in the record"
+  gsay "W1.6: the resource sampler measures the whole process group"
   # 4 px4 processes plus gzserver plus our nodes in roughly 11 GB, which
   # nobody has measured under load. If this is going to fail it should fail in
   # W1 with two vehicles worth of headroom, not in W4 with the integrated run.
@@ -345,21 +311,70 @@ w1_resources() {
   # nothing, so a record claiming 20 GB resident passed. 10500 MiB of the 11821
   # this machine reports free, leaving room for the gate's own shell and the
   # sampler. Kept in step with PEAK_RSS_CEILING_MIB in check_submission_const.py.
+  run_w1_contract_test "uavx_sim/test/test_resource_sampler.py"
+}
+
+w1_runner() {
+  gsay "W1.7: the complete harness publishes one trustworthy run"
+  gate_test uavx_sim
+  [ -f "${UAVX_REPO}/${W1_SCENARIO}" ] \
+    || gdie "no ${W1_SCENARIO}; chunk 1.3 has not landed"
+  [ -f "${UAVX_REPO}/scripts/run_scenario.sh" ] \
+    || gdie "no scripts/run_scenario.sh; chunk 1.7 cannot run its own harness"
+
+  # Round 8 found that the positive path was the only atomic-publish check.
+  # Make an invalid launch take its documented code and prove it cannot leave
+  # either latest artifact behind for the next gate to accept.
+  uavx_invalidate_latest
+  set +e
+  bash "${UAVX_REPO}/scripts/run_scenario.sh" \
+    "scenarios/round8-missing-scenario.yaml" \
+    --runs-dir "${UAVX_RUNS_DIR}" >/dev/null 2>&1
+  local invalid_rc=$?
+  set -e
+  [ "$invalid_rc" -eq 10 ] \
+    || gdie "invalid scenario arguments exited ${invalid_rc}; the runner contract fixes this at 10"
+  [ ! -e "${UAVX_RUNS_DIR}/latest.jsonl" ] \
+    && [ ! -e "${UAVX_RUNS_DIR}/latest-graph.json" ] \
+    || gdie "a failed runner published a latest artifact that a later gate could accept"
+
+  run_scenario "${W1_SCENARIO}"
+  # Against the schema, which is the provenance contract, not against our
+  # opinion of what a record looks like.
   check_run_w1 "${W1_SCENARIO}" \
+    --require "completion==complete" \
+    --require "clock_source==ros_sim_time" \
+    --require "pose_sample_count>=100" \
+    --require "vehicle_ids_observed==uav_1,uav_2,uav_3,uav_4" \
+    --require "injected_event_observed==true" \
+    --require "injected_event_count>=1" \
     --require "resources.peak_rss_mib>0" \
     --require "resources.peak_rss_mib<10500" \
     --require "resources.swap_used_mib==0" \
     --require "resources.samples>=10"
+  bash "${UAVX_REPO}/scripts/check_seam.sh" --snapshot \
+    "${UAVX_RUNS_DIR}/latest-graph.json" --scenario harness_check \
+    --expect-run "${UAVX_RUNS_DIR}/latest.jsonl" \
+    || gdie "the harness graph is incomplete, stale or outside the seam"
+
+  # Nothing may be left running. A later gate inheriting this gzserver would
+  # measure a simulator it did not start.
+  for proc in gzserver gzclient px4; do
+    if pgrep -x "$proc" >/dev/null 2>&1; then
+      gdie "${proc} is still running after the scenario returned. The runner does not tear down."
+    fi
+  done
+  printf "  ok    complete record and graph published, nothing left running\n"
 }
 
 gate_w1() {
   w1_msgs
   w1_flight
-  w1_record
-  w1_runner
+  w1_scenario_contract
   w1_injector
   w1_snapshot
   w1_resources
+  w1_runner
   gsay "W1: the scaffolding every later week writes into is proven, not assumed"
 }
 
@@ -374,9 +389,16 @@ w2_eval_tests() {
   uavx_require_module uavx_eval
   gate_test uavx_eval
 
+  # A standalone 2.2 has no right to inherit W1's latest record. Produce a
+  # current positive oracle first, then break only its source hash below. If
+  # the starting record is invalid, rejection proves nothing about provenance.
+  run_scenario "$W1_SCENARIO"
+  check_run "$W1_SCENARIO" \
+    --require "completion==complete"
+
   # The package passing its own tests says nothing about what it refuses.
   # uavx_eval.check exists to reject a record whose provenance does not
-  # hold, and W5 leans on it for all nine runs, so the gate makes it
+  # hold, and the final package leans on it for all nine runs, so the gate makes it
   # reject one here. Round 4 found two checkers in this repo that had
   # never been shown to fail.
   local bad
@@ -464,7 +486,7 @@ w3_control() {
 }
 
 w3_rehearsals() {
-  # Round 4 finding 1: the plan promises both of these in W3 so W5 does not
+  # Round 4 finding 1: the plan promises both of these in W3 so the final days do not
   # inherit them, and the gate asked for neither, which meant the promise was
   # decoration. The recording one matters most: the gazebo GUI binary has taken
   # this distro down three times, and the video is a deliverable.
@@ -477,16 +499,17 @@ w3_rehearsals() {
   # So the stale receipts go first. If a wrapper fails, the gate stops at
   # the wrapper, and there is no old receipt left behind for the checker
   # to accept in its place.
-  gsay "W3: the two rehearsals W5 has no room for"
+  gsay "W3: the two rehearsals the submission tail has no room for"
   rm -f "${UAVX_REPO}/submission/dryrun-install-receipt.json" \
         "${UAVX_REPO}/submission/dryrun-install-transcript.log" \
         "${UAVX_REPO}/submission/dryrun-recording-receipt.json" \
         "${UAVX_REPO}/submission/dryrun-recording-run.jsonl" \
+        "${UAVX_REPO}/submission/dryrun-recording-graph.json" \
         "${UAVX_REPO}/submission/dryrun-recording.mp4"
   bash "${UAVX_REPO}/scripts/rehearse_install.sh" \
     || gdie "the rebuild rehearsal failed. See submission/dryrun-install-transcript.log."
   bash "${UAVX_REPO}/scripts/rehearse_recording.sh" \
-    || gdie "the 60 second recording rehearsal failed. Finding this out in W5 leaves four days and no capture path."
+    || gdie "the 60 second recording rehearsal failed. Finding this out during the submission tail leaves no time to replace the capture path."
   python3 "${UAVX_REPO}/scripts/check_dryruns.py" \
     || gdie "the rehearsals ran and their evidence does not hold up"
 }
@@ -586,6 +609,8 @@ w4_queue_drain() {
     --require "outage_duration_s>=45" \
     --require "observations.generated>=450" \
     --require "observations.generated_during_outage>=450" \
+    --require "observations.backlog_custodian==uav_3" \
+    --require "observations.custodied>=450" \
     --require "observations.delivered_after_restore>=450" \
     --require "observations.outage_start_s==60" \
     --require "observations.outage_end_s==105" \
@@ -684,21 +709,21 @@ gate_w4() {
 }
 
 w4_submit() {
-  # Round 6 finding 1: W5 read a fresh-install receipt that no script in
+  # Round 6 finding 1: the old packaging week read a fresh-install receipt that no script in
   # this repository produced, so the one install that decides whether a
   # judge can run any of this was certified by a file. The archive gets
   # frozen and then installed onto a clean target, here, before the
   # package is checked.
-  gsay "W5: freeze the source being submitted"
+  gsay "W4.8: freeze the source being submitted"
   bash "${UAVX_REPO}/scripts/freeze_source.sh" || gdie "the freeze failed"
 
-  gsay "W5: install the frozen archive onto a clean target"
+  gsay "W4.8: install the frozen archive onto a clean target"
   rm -f "${UAVX_REPO}/submission/fresh-install-receipt.json" \
         "${UAVX_REPO}/submission/fresh-install-transcript.log"
   bash "${UAVX_REPO}/scripts/fresh_install.sh" \
     || gdie "the frozen archive does not install on a clean target. That is what a judge will do with it first."
 
-  gsay "W5: submission package"
+  gsay "W4.8: submission package"
   # Do NOT wrap this in `|| gdie`. The checker exits 2 for "package complete,
   # waiting for a human to send it", which is a different state from "package
   # broken". Collapsing both into 1 leaves the supervisor unable to tell a
@@ -708,8 +733,8 @@ w4_submit() {
   rc=$?
   set -e
   case "$rc" in
-    0) gsay "W5: submitted and recorded" ;;
-    2) gsay "W5: package complete, awaiting the human send. Halting here by design."
+    0) gsay "W4.8: submitted and recorded" ;;
+    2) gsay "W4.8: package complete, awaiting the human send. Halting here by design."
        exit 2 ;;
     *) gdie "submission package incomplete" ;;
   esac

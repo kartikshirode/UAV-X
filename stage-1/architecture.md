@@ -169,6 +169,12 @@ flattened into one ROS field per schema key, because `observations`, `handback`
 and `resources` are nested objects. The collector publishes it on
 `/uavx_eval/metrics`; it is not swarm traffic and never carries `SwarmPacket`.
 
+Every protocol time and every numeric run-record time ending in `_s` uses ROS
+simulated time from `/clock`, with zero at scenario start. Wall time is used
+only for the ISO `started_at` and `ended_at` provenance fields. Mixing the two
+would make a delivery appear billions of seconds late and would make seeded
+replay depend on when it was launched.
+
 ### `scripts/run_scenario.sh`
 
 The gate, both rehearsal wrappers and `fresh_install.sh` all call this, and between them they use every flag below. They were written against a script that does not exist yet, so this is the contract they are owed.
@@ -232,15 +238,15 @@ as its comma-joined values, so `prepared_path==uav_4,uav_2,uav_1,gcs` is the
 canonical spelling. A missing path is always a failure. The regular expression
 uses Python `re.search` and is never interpreted as a shell expression.
 
-Example JSONL line, shortened only by omitting optional fields:
+The checked one-line example is
+[`scenarios/run-record.example.jsonl`](../scenarios/run-record.example.jsonl).
+It is a harness record, so it does not carry the scenario-specific observation,
+handback or relay-slot blocks.
 
-```json
-{"run_id":"relay_required_20260919T120000Z","scenario_path":"scenarios/relay_required.yaml","seed":17,"commit_sha":"0123456789abcdef0123456789abcdef01234567","completion":"complete","requested_duration_s":240,"elapsed_sim_s":240}
-```
 
 ### `scenarios/harness_check.yaml`
 
-The scenario W1's chunks run against. Four vehicles hover at their layer altitudes for 60 s with one injected event at `t = 30 s`, and that is all. It exists to prove the harness and is never cited as evidence: `check_submission_const.HARNESS_RUNS` keeps it out of the nine runs W5 requires, and `check_docs.py` exempts it from the frozen-geometry check for the same reason. A hover proves nothing about the rubric.
+The scenario W1's chunks run against. Four vehicles hover at their layer altitudes for 60 s with one injected event at `t = 30 s`, and that is all. It exists to prove the harness and is never cited as evidence: `check_submission_const.HARNESS_RUNS` keeps it out of the nine runs the final package requires, and `check_docs.py` exempts it from the frozen-geometry check for the same reason. A hover proves nothing about the rubric.
 
 ## 2. Link model
 
@@ -290,6 +296,16 @@ Link-state, chosen because it fits in a paragraph of the proposal and is exactly
 | route key | `(hops, temporary relays on the path)`, compared left to right |
 
 Each node floods its neighbour table, builds a graph, and runs Dijkstra to `gcs`. Data forwards hop by hop. A node with no route holds what it cannot send.
+
+There is one exception while a component is disconnected. Its lowest-id member
+is the **backlog custodian**. Members that can still reach it forward a retained
+copy of each new observation there, even though nobody has a route to `gcs`.
+The origin keeps its copy until the GCS acknowledgement, so loss of the
+custodian does not lose the observation. The custodian deduplicates by packet
+identity and drains its combined backlog when a route returns. In
+`queue_drain`, `uav_3` therefore holds 225 of its own observations and 225 from
+`uav_4`. Without this rule the deepest queue is 225 and the frozen 450-packet
+gate is unreachable.
 
 Hysteresis and the symmetry rule exist to stop route flapping when a link sits near a band edge.
 
@@ -366,6 +382,8 @@ The run record carries one `observations` object, and every name below is a fiel
 | `delivery_complete_s` | GCS acceptance time for the last id created during the outage |
 | `control_queue_max_delay_s` | worst time a control message waited behind anything |
 | `ledger` | one row per generated id, with creation and GCS delivery times |
+| `backlog_custodian` | node that collected the disconnected component's copies |
+| `custodied_ids`, `custodied` | outage ids held by that node, and the set size |
 
 The id sets are the point. `generated: 450, unique_delivered: 450` is satisfied by delivering the wrong 450 packets, and counting deliveries alone lets a relay pass by sending the same packet twice. The ledger closes a second gap: a total called `generated_during_outage` did not prove when any named id was made. `uavx_eval.check` recomputes set equality, the outage count, the after-restore count and both drain clocks from the id rows. It rejects a record whose summaries contradict those rows. [RFC 9171](https://www.rfc-editor.org/rfc/rfc9171.html) draws the same line: identity is source plus creation sequence, and delivery is reported against that identity rather than counted as transmissions.
 
@@ -676,10 +694,11 @@ Same common geometry and the same fault as `link_loss`, with one difference: the
 | --- | --- |
 | Fault | `uav_2` radio off at `t = 60 s` |
 | Relay election | disabled, so nothing shortens the outage |
+| Backlog custodian | `uav_3`, the lowest id in the disconnected component |
 | Route restored | `t = 105 s`, a 45 s hold |
 | Run duration | 180 s |
 
-What it has to show: 450 observations generated during the outage, the delivered set equal to the generated set, nothing expired, nothing evicted, a peak queue depth between 450 and 512, the local queue cleared within 2.25 s, the same 450 named ids reached the GCS after restore, and no control message delayed more than 50 ms behind it. A run that drops one packet or shifts creation times to before the outage fails on the ledger.
+What it has to show: 450 observations generated during the outage, all 450 copied to `uav_3` as custodian, the delivered set equal to the generated set, nothing expired, nothing evicted, a peak queue depth between 450 and 512, the local queue cleared within 2.25 s, the same 450 named ids reached the GCS after restore, and no control message delayed more than 50 ms behind it. A run that drops one packet, leaves the data split into two 225-packet queues or shifts creation times to before the outage fails on the ledger.
 
 This is the only scenario that reaches the queue depth the design is sized for. Every other run leaves the claim untested and reads as though it passed.
 
@@ -734,6 +753,7 @@ Required provenance fields, all validated before any metric is read:
 | `seed` | RNG seed, from the scenario |
 | `commit_sha` | repo HEAD at launch |
 | `started_at`, `ended_at` | wall clock |
+| `clock_source` | `ros_sim_time`, for every other timestamp |
 | `completion` | `complete`, or the run is rejected |
 | `vehicle_ids_observed` | must match the scenario's vehicle list |
 | `pose_sample_count` | zero means nothing was watched |
@@ -744,7 +764,7 @@ Required provenance fields, all validated before any metric is read:
 
 `uavx_eval.check` rejects the file if the scenario does not match, an expected event never fired, a denominator is zero, `completion` is not `complete`, or the file predates the launch. A metric can only be trusted after its provenance is.
 
-The same checker runs again in W5 against every record the proposal cites, not just at the end of the week that produced it. Round 4 finding 6: W5 was matching filenames, so an empty file with the right name counted as evidence for a rubric row.
+The same checker runs again in `4.8` against every record the proposal cites, not just at the end of the week that produced it. Round 4 finding 6: the old package check matched filenames, so an empty file with the right name counted as evidence for a rubric row.
 
 ## 8. What each rubric row is actually earning
 

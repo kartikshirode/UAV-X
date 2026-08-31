@@ -23,8 +23,13 @@ because the schema reads as though it is being checked.
     errors = validate(instance, schema)
 """
 
+import math
 import re
 from datetime import date, datetime
+
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+DATETIME_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$")
 
 TYPES = {
     "object": dict,
@@ -73,17 +78,30 @@ def validate(instance, schema, path: str = "") -> list:
         fmt = schema.get("format")
         if fmt == "date":
             try:
+                if not DATE_RE.fullmatch(instance):
+                    raise ValueError
                 date.fromisoformat(instance)
             except ValueError:
                 errs.append(f"{where} is not a YYYY-MM-DD date: {instance!r}")
         elif fmt == "date-time":
             try:
+                # Round 8 found that datetime.fromisoformat accepts a bare
+                # date and a timestamp without a timezone. JSON Schema's
+                # date-time format is RFC 3339, so either made wall-clock
+                # provenance ambiguous while the validator said it was valid.
+                if not DATETIME_RE.fullmatch(instance):
+                    raise ValueError
                 datetime.fromisoformat(instance.replace("Z", "+00:00"))
             except ValueError:
-                errs.append(f"{where} is not a timestamp: {instance!r}")
+                errs.append(f"{where} is not an RFC 3339 timestamp: {instance!r}")
 
     if isinstance(instance, (int, float)) and not isinstance(instance, bool):
-        if "minimum" in schema and instance < schema["minimum"]:
+        # JSON has no NaN or infinity values. Python's json module accepts
+        # them by default, and comparisons against NaN are false, so a NaN
+        # sailed past every minimum until round 8 exercised it.
+        if not math.isfinite(instance):
+            errs.append(f"{where} should be a finite JSON number")
+        elif "minimum" in schema and instance < schema["minimum"]:
             errs.append(f"{where} is {instance}, below the minimum "
                         f"{schema['minimum']}")
 
