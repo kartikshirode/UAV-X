@@ -266,11 +266,18 @@ check_run() {
 
 W1_SCENARIO="scenarios/harness_check.yaml"
 
+# Round 8 introduced this helper resolving against ${UAVX_WS_SRC}, while
+# gate_build, check_seam.sh and standing rule 9 all put our packages under
+# ${UAVX_WS_SRC}/src. Chunks 1.3 to 1.6 would have died with a missing test
+# file against a correct implementation, which is round 7 finding 1 wearing
+# a different function name. One source root, named once.
+UAVX_PKG_ROOT="${UAVX_WS_SRC}/src"
+
 run_w1_contract_test() {
   local rel="$1"
-  local path="${UAVX_WS_SRC}/${rel}"
+  local path="${UAVX_PKG_ROOT}/${rel}"
   [ -f "$path" ] \
-    || gdie "missing ${rel}. A named W1 component needs its own rejection tests."
+    || gdie "missing src/${rel}. A named W1 component needs its own rejection tests."
   python3 -m pytest -q "$path" \
     || gdie "contract test failed: ${rel}"
 }
@@ -338,9 +345,16 @@ w1_runner() {
   # Make an invalid launch take its documented code and prove it cannot leave
   # either latest artifact behind for the next gate to accept.
   uavx_invalidate_latest
+  # A path this gate clears itself, rather than a filename that merely
+  # happens not to exist today. The old spelling named a fixed scenario
+  # file, and the day anything creates it the check asserts the opposite
+  # of what it was written for.
+  local absent="${UAVX_RUNS_DIR}/.gate-absent-scenario.yaml"
+  rm -f "$absent"
+  [ ! -e "$absent" ] \
+    || gdie "cannot clear ${absent}, so the invalid-argument path is untestable"
   set +e
-  bash "${UAVX_REPO}/scripts/run_scenario.sh" \
-    "scenarios/round8-missing-scenario.yaml" \
+  bash "${UAVX_REPO}/scripts/run_scenario.sh" "$absent" \
     --runs-dir "${UAVX_RUNS_DIR}" >/dev/null 2>&1
   local invalid_rc=$?
   set -e
