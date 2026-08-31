@@ -88,7 +88,12 @@ FRESH_STEPS = json.loads((REPO / "scripts" / "rehearsal-steps.json")
 
 def stub_fresh_install(dest: Path, archive_sha: str, commit: str) -> None:
     smoke = "smoke_20260926T000100"
-    lines = [f"target_kind=clean-prefix", "target=/tmp/uavx-fresh-install",
+    target = dest / "fresh-target"
+    target.mkdir(exist_ok=True)
+    isolated_home = target / "home"
+    isolated_home.mkdir(exist_ok=True)
+    lines = [f"target_kind=clean-prefix", f"target={target}",
+             f"target_path={target}",
              f"archive_sha256={archive_sha}", f"commit={commit}",
              "started=2026-09-26T00:00:00Z", ""]
     for label in FRESH_STEPS:
@@ -100,8 +105,8 @@ def stub_fresh_install(dest: Path, archive_sha: str, commit: str) -> None:
     (dest / "fresh-install-receipt.json").write_text(json.dumps({
         "kind": "archive-install",
         "result": "pass",
-        "target": {"kind": "clean-prefix", "name": "/tmp/uavx-fresh-install",
-                   "isolated_home": "/tmp/uavx-fresh-install/home"},
+        "target": {"kind": "clean-prefix", "name": str(target),
+                   "path": str(target), "isolated_home": str(isolated_home)},
         "archive_sha256": archive_sha,
         "commit_sha": commit,
         "started": "2026-09-26T00:00:00Z",
@@ -126,6 +131,22 @@ def evidence_blocks(scenario: str) -> dict:
     # for 100 of the 1200 a correct run produces, so a node sending a twelfth
     # of the traffic met every ratio.
     ids = [f"uav_{n}:{i}" for n in (3, 4) for i in range(600)]
+    outage_ids = set(ids[:225] + ids[600:825])
+    outage_order = {ident: i for i, ident in enumerate(
+        ids[:225] + ids[600:825])}
+    outside_order = {ident: i for i, ident in enumerate(
+        [ident for ident in ids if ident not in outage_ids])}
+    ledger = []
+    for ident in ids:
+        if ident in outage_ids:
+            index = outage_order[ident]
+            created = 60.0 + index / 10.0
+            delivered = 105.0 + index / 200.0 + 0.06
+        else:
+            created = 10.0 + outside_order[ident] / 100.0
+            delivered = created + 0.05
+        ledger.append({"id": ident, "created_at_s": created,
+                       "delivered_at_s": delivered})
     out.update({
         "observations": {
             "generated_ids": ids,
@@ -136,7 +157,7 @@ def evidence_blocks(scenario: str) -> dict:
             "expired": 0,
             "evicted": 0,
             "peak_queue_depth": 450,
-            "backlog_drain_s": 2.1,
+            "backlog_drain_s": 2.25,
             "control_queue_max_delay_s": 0.004,
             "missing_ids": [],
             "unexpected_ids": [],
@@ -148,7 +169,9 @@ def evidence_blocks(scenario: str) -> dict:
             "generated_during_outage": 450,
             "delivered_after_restore": 450,
             "drain_start_s": 105.0,
-            "drain_end_s": 107.1,
+            "drain_end_s": 107.25,
+            "delivery_complete_s": 107.305,
+            "ledger": ledger,
         },
         "relay_slot": {
             "commanded": [317.3, -36.8, 75.0],
@@ -431,6 +454,13 @@ def _no_smoke(dest, built):
                                                      encoding="utf-8")
 
 
+@case("a fresh-install target removed before the send", "does not exist")
+def _fresh_target_gone(dest, built):
+    receipt = json.loads((dest / "fresh-install-receipt.json")
+                         .read_text(encoding="utf-8"))
+    shutil.rmtree(Path(receipt["target"]["path"]))
+
+
 # The plan has asked for memory sampling since W1 and the schema never carried
 # it, so nothing could have failed for its absence.
 @case("a run that swapped", "the machine swapped")
@@ -471,6 +501,23 @@ def _evidence_undelivered(dest, built):
                                                    encoding="utf-8")
 
 
+@case("a same-named run from the wrong attachment path",
+      "and not the runs behind them")
+def _evidence_basename_only(dest, built):
+    manifest = json.loads((dest / "attachment-manifest.json")
+                          .read_text(encoding="utf-8"))
+    evidence_name = built["manifest_runs"]["relay_kill"]
+    item = next(i for i in manifest["attachments"]
+                if i["name"] == evidence_name)
+    wrong_name = Path(evidence_name).name
+    shutil.copyfile(dest / evidence_name, dest / wrong_name)
+    item["name"] = wrong_name
+    item["bytes"] = (dest / wrong_name).stat().st_size
+    item["sha256"] = sha256_bytes((dest / wrong_name).read_bytes())
+    (dest / "attachment-manifest.json").write_text(
+        json.dumps(manifest, indent=2), encoding="utf-8")
+
+
 # Round 7 finding 5: the peak was required to exist and compared with nothing.
 @case("a run that needed more memory than the target has",
       "against a 10500 MiB ceiling")
@@ -495,11 +542,36 @@ def _empty_sets(dest, built):
 
 
 @case("450 ids produced before the route ever went down",
-      "fails the run-record schema")
+      "generated_during_outage says")
 def _preloaded_ids(dest, built):
     p = (dest / built["manifest_runs"]["queue_drain"])
     rec = json.loads(p.read_text(encoding="utf-8"))
-    del rec["observations"]["generated_during_outage"]
+    obs = rec["observations"]
+    for row in obs["ledger"]:
+        if 60.0 <= row["created_at_s"] < 105.0:
+            row["created_at_s"] = 30.0
+    p.write_text(json.dumps(rec), encoding="utf-8")
+
+
+@case("a claimed drain duration that disagrees with its timestamps",
+      "backlog_drain_s says")
+def _wrong_drain_clock(dest, built):
+    p = (dest / built["manifest_runs"]["queue_drain"])
+    rec = json.loads(p.read_text(encoding="utf-8"))
+    rec["observations"]["backlog_drain_s"] = 2.0
+    p.write_text(json.dumps(rec), encoding="utf-8")
+
+
+@case("the final outage packet arriving after the claimed finish",
+      "delivery_complete_s says")
+def _late_last_delivery(dest, built):
+    p = (dest / built["manifest_runs"]["queue_drain"])
+    rec = json.loads(p.read_text(encoding="utf-8"))
+    obs = rec["observations"]
+    outage_rows = [row for row in obs["ledger"]
+                   if 60.0 <= row["created_at_s"] < 105.0]
+    max(outage_rows, key=lambda row: row["delivered_at_s"])[
+        "delivered_at_s"] += 1.0
     p.write_text(json.dumps(rec), encoding="utf-8")
 
 

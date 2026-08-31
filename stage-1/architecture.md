@@ -350,7 +350,7 @@ Every observation carries four fields, which is the smallest identity that makes
 
 **Priority.** Observations never delay control. `HELLO`, `LSA` and role messages go in a separate queue that is always served first. Without that rule a 450 packet backlog sits in front of the very traffic that would end the outage, and the swarm takes longer to recover the harder it was working.
 
-**Drain time, derived.** A 45 second outage at 5 Hz per origin leaves at most 450 packets. At 200 per second that is **2.25 s** to clear, against a `stability_window` of 3.0 s, so the backlog is gone before recovery is even declared. 256 bytes each makes the whole backlog 115 kB, which no link in this model has trouble with.
+**Drain time, derived.** A 45 second outage at 5 Hz per origin leaves at most 450 packets. At 200 per second that is **2.25 s** to leave the local queue, against a `stability_window` of 3.0 s, so the backlog is handed to the link layer before recovery is even declared. The GCS sees the last packet later because each hop still has latency. `delivery_complete_s` measures that end-to-end finish without pretending the fixed queue-service bound includes it. 256 bytes each makes the whole backlog 115 kB, which no link in this model has trouble with.
 
 The run record carries one `observations` object, and every name below is a field inside it. Round 6 finding 5 found three spellings of these numbers in play at once: flat `observations_generated` here, a nested object in the schema, and older flat names again in the gate. Three shapes for one measurement is a promise that at least two of the readers are checking nothing.
 
@@ -362,12 +362,14 @@ The run record carries one `observations` object, and every name below is a fiel
 | `duplicated` | arrivals of an id the GCS already held |
 | `expired`, `evicted` | dropped for age, dropped for space |
 | `peak_queue_depth` | deepest any node's queue got, against 512 |
-| `backlog_drain_s` | route restored to backlog empty |
+| `backlog_drain_s` | `drain_end_s - drain_start_s`, from route restored to local queue empty |
+| `delivery_complete_s` | GCS acceptance time for the last id created during the outage |
 | `control_queue_max_delay_s` | worst time a control message waited behind anything |
+| `ledger` | one row per generated id, with creation and GCS delivery times |
 
-The id sets are the point. `generated: 450, unique_delivered: 450` is satisfied by delivering the wrong 450 packets, and counting deliveries alone lets a relay pass by sending the same packet twice. `uavx_eval.check` recomputes `observations_set_equal`, `observations.missing_count` and `observations.unexpected_count` from the two sets, and rejects any record whose own counts contradict its own sets. [RFC 9171](https://www.rfc-editor.org/rfc/rfc9171.html) draws the same line: identity is source plus creation sequence, and delivery is reported against that identity rather than counted as transmissions.
+The id sets are the point. `generated: 450, unique_delivered: 450` is satisfied by delivering the wrong 450 packets, and counting deliveries alone lets a relay pass by sending the same packet twice. The ledger closes a second gap: a total called `generated_during_outage` did not prove when any named id was made. `uavx_eval.check` recomputes set equality, the outage count, the after-restore count and both drain clocks from the id rows. It rejects a record whose summaries contradict those rows. [RFC 9171](https://www.rfc-editor.org/rfc/rfc9171.html) draws the same line: identity is source plus creation sequence, and delivery is reported against that identity rather than counted as transmissions.
 
-The gate asserts set equality, no unexpected ids, zero expired, zero evicted, a peak depth inside the queue, `backlog_drain_s <= 2.25` and `control_queue_max_delay_s <= 0.05`. That last bound is one in-flight observation at the 200 per second forward rate, 5 ms, with an order of magnitude of margin. The schema requires the whole block for every scenario that produces an outage, through an `if`/`then` pair that `jsonschema_mini.py` now implements rather than ignores.
+The gate asserts set equality, no unexpected ids, zero expired, zero evicted, a peak depth inside the queue, `backlog_drain_s <= 2.25` and `control_queue_max_delay_s <= 0.05`. It also requires `delivery_complete_s` at or after the local drain end and inside the completed run. That 50 ms control bound is one in-flight observation at the 200 per second forward rate, 5 ms, with an order of magnitude of margin. The schema requires the whole block for every scenario that produces an outage, through an `if`/`then` pair that `jsonschema_mini.py` now implements rather than ignores.
 
 ## 4. Roles and the recovery state machine
 
@@ -677,7 +679,7 @@ Same common geometry and the same fault as `link_loss`, with one difference: the
 | Route restored | `t = 105 s`, a 45 s hold |
 | Run duration | 180 s |
 
-What it has to show: 450 observations generated, the delivered set equal to the generated set, nothing expired, nothing evicted, a peak queue depth between 450 and 512, the backlog cleared within 2.25 s, and no control message delayed more than 50 ms behind it. A run that drops one packet and reports clean counts fails on the id sets.
+What it has to show: 450 observations generated during the outage, the delivered set equal to the generated set, nothing expired, nothing evicted, a peak queue depth between 450 and 512, the local queue cleared within 2.25 s, the same 450 named ids reached the GCS after restore, and no control message delayed more than 50 ms behind it. A run that drops one packet or shifts creation times to before the outage fails on the ledger.
 
 This is the only scenario that reaches the queue depth the design is sized for. Every other run leaves the claim untested and reads as though it passed.
 

@@ -597,6 +597,8 @@ w4_queue_drain() {
     --require "observations.peak_queue_depth<=512" \
     --require "observations.peak_queue_depth>=450" \
     --require "observations.backlog_drain_s<=2.25" \
+    --require "observations.delivery_complete_s>=observations.drain_end_s" \
+    --require "observations.delivery_complete_s<=elapsed_sim_s" \
     --require "observations.control_queue_max_delay_s<=0.05" \
     --require "min_pairwise_separation_m>=10" \
     --require "separation_violations==0"

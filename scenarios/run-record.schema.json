@@ -199,7 +199,9 @@
         "generated_during_outage",
         "delivered_after_restore",
         "drain_start_s",
-        "drain_end_s"
+        "drain_end_s",
+        "delivery_complete_s",
+        "ledger"
       ],
       "properties": {
         "generated_ids": {
@@ -249,7 +251,7 @@
         "backlog_drain_s": {
           "type": "number",
           "minimum": 0,
-          "description": "route restored to backlog empty. Derived bound is 2.25 s: 450 packets at 200 per second."
+          "description": "route restored to the local observation queue becoming empty. Derived bound is 2.25 s: 450 packets at 200 per second. End-to-end delivery has its own later timestamp because link latency does not disappear."
         },
         "control_queue_max_delay_s": {
           "type": "number",
@@ -287,7 +289,8 @@
         },
         "delivered_after_restore": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "description": "observations created during the outage and accepted by the GCS at or after drain_start_s. The submission checker derives this from ledger."
         },
         "drain_start_s": {
           "type": "number",
@@ -297,7 +300,41 @@
         "drain_end_s": {
           "type": "number",
           "minimum": 0,
-          "description": "when the GCS acknowledged the last backlogged observation. End to end, not local queue empty. Round 7 finding 8: the bound was ambiguous between the two, and they differ by the forwarding latency of the whole path, which is the part that is hard."
+          "description": "when the local observation queue became empty. backlog_drain_s must equal drain_end_s minus drain_start_s."
+        },
+        "delivery_complete_s": {
+          "type": "number",
+          "minimum": 0,
+          "description": "when the GCS accepted the last observation created during the outage. This is the end-to-end clock and may be later than drain_end_s."
+        },
+        "ledger": {
+          "type": "array",
+          "minItems": 1,
+          "description": "One row per generated observation. Round 8 found that aggregate outage counts did not prove which ids were created or delivered inside the claimed windows.",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "created_at_s",
+              "delivered_at_s"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
+              },
+              "created_at_s": {
+                "type": "number",
+                "minimum": 0
+              },
+              "delivered_at_s": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            }
+          }
         }
       }
     },

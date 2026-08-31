@@ -32,6 +32,7 @@ the moment before a human sends it. Exit 1 means something is actually wrong.
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -495,11 +496,25 @@ else:
              f"worked on the machine that built it' is not the claim.")
     elif not target.get("name"):
         fail("the receipt records a target kind and no target name")
+    elif not target.get("path"):
+        fail("the receipt records no install path inside its target")
     elif target.get("kind") == "clean-prefix" and not target.get("isolated_home"):
         fail("the install receipt records a clean prefix with no isolated "
              "home. Round 7 finding 2: a prefix on this machine still sees "
              "~/.uavx-setup, so setup-all.sh skips every dependency step and "
              "the fresh install reuses a machine that was already provisioned.")
+    elif (target.get("kind") == "clean-prefix"
+          and not Path(target["path"]).is_dir()):
+        fail(f"the clean install target {target['path']} does not exist. A "
+             f"receipt for an output that is gone cannot prove what was "
+             f"installed there.")
+    elif (target.get("kind") == "wsl-distro"
+          and (not shutil.which("wsl.exe") or subprocess.run(
+              ["wsl.exe", "-d", target["name"], "--", "test", "-d",
+               target["path"]], capture_output=True).returncode != 0)):
+        fail(f"the WSL install target {target['name']}:{target['path']} cannot "
+             f"be inspected. Keep the disposable target until the package is "
+             f"sent.")
     elif not r.get("smoke_run_id"):
         fail("the receipt records no smoke run id. An install that builds and "
              "never flies is not an install a judge can use.")
@@ -597,8 +612,16 @@ else:
         # packets delivered.
         obs = record.get("observations")
         if isinstance(obs, dict):
-            gen = set(obs.get("generated_ids") or [])
-            got = set(obs.get("delivered_ids") or [])
+            obs_bad = False
+            gen_list = obs.get("generated_ids") or []
+            got_list = obs.get("delivered_ids") or []
+            gen = set(gen_list)
+            got = set(got_list)
+            if len(gen) != len(gen_list) or len(got) != len(got_list):
+                fail(f"{scenario}: observation id lists contain duplicates. "
+                     f"Set equality cannot prove delivered once when the "
+                     f"source lists already hide repeated ids.")
+                obs_bad = True
             missing = sorted(gen - got)
             unexpected = sorted(got - gen)
             if missing or unexpected:
@@ -607,7 +630,7 @@ else:
                      f"{missing[:3]}, {len(unexpected)} delivered and never "
                      f"generated {unexpected[:3]}. Delivered once is a claim "
                      f"about which observations arrived, not how many.")
-                continue
+                obs_bad = True
             for field, size in (("generated", len(gen)),
                                 ("unique_delivered", len(got))):
                 if obs.get(field) != size:
@@ -615,13 +638,134 @@ else:
                          f"{obs.get(field)} and its own id set holds {size}. A "
                          f"record that disagrees with itself cannot be read "
                          f"either way.")
-                    break
-            else:
-                if obs.get("backlog_drain_s", 0) > 2.25:
-                    fail(f"{scenario}: the backlog took "
+                    obs_bad = True
+
+            # Round 8. The earlier timestamps were aggregate claims. They did
+            # not connect any observation id to the outage or its later GCS
+            # delivery. Rebuild every total and clock from the ledger here.
+            ledger = obs.get("ledger") or []
+            ledger_by_id = {}
+            finite_rows = True
+            for index, row in enumerate(ledger):
+                ident = row.get("id") if isinstance(row, dict) else None
+                if ident in ledger_by_id:
+                    fail(f"{scenario}: observations.ledger repeats id {ident!r}")
+                    obs_bad = True
+                elif ident is not None:
+                    ledger_by_id[ident] = row
+                if not isinstance(row, dict):
+                    finite_rows = False
+                    continue
+                created = row.get("created_at_s")
+                delivered = row.get("delivered_at_s")
+                if (not isinstance(created, (int, float))
+                        or isinstance(created, bool)
+                        or not math.isfinite(created)):
+                    fail(f"{scenario}: observations.ledger[{index}] has a "
+                         f"non-finite creation time")
+                    finite_rows = False
+                    obs_bad = True
+                if (delivered is not None
+                        and (not isinstance(delivered, (int, float))
+                             or isinstance(delivered, bool)
+                             or not math.isfinite(delivered))):
+                    fail(f"{scenario}: observations.ledger[{index}] has a "
+                         f"non-finite delivery time")
+                    finite_rows = False
+                    obs_bad = True
+                if (isinstance(created, (int, float))
+                        and isinstance(delivered, (int, float))
+                        and math.isfinite(created) and math.isfinite(delivered)
+                        and delivered < created):
+                    fail(f"{scenario}: {ident} was delivered before it was "
+                         f"created")
+                    obs_bad = True
+
+            ledger_ids = set(ledger_by_id)
+            if ledger_ids != gen:
+                absent = sorted(gen - ledger_ids)
+                extra = sorted(ledger_ids - gen)
+                fail(f"{scenario}: observations.ledger ids do not match "
+                     f"generated_ids. Missing {absent[:3]}, extra {extra[:3]}")
+                obs_bad = True
+
+            ledger_delivered = {
+                ident for ident, row in ledger_by_id.items()
+                if isinstance(row, dict) and row.get("delivered_at_s") is not None
+            }
+            if ledger_delivered != got:
+                fail(f"{scenario}: delivered_ids do not match the ids with a "
+                     f"delivery timestamp in observations.ledger")
+                obs_bad = True
+
+            clock_names = ("outage_start_s", "outage_end_s", "drain_start_s",
+                           "drain_end_s", "delivery_complete_s",
+                           "backlog_drain_s")
+            clocks = {name: obs.get(name) for name in clock_names}
+            clocks_ok = all(isinstance(value, (int, float))
+                            and not isinstance(value, bool)
+                            and math.isfinite(value)
+                            for value in clocks.values())
+            if not clocks_ok:
+                fail(f"{scenario}: observation drain clocks must all be finite")
+                obs_bad = True
+            elif not (clocks["outage_start_s"] < clocks["outage_end_s"]
+                      <= clocks["drain_start_s"] <= clocks["drain_end_s"]
+                      <= clocks["delivery_complete_s"]
+                      <= record.get("elapsed_sim_s", -1)):
+                fail(f"{scenario}: observation clocks are out of order. Need "
+                     f"outage start < outage end <= drain start <= local drain "
+                     f"end <= GCS delivery complete <= elapsed simulation.")
+                obs_bad = True
+
+            if clocks_ok:
+                measured = clocks["drain_end_s"] - clocks["drain_start_s"]
+                if not math.isclose(obs["backlog_drain_s"], measured,
+                                    abs_tol=1e-6):
+                    fail(f"{scenario}: observations.backlog_drain_s says "
+                         f"{obs['backlog_drain_s']} but drain_end_s minus "
+                         f"drain_start_s is {measured}")
+                    obs_bad = True
+                if obs["backlog_drain_s"] > 2.25 + 1e-6:
+                    fail(f"{scenario}: the local backlog took "
                          f"{obs['backlog_drain_s']}s to drain, past the 2.25 s "
                          f"the queue size was derived from")
-                    continue
+                    obs_bad = True
+
+            if finite_rows and clocks_ok:
+                during = {
+                    ident for ident, row in ledger_by_id.items()
+                    if clocks["outage_start_s"] <= row["created_at_s"]
+                    < clocks["outage_end_s"]
+                }
+                after = {
+                    ident for ident in during
+                    if ledger_by_id[ident]["delivered_at_s"] is not None
+                    and ledger_by_id[ident]["delivered_at_s"]
+                    >= clocks["drain_start_s"]
+                }
+                if obs.get("generated_during_outage") != len(during):
+                    fail(f"{scenario}: observations.generated_during_outage "
+                         f"says {obs.get('generated_during_outage')} but the "
+                         f"ledger places {len(during)} ids in that window")
+                    obs_bad = True
+                if obs.get("delivered_after_restore") != len(after):
+                    fail(f"{scenario}: observations.delivered_after_restore "
+                         f"says {obs.get('delivered_after_restore')} but the "
+                         f"ledger proves {len(after)}")
+                    obs_bad = True
+                if during and len(after) == len(during):
+                    last_delivery = max(
+                        ledger_by_id[ident]["delivered_at_s"] for ident in during)
+                    if not math.isclose(clocks["delivery_complete_s"],
+                                        last_delivery, abs_tol=1e-6):
+                        fail(f"{scenario}: observations.delivery_complete_s "
+                             f"says {clocks['delivery_complete_s']} but the last "
+                             f"outage id reached the GCS at {last_delivery}")
+                        obs_bad = True
+
+            if obs_bad:
+                continue
 
         # A run that swapped is a run whose timings mean nothing, and
         # time_to_reconnect_s is graded. The schema can require the field; only
@@ -708,7 +852,17 @@ else:
     attachment_sha = hashlib.sha256(att_path.read_bytes()).hexdigest()
     total = 0
     for item in att.get("attachments", []):
-        p = SUB / item.get("name", "")
+        name = str(item.get("name") or "").replace("\\", "/")
+        if (not name or Path(name).is_absolute() or name.startswith("/")
+                or ".." in Path(name).parts):
+            fail(f"attachment manifest path {name!r} must stay inside "
+                 f"submission/")
+            continue
+        p = (SUB / name).resolve()
+        if SUB.resolve() not in p.parents:
+            fail(f"attachment manifest path {name!r} resolves outside "
+                 f"submission/")
+            continue
         if not p.is_file():
             fail(f"attachment manifest lists {item.get('name')}, which is absent")
             continue
@@ -725,8 +879,10 @@ else:
     # so a receipt for an email carrying two of the five deliverables reached
     # the submitted state. The archive and the video had to exist on disk and
     # never had to be sent.
-    listed = {i.get("name") for i in att.get("attachments", [])}
-    listed |= {i.get("name") for i in att.get("delivered_by_link", [])}
+    listed = {str(i.get("name") or "").replace("\\", "/")
+              for i in att.get("attachments", [])}
+    listed |= {str(i.get("name") or "").replace("\\", "/")
+               for i in att.get("delivered_by_link", [])}
 
     # Round 7 finding 3, the other half. The checker revalidated every named
     # run record and nothing required those records to be in the email, so the
@@ -737,7 +893,6 @@ else:
         inside = archive_names if "archive_names" in dir() else set()
         missing_ev = [r for r in named
                       if r not in listed
-                      and Path(r).name not in listed
                       and f"uavx-source/{r}" not in inside
                       and r not in inside]
         if missing_ev:
