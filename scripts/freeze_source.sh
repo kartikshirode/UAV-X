@@ -54,6 +54,11 @@ rm -f "$ARCHIVE"
 git archive --format=zip --prefix=uavx-source/ -o "$ARCHIVE" "$C" -- "${ARCHIVE_PATHS[@]}" \
   || gdie "git archive failed"
 
+# The root file is canonical. The email copy comes from the same clean tree
+# that was archived, so the clean-install rehearsal and the judge cannot read
+# different instructions under the same name.
+cp INSTALL.md submission/INSTALL.md
+
 SHA="$(sha256sum "$ARCHIVE" | cut -d' ' -f1)"
 TREE="$(python3 "${HERE}/source_tree_hash.py" --ref "$C")"
 

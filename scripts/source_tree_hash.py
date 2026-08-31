@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """One definition of "the source that produced this result".
 
-Every run record carries `source_tree_sha256`, and W5 has to prove the runs it
+Every run record carries `source_tree_sha256`, and the final package has to prove the runs it
 submits as evidence came off the source it is submitting. That only works if the
 runner and the checker compute the same number the same way, so both call this.
 
@@ -66,7 +66,7 @@ def from_worktree() -> dict:
     Not by reading the bytes and hashing them. This repo forces LF in the
     object database and the working copy on Windows holds CRLF, so hashing raw
     bytes made a clean checkout disagree with the commit it came from. Every
-    W5 run record would then have failed to match the frozen source, and the
+    submitted run record would then have failed to match the frozen source, and the
     submission would have been blocked by a checker that was wrong.
 
     `git hash-object` runs the same clean filters git uses on the way in, so a

@@ -19,7 +19,7 @@ archive cannot contain source that commit never had.
 Finding 6: run evidence was filename matching. Five substrings against
 `runs/*.jsonl`. An empty file, a crashed run, a run of a different scenario or a
 run off different source all counted, and the integrated mission and the safety
-control were not on the list at all. Now W5 revalidates every run against the
+control were not on the list at all. Now the final package revalidates every run against the
 schema and against `uavx_eval.check`, binds each to the archived source, and
 requires the proposal to cite the run ids it is quoting numbers from.
 
@@ -58,7 +58,7 @@ REPO = Path(__file__).resolve().parent.parent
 # something is not evidence, and this repo has shipped two of those.
 SUB = Path(os.environ.get("UAVX_SUBMISSION_DIR") or (REPO / "submission"))
 # Where run records live. Overridable only so the fixture suite can build a
-# package in a temp tree; W5 uses the repository. Round 7 finding 3: evidence
+# package in a temp tree; chunk 4.8 uses the repository. Round 7 finding 3: evidence
 # paths are resolved under this root and may not escape it.
 RUNS_ROOT = Path(os.environ.get("UAVX_RUNS_ROOT") or REPO).resolve()
 RUNS = Path(os.environ.get("UAVX_RUNS_DIR") or (REPO / "runs"))
@@ -75,11 +75,11 @@ ORGANISER_EMAIL = "pushpak_gc2026@aero.iitb.ac.in"
 # Every scenario whose numbers the proposal is allowed to quote. The integrated
 # mission and the safety control are on it because round 4 finding 6 found the
 # one run that proves the swarm, and the one run that gives the safety result
-# its meaning, were both missing from the W5 list.
+# its meaning, were both missing from the final run list.
 
 # What the archive is allowed to hold, matching scripts/freeze_source.sh.
 ARCHIVE_PATHS = ("uavx_ws/", "scenarios/", "scripts/", "stage-1/",
-                 "LICENSE", "THIRD-PARTY.md")
+                 "INSTALL.md", "LICENSE", "THIRD-PARTY.md")
 ARCHIVE_PREFIX = "uavx-source/"
 
 FORBIDDEN_IN_ARCHIVE = [
@@ -113,7 +113,7 @@ def section(title: str) -> None:
 def load_json(path: Path):
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         fail(f"{path.name}: {exc}")
         return None
 
@@ -127,7 +127,7 @@ def sha256_file(path: Path) -> str:
 
 
 # ------------------------------------------------------- human preflight
-# W5 needs the delivery budget, and if the receipt is not valid there is no
+# The final package needs the delivery budget, and if the receipt is not valid there is no
 # budget to check the package against.
 section("human preflight")
 human = None
@@ -178,9 +178,13 @@ elif not have("pdftotext"):
     fail("pdftotext not installed, cannot read the PDF. apt install poppler-utils")
 else:
     try:
-        proposal_text = subprocess.run(
+        proposal_proc = subprocess.run(
             ["pdftotext", str(pdf), "-"], capture_output=True, text=True,
-            timeout=120).stdout
+            timeout=120)
+        proposal_text = proposal_proc.stdout
+        if proposal_proc.returncode != 0:
+            fail(f"pdftotext rejected proposal.pdf: "
+                 f"{proposal_proc.stderr.strip()[:200] or 'no diagnostic'}")
     except (OSError, subprocess.SubprocessError) as exc:
         fail(f"pdftotext failed: {exc}")
 
@@ -253,10 +257,15 @@ elif not have("ffprobe") or not have("ffmpeg"):
     fail("ffmpeg not installed, cannot verify the video decodes. apt install ffmpeg")
 else:
     try:
-        dur = float(subprocess.run(
+        probe = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration",
              "-of", "default=nw=1:nk=1", str(video)],
-            capture_output=True, text=True, timeout=120).stdout.strip())
+            capture_output=True, text=True, timeout=120)
+        if probe.returncode != 0:
+            raise ValueError(probe.stderr.strip() or "ffprobe returned non-zero")
+        dur = float(probe.stdout.strip())
+        if not math.isfinite(dur):
+            raise ValueError(f"non-finite duration {probe.stdout.strip()!r}")
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         dur = -1.0
         fail(f"ffprobe could not read a duration: {exc}")
@@ -297,6 +306,11 @@ archive = None
 
 if manifest is None:
     fail("submission/source-manifest.json missing. Run scripts/freeze_source.sh.")
+elif not isinstance(manifest, dict):
+    # Round 8 found package-controlled JSON containers reaching .get calls
+    # before their shape was checked. A malformed package must be rejected,
+    # not terminate the checker with a traceback.
+    fail("source-manifest.json must contain one JSON object")
 else:
     frozen_sha = manifest.get("commit_sha")
     archive_sha256 = manifest.get("archive_sha256")
@@ -347,19 +361,34 @@ else:
     else:
         ok(f"{archive.name} matches its manifest hash, {actual[:16]}")
 
-    if archive.suffix == ".zip":
-        with zipfile.ZipFile(archive) as zf:
-            entries = {i.filename: zf.read(i.filename)
-                       for i in zf.infolist() if not i.is_dir()}
-    else:
-        with tarfile.open(archive) as tf:
-            entries = {}
-            for m in tf.getmembers():
-                if m.isfile():
+    entries = {}
+    duplicate_entries = []
+    try:
+        if archive.suffix == ".zip":
+            with zipfile.ZipFile(archive) as zf:
+                infos = [i for i in zf.infolist() if not i.is_dir()]
+                names = [i.filename for i in infos]
+                duplicate_entries = sorted({name for name in names
+                                            if names.count(name) > 1})
+                entries = {i.filename: zf.read(i) for i in infos}
+        else:
+            with tarfile.open(archive) as tf:
+                members = [m for m in tf.getmembers() if m.isfile()]
+                names = [m.name for m in members]
+                duplicate_entries = sorted({name for name in names
+                                            if names.count(name) > 1})
+                for m in members:
                     fh = tf.extractfile(m)
                     entries[m.name] = fh.read() if fh else b""
+    except (OSError, EOFError, tarfile.TarError, zipfile.BadZipFile,
+            RuntimeError) as exc:
+        fail(f"{archive.name} cannot be read as a source archive: {exc}")
 
     ok(f"{len(entries)} files in the archive")
+    archive_names = set(entries)
+    if duplicate_entries:
+        fail(f"the source archive repeats path entries: "
+             f"{duplicate_entries[:4]}")
 
     leaked = [n for n in entries if any(rx.search(n) for rx in FORBIDDEN_IN_ARCHIVE)]
     if leaked:
@@ -368,6 +397,7 @@ else:
         ok("no build products, git metadata or key material")
 
     # The part that was missing entirely: prove the bytes came from commit C.
+    want = {}
     if frozen_sha:
         tree = subprocess.run(
             ["git", "-C", str(REPO), "ls-tree", "-r", "-z", frozen_sha],
@@ -405,6 +435,22 @@ else:
         if not (mismatched or unexpected or absent):
             ok(f"every file in the archive is byte-identical to commit "
                f"{frozen_sha[:12]}, and none is missing")
+
+    # Round 8 found fresh_install.sh executing the root guide from the archive
+    # while the attachment manifest sent submission/INSTALL.md. Both could be
+    # valid files and still contain different commands. Once INSTALL.md exists
+    # in the frozen commit, the installed and delivered instructions are one
+    # artifact and must match byte for byte.
+    if "INSTALL.md" in want:
+        archived_install = entries.get(ARCHIVE_PREFIX + "INSTALL.md")
+        if archived_install is None:
+            fail(f"the frozen commit contains INSTALL.md and the archive does "
+                 f"not")
+        elif install.is_file() and install.read_bytes() != archived_install:
+            fail("submission/INSTALL.md differs from the INSTALL.md that the "
+                 "fresh-install rehearsal executed inside the archive")
+        else:
+            ok("the delivered INSTALL.md is the guide executed from the archive")
 
 # --------------------------------------------------------------- licensing
 # From the rules: "Participants retain ownership of their intellectual property
@@ -467,13 +513,22 @@ if not receipt_path.is_file():
     fail("submission/fresh-install-receipt.json missing. Run "
          "scripts/fresh_install.sh against the frozen archive.")
 else:
-    r = load_json(receipt_path) or {}
+    loaded_receipt = load_json(receipt_path)
+    if not isinstance(loaded_receipt, dict):
+        fail("fresh-install-receipt.json must contain one JSON object")
+        r = {}
+    else:
+        r = loaded_receipt
     target = r.get("target") or {}
+    if not isinstance(target, dict):
+        fail("the fresh install receipt target must be a JSON object")
+        target = {}
     # Resolved inside the submission directory, not against the repo root.
     # The wrapper always writes the transcript beside the receipt, and taking
     # the basename means a receipt cannot point the checker at some other file
     # on the machine either.
-    tname = Path(r.get("transcript") or "").name
+    transcript = r.get("transcript")
+    tname = Path(transcript).name if isinstance(transcript, str) else ""
     tpath = (SUB / tname) if tname else SUB
 
     if r.get("kind") != "archive-install":
@@ -494,9 +549,9 @@ else:
         fail(f"the receipt names no clean target. target={target!r}. Without "
              f"one, nothing says where the archive was installed, and 'it "
              f"worked on the machine that built it' is not the claim.")
-    elif not target.get("name"):
+    elif not isinstance(target.get("name"), str) or not target["name"]:
         fail("the receipt records a target kind and no target name")
-    elif not target.get("path"):
+    elif not isinstance(target.get("path"), str) or not target["path"]:
         fail("the receipt records no install path inside its target")
     elif target.get("kind") == "clean-prefix" and not target.get("isolated_home"):
         fail("the install receipt records a clean prefix with no isolated "
@@ -560,13 +615,20 @@ else:
 section("run evidence")
 evidence = load_json(SUB / "evidence-manifest.json") if (SUB / "evidence-manifest.json").is_file() else None
 schema = load_json(REPO / "scenarios" / "run-record.schema.json")
+validated_run_hashes = {}
+named_runs = {}
 
 if evidence is None:
     fail("submission/evidence-manifest.json missing. It names the exact run "
          "record behind each scenario; a glob over runs/ counts whatever "
          "happens to be lying there.")
+elif not isinstance(evidence, dict):
+    fail("evidence-manifest.json must contain one JSON object")
 else:
     named_runs = evidence.get("runs", {})
+    if not isinstance(named_runs, dict):
+        fail("evidence-manifest.json runs must be a JSON object")
+        named_runs = {}
     for scenario in REQUIRED_RUNS:
         rel = named_runs.get(scenario)
         if not rel:
@@ -754,6 +816,24 @@ else:
                          f"says {obs.get('delivered_after_restore')} but the "
                          f"ledger proves {len(after)}")
                     obs_bad = True
+                if scenario == "queue_drain":
+                    custodied_list = obs.get("custodied_ids") or []
+                    custodied = set(custodied_list)
+                    if len(custodied) != len(custodied_list):
+                        fail(f"{scenario}: observations.custodied_ids contains "
+                             f"duplicates")
+                        obs_bad = True
+                    if custodied != during:
+                        absent = sorted(during - custodied)
+                        extra = sorted(custodied - during)
+                        fail(f"{scenario}: custodied_ids are not the outage "
+                             f"set. Missing {absent[:3]}, extra {extra[:3]}")
+                        obs_bad = True
+                    if obs.get("custodied") != len(custodied):
+                        fail(f"{scenario}: observations.custodied says "
+                             f"{obs.get('custodied')} but custodied_ids holds "
+                             f"{len(custodied)} ids")
+                        obs_bad = True
                 if during and len(after) == len(during):
                     last_delivery = max(
                         ledger_by_id[ident]["delivered_at_s"] for ident in during)
@@ -838,6 +918,7 @@ else:
                  f"numbers point at nothing a reader can check")
             continue
 
+        validated_run_hashes[rel] = sha256_file(path)
         ok(f"{scenario}: {rid} validated, {elapsed:.0f}s, source matches")
 
 # ----------------------------------------------------------- attachments
@@ -849,9 +930,33 @@ if not att_path.is_file():
          "actually goes in the email, and what the send receipt binds to.")
 else:
     att = load_json(att_path) or {}
+    if not isinstance(att, dict):
+        fail("attachment-manifest.json must contain one JSON object")
+        att = {}
+    attachments = att.get("attachments", [])
+    links = att.get("delivered_by_link", [])
+    if not isinstance(attachments, list):
+        fail("attachment-manifest.json attachments must be a list")
+        attachments = []
+    if not isinstance(links, list):
+        fail("attachment-manifest.json delivered_by_link must be a list")
+        links = []
+    if any(not isinstance(item, dict) for item in attachments + links):
+        fail("every delivery manifest entry must be a JSON object")
+    attachments = [item for item in attachments if isinstance(item, dict)]
+    links = [item for item in links if isinstance(item, dict)]
+
+    delivery_names = [str(item.get("name") or "").replace("\\", "/")
+                      for item in attachments + links]
+    duplicates = sorted({name for name in delivery_names
+                         if name and delivery_names.count(name) > 1})
+    if duplicates:
+        fail(f"the delivery manifest names the same file more than once: "
+             f"{duplicates[:4]}")
+
     attachment_sha = hashlib.sha256(att_path.read_bytes()).hexdigest()
     total = 0
-    for item in att.get("attachments", []):
+    for item in attachments:
         name = str(item.get("name") or "").replace("\\", "/")
         if (not name or Path(name).is_absolute() or name.startswith("/")
                 or ".." in Path(name).parts):
@@ -879,17 +984,14 @@ else:
     # so a receipt for an email carrying two of the five deliverables reached
     # the submitted state. The archive and the video had to exist on disk and
     # never had to be sent.
-    listed = {str(i.get("name") or "").replace("\\", "/")
-              for i in att.get("attachments", [])}
-    listed |= {str(i.get("name") or "").replace("\\", "/")
-               for i in att.get("delivered_by_link", [])}
+    listed = set(delivery_names)
 
     # Round 7 finding 3, the other half. The checker revalidated every named
     # run record and nothing required those records to be in the email, so the
     # evidence behind every number in the proposal could stay on this machine.
     if evidence is not None and archive is not None:
         named = [str(v).replace("\\", "/") for v in
-                 (evidence.get("runs") or {}).values()]
+                 named_runs.values()]
         inside = archive_names if "archive_names" in dir() else set()
         missing_ev = [r for r in named
                       if r not in listed
@@ -900,6 +1002,25 @@ else:
                  f"are in neither the archive nor the delivery manifest, so "
                  f"the judge gets the numbers and not the runs behind them: "
                  f"{missing_ev[:3]}")
+
+        # Round 8 found the evidence checker reading REPO/runs while delivery
+        # read SUB/runs. Matching names did not bind those two files. A valid
+        # local record and a different same-named delivered copy both passed.
+        for rel, validated_hash in sorted(validated_run_hashes.items()):
+            if rel in listed:
+                delivered = (SUB / rel).resolve()
+                if delivered.is_file() and sha256_file(delivered) != validated_hash:
+                    fail(f"the delivered copy of {rel} differs from the run "
+                         f"that was validated. A matching path is not matching "
+                         f"evidence unless the bytes are the same.")
+            else:
+                archived_name = (f"{ARCHIVE_PREFIX}{rel}"
+                                 if f"{ARCHIVE_PREFIX}{rel}" in inside else rel)
+                if archived_name in inside:
+                    delivered_hash = hashlib.sha256(entries[archived_name]).hexdigest()
+                    if delivered_hash != validated_hash:
+                        fail(f"the archived copy of {rel} differs from the run "
+                             f"that was validated")
     needed = ["proposal.pdf", "INSTALL.md"]
     if archive is not None:
         needed.append(archive.name)
@@ -925,8 +1046,7 @@ else:
              f"checked video is not the one going in the email.")
     else:
         want = sha256_file(checked_video)
-        entry = next((i for i in list(att.get("attachments", []))
-                      + list(att.get("delivered_by_link", []))
+        entry = next((i for i in attachments + links
                       if i.get("name") == checked_video.name), None)
         if entry is None:
             fail(f"{checked_video.name} is listed and has no manifest entry")
@@ -943,20 +1063,36 @@ else:
                f"decoded, by hash")
 
     # A file sent as a link is still a deliverable and still has to be checked.
-    for item in att.get("delivered_by_link", []):
-        p = SUB / item.get("name", "")
+    for item in links:
+        name = str(item.get("name") or "").replace("\\", "/")
         for field in ("route", "url", "bytes", "sha256", "access_tested"):
             if not item.get(field):
-                fail(f"{item.get('name')} is delivered by link and its manifest "
+                fail(f"{name} is delivered by link and its manifest "
                      f"entry has no {field}. A link nobody opened is not a "
                      f"delivery.")
-        if p.is_file() and item.get("sha256") != sha256_file(p):
-            fail(f"{p.name} on disk does not match the hash published at "
+        if (not name or Path(name).is_absolute() or name.startswith("/")
+                or ".." in Path(name).parts):
+            fail(f"linked delivery path {name!r} must stay inside submission/")
+            continue
+        p = (SUB / name).resolve()
+        if SUB.resolve() not in p.parents:
+            fail(f"linked delivery path {name!r} resolves outside submission/")
+            continue
+        if not p.is_file():
+            fail(f"linked delivery {name} has no local copy to hash and size")
+            continue
+        digest = sha256_file(p)
+        size = p.stat().st_size
+        if item.get("sha256") != digest:
+            fail(f"{name} on disk does not match the hash published at "
                  f"{item.get('url')}")
+        if item.get("bytes") != size:
+            fail(f"linked delivery {name} is {size} bytes, the manifest says "
+                 f"{item.get('bytes')}")
 
     # Not guarded on `not problems`. The budget is the one check whose answer
     # a human has to act on days ahead of the deadline, and hiding it behind
-    # an unrelated missing PDF is how it stays unanswered until W5.
+    # an unrelated missing PDF is how it stays unanswered until the submission tail.
     if human:
         limit = human["delivery"]["attachment_limit_mb"] * 1024 * 1024
         mb = total / 1024 / 1024
@@ -982,7 +1118,7 @@ else:
 # would be discovered by not qualifying.
 section("the published competition record")
 # Overridable only so the fixture suite can stub it at the process boundary.
-# W5 runs the real one: a package checked against a stub is checked against
+# Chunk 4.8 runs the real one: a package checked against a stub is checked against
 # nothing.
 SPEC_CHECKER = os.environ.get("UAVX_SPEC_CHECKER") or str(
     REPO / "scripts" / "check_competition_spec.py")

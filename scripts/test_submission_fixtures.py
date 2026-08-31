@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Prove W5 accepts a real package and rejects a tampered one.
+"""Prove the package check accepts a real package and rejects a tampered one.
 
 Round 4 asked for the tamper cases. Round 5 finding 2 found the hole underneath
 them: the suite had never once seen a package the checker accepts. Its baseline
 was missing a run record, a proposal and a video, the clean case counted any
 nonzero exit as success, and nothing asserted the documented exit 2 or exit 0.
 Every negative case was therefore mutated from something already broken, and a
-permanently failing W5 checker would have passed the whole suite.
+permanently failing package checker would have passed the whole suite.
 
 So the oracle comes first. A complete package must reach exit 2, the same
 package with a send receipt must reach exit 0, and only then is anything
@@ -33,6 +33,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import warnings
 import zipfile
 from pathlib import Path
 
@@ -131,9 +132,9 @@ def evidence_blocks(scenario: str) -> dict:
     # for 100 of the 1200 a correct run produces, so a node sending a twelfth
     # of the traffic met every ratio.
     ids = [f"uav_{n}:{i}" for n in (3, 4) for i in range(600)]
-    outage_ids = set(ids[:225] + ids[600:825])
-    outage_order = {ident: i for i, ident in enumerate(
-        ids[:225] + ids[600:825])}
+    outage_sequence = ids[:225] + ids[600:825]
+    outage_ids = set(outage_sequence)
+    outage_order = {ident: i for i, ident in enumerate(outage_sequence)}
     outside_order = {ident: i for i, ident in enumerate(
         [ident for ident in ids if ident not in outage_ids])}
     ledger = []
@@ -180,6 +181,12 @@ def evidence_blocks(scenario: str) -> dict:
             "raised_from": None,
         },
     })
+    if scenario == "queue_drain":
+        out["observations"].update({
+            "backlog_custodian": "uav_3",
+            "custodied_ids": outage_sequence,
+            "custodied": len(outage_sequence),
+        })
     if scenario == "link_loss":
         out["handback"] = {
             "epoch": 1,
@@ -206,12 +213,12 @@ def build_package(dest: Path) -> dict:
     subprocess.run(
         ["git", "-C", str(REPO), "archive", "--format=zip",
          "--prefix=uavx-source/", "-o", str(archive), commit, "--",
-         "uavx_ws", "scenarios", "scripts", "stage-1", "LICENSE",
+         "uavx_ws", "scenarios", "scripts", "stage-1", "INSTALL.md", "LICENSE",
          "THIRD-PARTY.md"],
         capture_output=True, check=False)
     if not archive.is_file() or archive.stat().st_size == 0:
         # uavx_ws does not exist yet, so name only the paths that do.
-        present = [p for p in ("scenarios", "scripts", "stage-1", "LICENSE",
+        present = [p for p in ("scenarios", "scripts", "stage-1", "INSTALL.md", "LICENSE",
                                "THIRD-PARTY.md") if (REPO / p).exists()]
         subprocess.run(
             ["git", "-C", str(REPO), "archive", "--format=zip",
@@ -255,7 +262,7 @@ def build_package(dest: Path) -> dict:
     shutil.copy(REPO / "submission" / "human-preflight.schema.json",
                 dest / "human-preflight.schema.json")
 
-    (dest / "INSTALL.md").write_text("install " * 300, encoding="utf-8")
+    shutil.copyfile(REPO / "INSTALL.md", dest / "INSTALL.md")
 
     runs = dest / "runs"
     runs.mkdir(exist_ok=True)
@@ -268,8 +275,8 @@ def build_package(dest: Path) -> dict:
             "scenario_sha256": "0" * 64,
             "seed": 1,
             "commit_sha": commit,
-            "started_at": "2026-09-26T00:00:00",
-            "ended_at": "2026-09-26T00:05:00",
+            "started_at": "2026-09-26T00:00:00Z",
+            "ended_at": "2026-09-26T00:05:00Z",
             "completion": "complete",
             "vehicle_ids_observed": ["uav_1", "uav_2", "uav_3", "uav_4"],
             "pose_sample_count": 4800,
@@ -280,6 +287,7 @@ def build_package(dest: Path) -> dict:
             "injected_events": [],
             "requested_duration_s": 240,
             "elapsed_sim_s": 240,
+            "clock_source": "ros_sim_time",
             "source_tree_sha256": tree,
             "resources": {"peak_rss_mib": 9200.0, "swap_used_mib": 0.0,
                           "samples": 240, "peak_at_s": 118.0},
@@ -328,7 +336,7 @@ def stub_uavx_eval(root: Path) -> Path:
     """Stub the external run validator at its process boundary, not inside.
 
     uavx_eval does not exist until W2. Faking it any deeper than the subprocess
-    call would mean the fixture stopped exercising the code path W5 actually
+    call would mean the fixture stopped exercising the code path chunk 4.8 actually
     takes.
     """
     pkg = root / "stub" / "uavx_eval"
@@ -340,7 +348,7 @@ def stub_uavx_eval(root: Path) -> Path:
         "sys.exit(0)\n", encoding="utf-8")
 
     # The live competition record is a network call against a moving target.
-    # W5 must make it for real. A fixture must not, or the suite starts failing
+    # Chunk 4.8 must make it for real. A fixture must not, or the suite starts failing
     # whenever the organisers edit a sentence, which is a thing they do.
     (root / "stub_spec.py").write_text(
         "print('  ok    stub spec check')\n", encoding="utf-8")
@@ -412,6 +420,44 @@ def _repack(dest, built):
     refresh_attachment(dest, src.name)
 
 
+@case("a malformed archive with matching manifest hashes",
+      "cannot be read as a source archive")
+def _malformed_archive(dest, built):
+    src = built["archive"]
+    src.write_bytes(b"not a zip file")
+    digest = sha256_bytes(src.read_bytes())
+    man = json.loads((dest / "source-manifest.json").read_text(encoding="utf-8"))
+    man["archive_sha256"] = digest
+    (dest / "source-manifest.json").write_text(json.dumps(man, indent=2),
+                                               encoding="utf-8")
+    stub_fresh_install(dest, digest, built["commit"])
+    refresh_attachment(dest, src.name)
+
+
+@case("an archive with the same path stored twice",
+      "source archive repeats path entries")
+def _duplicate_archive_entry(dest, built):
+    src = built["archive"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        with zipfile.ZipFile(src, "a") as zf:
+            zf.writestr("uavx-source/INSTALL.md",
+                        (REPO / "INSTALL.md").read_bytes())
+    digest = sha256_bytes(src.read_bytes())
+    man = json.loads((dest / "source-manifest.json").read_text(encoding="utf-8"))
+    man["archive_sha256"] = digest
+    (dest / "source-manifest.json").write_text(json.dumps(man, indent=2),
+                                               encoding="utf-8")
+    stub_fresh_install(dest, digest, built["commit"])
+    refresh_attachment(dest, src.name)
+
+
+@case("a source manifest with the wrong top-level JSON type",
+      "source-manifest.json must contain one JSON object")
+def _typed_source_manifest(dest, built):
+    (dest / "source-manifest.json").write_text("[]", encoding="utf-8")
+
+
 # Round 6 finding 1, the case the old fixture was written as.
 @case("a hand-written three field install receipt", "receipt kind is")
 def _typed_install(dest, built):
@@ -420,6 +466,12 @@ def _typed_install(dest, built):
         "archive_sha256": sha256_bytes(built["archive"].read_bytes()),
         "result": "pass",
     }, indent=2), encoding="utf-8")
+
+
+@case("an install receipt with the wrong top-level JSON type",
+      "fresh-install-receipt.json must contain one JSON object")
+def _typed_install_receipt(dest, built):
+    (dest / "fresh-install-receipt.json").write_text("[]", encoding="utf-8")
 
 
 @case("an install onto this machine with its own setup stamps",
@@ -518,6 +570,65 @@ def _evidence_basename_only(dest, built):
         json.dumps(manifest, indent=2), encoding="utf-8")
 
 
+@case("a delivered run differing from its validated same-named record",
+      "differs from the run that was validated")
+def _evidence_bytes_split(dest, built):
+    source_root = dest / "validated-source"
+    shutil.copytree(dest / "runs", source_root / "runs")
+    (dest / ".fixture-runs-root").write_text(str(source_root), encoding="utf-8")
+
+    rel = built["manifest_runs"]["relay_kill"]
+    delivered = dest / rel
+    record = json.loads(delivered.read_text(encoding="utf-8"))
+    record["metrics"]["delivery_copy_was_changed"] = True
+    delivered.write_text(json.dumps(record), encoding="utf-8")
+    refresh_attachment(dest, rel)
+
+
+@case("a linked item with no local evidence copy",
+      "has no local copy to hash and size")
+def _missing_link_copy(dest, built):
+    p = dest / "extra-evidence.json"
+    p.write_text('{"checked": true}\n', encoding="utf-8")
+    man = json.loads((dest / "attachment-manifest.json").read_text(encoding="utf-8"))
+    man["delivered_by_link"] = [{
+        "name": p.name,
+        "bytes": p.stat().st_size,
+        "sha256": sha256_bytes(p.read_bytes()),
+        "route": "organiser drive link",
+        "url": "https://example.test/evidence",
+        "access_tested": "2026-09-26",
+    }]
+    p.unlink()
+    (dest / "attachment-manifest.json").write_text(json.dumps(man, indent=2),
+                                                   encoding="utf-8")
+
+
+@case("a linked item escaping the submission directory",
+      "must stay inside submission")
+def _link_traversal(dest, built):
+    man = json.loads((dest / "attachment-manifest.json").read_text(encoding="utf-8"))
+    man["delivered_by_link"] = [{
+        "name": "../outside.json",
+        "bytes": 2,
+        "sha256": "0" * 64,
+        "route": "organiser drive link",
+        "url": "https://example.test/evidence",
+        "access_tested": "2026-09-26",
+    }]
+    (dest / "attachment-manifest.json").write_text(json.dumps(man, indent=2),
+                                                   encoding="utf-8")
+
+
+@case("the same deliverable listed twice",
+      "names the same file more than once")
+def _duplicate_delivery(dest, built):
+    man = json.loads((dest / "attachment-manifest.json").read_text(encoding="utf-8"))
+    man["attachments"].append(dict(man["attachments"][0]))
+    (dest / "attachment-manifest.json").write_text(json.dumps(man, indent=2),
+                                                   encoding="utf-8")
+
+
 # Round 7 finding 5: the peak was required to exist and compared with nothing.
 @case("a run that needed more memory than the target has",
       "against a 10500 MiB ceiling")
@@ -572,6 +683,17 @@ def _late_last_delivery(dest, built):
                    if 60.0 <= row["created_at_s"] < 105.0]
     max(outage_rows, key=lambda row: row["delivered_at_s"])[
         "delivered_at_s"] += 1.0
+    p.write_text(json.dumps(rec), encoding="utf-8")
+
+
+@case("two local queues reported as one custodian backlog",
+      "custodied_ids are not the outage set")
+def _split_backlog(dest, built):
+    p = (dest / built["manifest_runs"]["queue_drain"])
+    rec = json.loads(p.read_text(encoding="utf-8"))
+    obs = rec["observations"]
+    obs["custodied_ids"] = obs["custodied_ids"][:225]
+    obs["custodied"] = 225
     p.write_text(json.dumps(rec), encoding="utf-8")
 
 
@@ -635,12 +757,29 @@ def _short(dest, built):
     p.write_text(json.dumps(rec), encoding="utf-8")
 
 
+@case("a run using wall time for metric timestamps", "fails the run-record schema")
+def _wall_metric_clock(dest, built):
+    p = (dest / built["manifest_runs"]["survey_baseline"])
+    rec = json.loads(p.read_text(encoding="utf-8"))
+    rec["clock_source"] = "wall_time"
+    p.write_text(json.dumps(rec), encoding="utf-8")
+
+
 @case("the integrated mission missing from the evidence manifest",
       "names no run for mission_integrated")
 def _missing_run(dest, built):
     m = json.loads((dest / "evidence-manifest.json").read_text(encoding="utf-8"))
     del m["runs"]["mission_integrated"]
     (dest / "evidence-manifest.json").write_text(json.dumps(m, indent=2),
+                                                 encoding="utf-8")
+
+
+@case("an evidence run map with the wrong JSON type",
+      "evidence-manifest.json runs must be a JSON object")
+def _typed_evidence_runs(dest, built):
+    m = json.loads((dest / "evidence-manifest.json").read_text(encoding="utf-8"))
+    m["runs"] = []
+    (dest / "evidence-manifest.json").write_text(json.dumps(m),
                                                  encoding="utf-8")
 
 
@@ -664,6 +803,14 @@ def _swapped_attachment(dest, built):
     # can fail is the hash. A fixture that trips three checks at once does not
     # tell you which one caught it.
     (dest / "INSTALL.md").write_text("different " * 300, encoding="utf-8")
+
+
+@case("the emailed install guide differing from the rehearsed archive guide",
+      "differs from the INSTALL.md that the fresh-install rehearsal executed")
+def _split_install_guide(dest, built):
+    guide = dest / "INSTALL.md"
+    guide.write_text("different valid guide " * 120, encoding="utf-8")
+    refresh_attachment(dest, "INSTALL.md")
 
 
 # Round 6 finding 3, all three routes past the old check. The video that gets
@@ -721,8 +868,11 @@ def _bad_human(dest, built):
 
 
 def run_checker(dest: Path) -> tuple:
+    root_marker = dest / ".fixture-runs-root"
+    runs_root = (Path(root_marker.read_text(encoding="utf-8"))
+                 if root_marker.is_file() else dest)
     env = dict(os.environ, UAVX_SUBMISSION_DIR=str(dest),
-                           UAVX_RUNS_ROOT=str(dest),
+                           UAVX_RUNS_ROOT=str(runs_root),
                UAVX_RUNS_DIR=str(dest / "runs"),
                PYTHONPATH=str(stub_uavx_eval(dest)),
                UAVX_SPEC_CHECKER=str(dest / "stub_spec.py"))

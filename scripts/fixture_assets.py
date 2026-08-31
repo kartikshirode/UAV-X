@@ -3,7 +3,7 @@
 
 Round 5 finding 2: the submission fixture suite had never once seen a package
 the checker accepts. Every negative case was mutated from a baseline that was
-itself broken, so a permanently failing W5 checker would have passed the suite.
+itself broken, so a permanently failing package checker would have passed the suite.
 
 Making the baseline valid means the suite needs a PDF that pdftotext can read
 and a video that ffmpeg can decode. Both are built here rather than committed,
