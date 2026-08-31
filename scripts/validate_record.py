@@ -28,6 +28,7 @@ Exit 0 valid, 1 invalid, 2 unreadable.
 """
 
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -76,6 +77,15 @@ def flat(value):
     return value
 
 
+def finite_number(value):
+    """Return a float for a finite number, or None for a non-number."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
 def check_require(record: dict, expr: str) -> str:
     for op in COMPARISONS:
         if op not in expr:
@@ -103,17 +113,20 @@ def check_require(record: dict, expr: str) -> str:
             want_val = want
             label = repr(want)
 
-        try:
-            got_n, want_n = float(got), float(want_val)
-            ok = {"==": got_n == want_n, "!=": got_n != want_n,
-                  ">=": got_n >= want_n, "<=": got_n <= want_n,
+        got_n, want_n = finite_number(got), finite_number(want_val)
+        if op in (">=", "<=", ">", "<"):
+            if got_n is None or want_n is None:
+                return (f"{key} and {label} must be finite numbers for "
+                        f"the {op} comparison")
+            ok = {">=": got_n >= want_n, "<=": got_n <= want_n,
                   ">": got_n > want_n, "<": got_n < want_n}[op]
             shown = got_n
-        except (TypeError, ValueError):
+        elif got_n is not None and want_n is not None:
+            ok = {"==": got_n == want_n, "!=": got_n != want_n}[op]
+            shown = got_n
+        else:
             got_s, want_s = str(got), str(want_val)
-            ok = {"==": got_s == want_s, "!=": got_s != want_s,
-                  ">=": got_s >= want_s, "<=": got_s <= want_s,
-                  ">": got_s > want_s, "<": got_s < want_s}[op]
+            ok = {"==": got_s == want_s, "!=": got_s != want_s}[op]
             shown = got_s
         if ok:
             return ""

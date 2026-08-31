@@ -198,6 +198,13 @@ gate_test() {
 run_scenario() {
   local scenario="$1"
   [ -f "${UAVX_REPO}/${scenario}" ] || gdie "scenario not found: ${scenario}"
+  # Round 8, found while closing the runner contract. A chunk could invoke a
+  # scenario directly without the W1-specific check and leave the runner to
+  # guess whether a duplicate vehicle or malformed event was intended. Keep
+  # the generic contract at the common launch seam so every scenario gate gets
+  # the same validation.
+  python3 "${UAVX_REPO}/scripts/check_scenario.py" "${scenario}" \
+    || gdie "scenario contract failed: ${scenario}"
   uavx_invalidate_latest
   gsay "scenario: ${scenario}"
   bash "${UAVX_REPO}/scripts/run_scenario.sh" "${scenario}" \

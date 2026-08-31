@@ -29,7 +29,7 @@ A swarm process may hold exactly these endpoints and no others:
 | any per-node process | `/<own_px4_ns>/...` | `/<own_px4_ns>/...` |
 | `uavx_gcs/gcs_node` | `/uavx/gcs/tx` | `/uavx/gcs/rx` |
 | `uavx_comms/link_layer` | every `/uavx/*/rx` | every `/uavx/*/tx`, all ground-truth poses |
-| `uavx_eval/metrics_collector` | nothing | ground truth, and its own metrics topics |
+| `uavx_eval/metrics_collector` | `/uavx_eval/metrics` | ground truth and `/parameter_events` |
 
 The link layer and the metrics collector sit **outside** the swarm. They represent physics and the observer. That is why they may read ground truth and nothing else may.
 
@@ -89,10 +89,85 @@ Field names are binding. `check_geometry.py` and the gate assert on them, and `u
 
 `(origin_id, sequence)` is the identity. Deduplication at the GCS is on that pair and nothing else, which is what makes "delivered once" a set comparison rather than a count.
 
-**`Hello`**: `sender_id`, `sent_at`, `position` (3 floats), `seq`.
-**`LinkState`**: `originator_id`, `lsa_seq` (uint32), `neighbours` (string[]), `sent_at`, `ttl` (uint8).
-**`RoleAssignment`**: `epoch` (uint32), `node_id`, `role` (uint8: `SURVEY`, `RELAY`, `GCS_ANCHOR`), `slot` (3 floats), `lease_expires_at`, `sender_id`. `sender_id` is what lets the gate assert a release came from the epoch owner and not from a node that used to be one.
-**`RunMetrics`**: the per-run summary the record writer serialises. One field per top-level key in `scenarios/run-record.schema.json`, which is the contract; this message exists so the collector can publish progress mid-run without inventing a second shape.
+The files in `uavx_msgs/msg/` must match these definitions. Field order is part of
+the interface. Constants use the numeric values shown here, so a bag or a log can
+be read without importing the package that wrote it.
+
+**`SwarmPacket.msg`**
+
+```
+string origin_id
+uint32 sequence
+float64 created_at
+float64 expires_at
+uint8 kind
+uint8 OBSERVATION=0
+uint8 HELLO=1
+uint8 LSA=2
+uint8 ROLE=3
+uint8 ACK=4
+string dest_id
+uint8 hop_count
+string[] path
+uint8[] payload
+```
+
+`payload` is limited to 256 bytes for an observation. `kind` is not inferred from
+the payload, and a packet with an unknown value is dropped and counted as a
+protocol error.
+
+**`Hello.msg`**
+
+```
+string sender_id
+float64 sent_at
+float32[3] position
+float32[3] velocity
+uint32 seq
+```
+
+**`LinkState.msg`**
+
+```
+string originator_id
+uint32 lsa_seq
+string[] neighbours
+float64 sent_at
+uint8 ttl
+```
+
+**`RoleAssignment.msg`**
+
+```
+uint32 epoch
+string node_id
+uint8 role
+uint8 SURVEY=0
+uint8 RELAY=1
+uint8 GCS_ANCHOR=2
+float32[3] slot
+float64 lease_expires_at
+string sender_id
+```
+
+`sender_id` is what lets the gate assert a release came from the epoch owner and
+not from a node that used to be one.
+
+**`RunMetrics.msg`**
+
+```
+uint32 schema_version
+string run_id
+string scenario_path
+string json_payload
+bool final
+```
+
+`json_payload` is one UTF-8 JSON object with the fields from
+`scenarios/run-record.schema.json`. It is deliberately serialized instead of
+flattened into one ROS field per schema key, because `observations`, `handback`
+and `resources` are nested objects. The collector publishes it on
+`/uavx_eval/metrics`; it is not swarm traffic and never carries `SwarmPacket`.
 
 ### `scripts/run_scenario.sh`
 
@@ -100,14 +175,32 @@ The gate, both rehearsal wrappers and `fresh_install.sh` all call this, and betw
 
 | Flag | Meaning |
 | --- | --- |
-| `<scenario>` | positional, path to the scenario YAML. Required |
+| `<scenario>` | positional path to the scenario YAML. Required |
 | `--run-id <id>` | use this id rather than minting one. The recording rehearsal mints the id first so it can burn it into the frame, and then requires the record to carry it back |
 | `--record <path>` | capture video to this file, headless. `gzclient` is never launched |
 | `--record-seconds <n>` | how much to capture. The run continues past it |
 | `--overlay-text <s>` | burn this into every frame. Without it a clip cannot be tied to a run |
 | `--runs-dir <dir>` | where records go, default `runs/`. `fresh_install.sh` points this at the clean target so a smoke run there does not overwrite ours |
 
-It writes `<runs-dir>/<run_id>.jsonl`, then publishes `latest.jsonl` and `latest-graph.json` by atomic rename, only after every process has exited. Exit 0 means the scenario ran to its duration and both files are on disk.
+The scenario YAML has exactly these required keys: `name` (the manifest name),
+`seed` (integer), `duration_s` (positive number), `vehicles` (a non-empty list of
+unique ids), `injected_events` (a list), and `headless` (true). Every event has
+`type` (`kill`, `comms_blackout`, or `gps_degrade`), `target` (one of the listed
+vehicles), and `at_s` between zero and `duration_s`. Unknown keys are allowed so
+Stage 2 can add disturbances, but these keys cannot change meaning.
+
+The writer emits one JSON object as one UTF-8 line in
+`<runs-dir>/<run_id>.jsonl`. It then publishes `latest.jsonl` and
+`latest-graph.json` by atomic rename, only after every process has exited. The
+run id matches `[A-Za-z0-9_]+` and is unique within the runs directory. Exit
+codes are fixed: 0 complete with both artifacts, 10 invalid arguments or YAML,
+20 a missing dependency, 30 a child process failed, 31 the scenario timed out,
+32 an artifact failed schema or provenance validation, and 40 recording failed.
+The process writes no `latest` file for any non-zero exit.
+
+The `--record` flag requires `--record-seconds` and `--overlay-text`.
+`--record-seconds` is positive and no greater than the scenario duration. A
+recording starts at scenario time zero and the scenario continues after capture.
 
 ### `scripts/run_smoke.sh`
 
@@ -117,6 +210,33 @@ It writes `<runs-dir>/<run_id>.jsonl`, then publishes `latest.jsonl` and `latest
 | `--runs-dir <dir>` | as above |
 
 Takeoff, hold, land, headless, through `scripts/sitl_multi.sh`. It writes a run record like any other run. Exit 0 means every vehicle reached its hold altitude and landed.
+
+### `--require` expressions
+
+The gate and both record checkers use one grammar. Whitespace around an
+operator is ignored. A left operand is a dotted object path. The right operand
+is either a literal or another dotted path.
+
+```
+path==literal       path!=literal
+path>=number        path<=number
+path>number         path<number
+path=~regular_expression
+path<other.path     path>=other.path
+```
+
+`==` and `!=` compare numbers as numbers when both sides parse as finite
+numbers, otherwise strings. The ordered operators are numeric only, and fail
+with a diagnostic when either side is not a finite number. A list is compared
+as its comma-joined values, so `prepared_path==uav_4,uav_2,uav_1,gcs` is the
+canonical spelling. A missing path is always a failure. The regular expression
+uses Python `re.search` and is never interpreted as a shell expression.
+
+Example JSONL line, shortened only by omitting optional fields:
+
+```json
+{"run_id":"relay_required_20260919T120000Z","scenario_path":"scenarios/relay_required.yaml","seed":17,"commit_sha":"0123456789abcdef0123456789abcdef01234567","completion":"complete","requested_duration_s":240,"elapsed_sim_s":240}
+```
 
 ### `scenarios/harness_check.yaml`
 
