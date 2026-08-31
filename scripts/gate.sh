@@ -74,6 +74,18 @@ if [ "$WEEK" = "chunks" ] || [ "$WEEK" = "list" ]; then
   exit 0
 fi
 
+# Round 8 found an unknown chunk loading ROS before the dispatch rejected its
+# id. On an unprovisioned shell, `gate.sh 9.9` then blamed missing ROS and hid
+# the actual input error. Validate the selector before touching the machine.
+case "$WEEK" in
+  1|2|3|4|preflight) ;;
+  *.*)
+    [ -n "$(chunk_fn "$WEEK")" ] \
+      || gdie "unknown chunk: ${WEEK}. Run: bash scripts/gate.sh chunks"
+    ;;
+  *) gdie "unknown week: ${WEEK}. Weeks are 1 to 4; run: bash scripts/gate.sh chunks" ;;
+esac
+
 uavx_load_env
 
 # ---------------------------------------------------------------- preflight

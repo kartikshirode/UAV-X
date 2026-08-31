@@ -151,10 +151,23 @@ def main() -> int:
 
             print(f"  ok    {label} -> {expect:4}  {why}")
 
+        # Round 8 found dispatch validation below uavx_load_env. A bad chunk
+        # on an unprovisioned shell then blamed ROS instead of the bad id.
+        res = subprocess.run([bash, str(REPO / "scripts" / "gate.sh"), "9.9"],
+                             capture_output=True, text=True, env=env,
+                             cwd=str(REPO))
+        output = res.stdout + res.stderr
+        if res.returncode == 1 and "unknown chunk: 9.9" in output:
+            print("  ok    an unknown chunk is rejected before environment setup")
+        else:
+            print(f"  FAIL  unknown chunk dispatch: rc={res.returncode}\n"
+                  f"        {output.strip()[:300]}")
+            bad += 1
+
     if bad:
         print(f"\n{bad} of {len(CASES)} preflight decisions are wrong")
         return 1
-    print(f"\nall {len(CASES)} spec exit codes decided as documented")
+    print(f"\nall {len(CASES)} spec exit codes and early dispatch behaved as documented")
     return 0
 
 
