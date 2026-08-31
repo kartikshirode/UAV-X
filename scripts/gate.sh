@@ -289,7 +289,11 @@ w1_msgs() {
   # Round 8. Name resolution plus four substring searches allowed changed
   # widths, constants, field order and four entirely different messages.
   # Compare generated interfaces with all five frozen blocks instead.
-  python3 "${UAVX_REPO}/scripts/check_message_contract.py" \
+  # --generated is not optional here. Without it this compares the source
+  # .msg with itself, because --symlink-install makes the installed file a
+  # symlink back into the source tree. Chunk 1.1 found that on the first
+  # real build.
+  python3 "${UAVX_REPO}/scripts/check_message_contract.py" --generated \
     || gdie "the generated messages differ from architecture.md section 1b"
 }
 
