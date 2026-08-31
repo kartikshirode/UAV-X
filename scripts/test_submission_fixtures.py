@@ -697,6 +697,31 @@ def _split_backlog(dest, built):
     p.write_text(json.dumps(rec), encoding="utf-8")
 
 
+# Round 8 built the observation ledger and cross-checked it against the two id
+# lists, and no case ever made those two comparisons fail. Disabling either one
+# left the suite green, which is the round 4 shape: a check nobody has watched
+# work. These two make the ledger disagree with the summary in each direction.
+@case("a ledger id that is not in generated_ids",
+      "ledger ids do not match")
+def _ledger_id_drift(dest, built):
+    p = (dest / built["manifest_runs"]["queue_drain"])
+    rec = json.loads(p.read_text(encoding="utf-8"))
+    rec["observations"]["ledger"][0]["id"] = "uav_9:999999"
+    p.write_text(json.dumps(rec), encoding="utf-8")
+
+
+@case("a delivered id the ledger never delivered",
+      "delivered_ids do not match the ids with a")
+def _ledger_delivery_drift(dest, built):
+    p = (dest / built["manifest_runs"]["queue_drain"])
+    rec = json.loads(p.read_text(encoding="utf-8"))
+    for row in rec["observations"]["ledger"]:
+        if row.get("delivered_at_s") is not None:
+            row["delivered_at_s"] = None
+            break
+    p.write_text(json.dumps(rec), encoding="utf-8")
+
+
 @case("a required run record emptied", "fails the run-record schema")
 def _empty_run(dest, built):
     (dest / built["manifest_runs"]["relay_kill"]).write_text("{}", encoding="utf-8")
