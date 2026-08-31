@@ -1,0 +1,60 @@
+# The scenario every W1 chunk runs against.
+#
+# architecture.md section 1b: four vehicles hover at their layer altitudes for
+# 60 s with one injected event at t = 30 s, and that is all. It exists to prove
+# the harness and is never cited as evidence for a rubric row, which is why
+# check_submission_const.HARNESS_RUNS keeps it out of the nine runs the final
+# package requires.
+#
+# Round 7 finding 1: four W1 gates ran this file, no chunk produced it and
+# nothing said what it had to contain. scripts/check_scenario.py now holds it
+# to the duration, vehicle count and injected event the W1.7 integration run
+# assumes, because `pose_sample_count>=100` is a claim about a 60 second run
+# and means something much weaker against a 5 second one.
+#
+#   python3 scripts/check_scenario.py scenarios/harness_check.yaml \
+#       --duration 60 --vehicles 4 --needs-injected-event
+
+# check_scenario.py requires this to equal the file stem. A record cites its
+# scenario by name, so a file carrying somebody else's name is a record that
+# points at the wrong run.
+name: harness_check
+
+# The seed scenarios/run-record.example.jsonl already carries for this
+# scenario. The example is the checked record for harness_check, so the two
+# agree rather than describing two different runs of the same file.
+seed: 17
+
+duration_s: 60
+
+vehicles:
+  - uav_1
+  - uav_2
+  - uav_3
+  - uav_4
+
+# One event, at the midpoint, so W1.4 has something to observe and W1.7 can
+# assert `injected_event_observed==true`. Type, target and time match the
+# injected_events block of scenarios/run-record.example.jsonl.
+injected_events:
+  - type: kill
+    target: uav_2
+    at_s: 30
+
+# The GUI path is not supported by this stack, and gzclient is never launched
+# even when a run is being recorded.
+headless: true
+
+# Unknown top level keys are allowed by the contract so Stage 2 can add
+# disturbances. The altitudes need one: `vehicles` is contractually a list of
+# unique ids, so there is nowhere inside it to put a number.
+#
+# The values are the layer altitudes from architecture.md section 5,
+# `altitude_layer_m` 10 m giving uav_1 at 30, uav_2 at 40, uav_3 at 50 and
+# uav_4 at 60, which is also the cruise altitude column of the frozen geometry
+# table in section 6. They are not invented here and must not be edited here.
+hover_altitudes_m:
+  uav_1: 30
+  uav_2: 40
+  uav_3: 50
+  uav_4: 60
