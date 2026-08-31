@@ -241,9 +241,17 @@ def read_live() -> dict:
             if low.startswith(("action servers:", "action clients:")):
                 cur = "actions"; continue
             if cur and t.startswith("/"):
-                topic, _, typ = t.rpartition(":")
-                d[cur].append({"topic": (topic or t).strip(),
-                                   "type": typ.strip()})
+                # Chunk 1.5. `ros2 node info` prints "<topic>: <type>". On a
+                # row with no colon, rpartition returns ("", "", row), so this
+                # used to store the topic as its own type and the guard below,
+                # which only looks for an empty string, waved it through. An
+                # endpoint whose type is a copy of its topic is an endpoint
+                # with no type, and types are what rule 6 is enforced from.
+                if ":" in t:
+                    topic, _, typ = t.rpartition(":")
+                else:
+                    topic, typ = t, ""
+                d[cur].append({"topic": topic.strip(), "type": typ.strip()})
         for kind in KINDS:
             if any(not e["topic"] or not e["type"] for e in d[kind]):
                 die(f"ros2 node info {n} returned an endpoint without a topic "
