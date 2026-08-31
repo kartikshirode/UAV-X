@@ -30,12 +30,14 @@ SECONDS_WANTED="${UAVX_REHEARSE_CLIP_S:-60}"
 OUT="${UAVX_REPO}/submission"
 CLIP="${OUT}/dryrun-recording.mp4"
 RECEIPT="${OUT}/dryrun-recording-receipt.json"
+KEPT_RUN="${OUT}/dryrun-recording-run.jsonl"
+KEPT_GRAPH="${OUT}/dryrun-recording-graph.json"
 
 command -v ffmpeg >/dev/null 2>&1 || gdie "ffmpeg missing. apt install ffmpeg"
 [ -f "${UAVX_REPO}/${SCENARIO}" ] || gdie "no scenario at ${SCENARIO}"
 
 mkdir -p "$OUT"
-rm -f "$CLIP"
+rm -f "$CLIP" "$RECEIPT" "$KEPT_RUN" "$KEPT_GRAPH"
 SOURCE_SHA="$(python3 "${HERE}/source_tree_hash.py")"
 
 # Headless. gzclient is what kills the distro, so the capture path has to be
@@ -89,15 +91,18 @@ CLIP_SHA="$(sha256sum "$CLIP" | cut -d' ' -f1)"
 ENDED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 python3 - "$RECEIPT" "$CLIP_SHA" "$RUN_ID" "$SCENARIO" "$SOURCE_SHA" "$DUR" "$ENDED" \
-         "$RECORD" "$GRAPH_SHA" <<'PY'
+         "$RECORD" "$GRAPH" "$GRAPH_SHA" <<'PY'
 import json, os, shutil, sys, tempfile
-receipt, sha, run_id, scenario, src, dur, ended, record, graph_sha = sys.argv[1:10]
+receipt, sha, run_id, scenario, src, dur, ended, record, graph, graph_sha = sys.argv[1:11]
 
 # Round 6 finding 4: the receipt named a run id and a scenario and nothing ever
 # opened the record they pointed at. Keep the record beside the clip, so the
 # checker reads the run rather than the claim about it.
 kept = os.path.join(os.path.dirname(receipt), "dryrun-recording-run.jsonl")
 shutil.copyfile(record, kept)
+kept_graph = os.path.join(os.path.dirname(receipt),
+                          "dryrun-recording-graph.json")
+shutil.copyfile(graph, kept_graph)
 
 data = {
     "kind": "recording-rehearsal",
@@ -108,6 +113,7 @@ data = {
     "duration_s": float(dur),
     "run_id": run_id,
     "run_record": "submission/dryrun-recording-run.jsonl",
+    "graph_snapshot": "submission/dryrun-recording-graph.json",
     "graph_snapshot_sha256": graph_sha,
     "overlay_text": run_id,
     "scenario": scenario,

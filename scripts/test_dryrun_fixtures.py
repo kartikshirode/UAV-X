@@ -78,7 +78,10 @@ def build(sub: Path, target: Path, clip_src: Path) -> None:
     clip = sub / "dryrun-recording.mp4"
     shutil.copyfile(clip_src, clip)
     run_id = "rehearsal_relay_required_20260915T091500Z"
-    graph_sha = hashlib.sha256(b"graph").hexdigest()
+    graph = sub / "dryrun-recording-graph.json"
+    graph.write_text(json.dumps({"run_id": run_id, "graph": {}}),
+                     encoding="utf-8")
+    graph_sha = sha256_file(graph)
 
     (sub / "dryrun-recording-run.jsonl").write_text(json.dumps({
         "run_id": run_id,
@@ -97,6 +100,7 @@ def build(sub: Path, target: Path, clip_src: Path) -> None:
         "duration_s": 60.0,
         "run_id": run_id,
         "run_record": "submission/dryrun-recording-run.jsonl",
+        "graph_snapshot": "submission/dryrun-recording-graph.json",
         "graph_snapshot_sha256": graph_sha,
         "overlay_text": run_id,
         "scenario": "scenarios/relay_required.yaml",
@@ -142,6 +146,14 @@ def _no_record(sub, target):
     (sub / "dryrun-recording-run.jsonl").unlink()
 
 
+@case("a recording receipt whose run path leaves the package",
+      "escapes the submission directory")
+def _run_path_escape(sub, target):
+    r = load(sub, "dryrun-recording-receipt.json")
+    r["run_record"] = "submission/../../runs/latest.jsonl"
+    save(sub, "dryrun-recording-receipt.json", r)
+
+
 @case("a clip bound to one run and a record from another",
       "different runs")
 def _mismatched_run(sub, target):
@@ -170,6 +182,20 @@ def _crashed(sub, target):
     rec = load(sub, "dryrun-recording-run.jsonl")
     rec["completion"] = "crashed"
     save(sub, "dryrun-recording-run.jsonl", rec)
+
+
+@case("a run record with no completion result", "ended None")
+def _missing_completion(sub, target):
+    rec = load(sub, "dryrun-recording-run.jsonl")
+    del rec["completion"]
+    save(sub, "dryrun-recording-run.jsonl", rec)
+
+
+@case("a graph snapshot replaced after the rehearsal",
+      "kept graph snapshot does not hash")
+def _swapped_graph(sub, target):
+    (sub / "dryrun-recording-graph.json").write_text(
+        json.dumps({"run_id": "another_run", "graph": {}}), encoding="utf-8")
 
 
 @case("a hand-written receipt with no wrapper behind it", "receipt kind is")
@@ -218,7 +244,7 @@ def main() -> int:
         sub.mkdir(exist_ok=True)
         for f in ("dryrun-install-receipt.json", "dryrun-install-transcript.log",
                   "dryrun-recording-receipt.json", "dryrun-recording-run.jsonl",
-                  "dryrun-recording.mp4"):
+                  "dryrun-recording-graph.json", "dryrun-recording.mp4"):
             (sub / f).unlink(missing_ok=True)
         target = tmp / "prefix"
         build(sub, target, clip_src)
@@ -240,7 +266,8 @@ def main() -> int:
             for f in ("dryrun-install-receipt.json",
                       "dryrun-install-transcript.log",
                       "dryrun-recording-receipt.json",
-                      "dryrun-recording-run.jsonl", "dryrun-recording.mp4"):
+                      "dryrun-recording-run.jsonl",
+                      "dryrun-recording-graph.json", "dryrun-recording.mp4"):
                 (sub / f).unlink(missing_ok=True)
             if target.is_dir():
                 shutil.rmtree(target)

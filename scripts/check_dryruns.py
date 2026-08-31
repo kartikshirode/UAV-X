@@ -72,6 +72,24 @@ def load(path: Path):
         return None
 
 
+def submission_path(value, label: str):
+    """Resolve a receipt path and keep it inside submission/."""
+    if not isinstance(value, str) or not value:
+        fail(f"the recording receipt names no {label}")
+        return None
+    rel = value.replace("\\", "/")
+    if Path(rel).is_absolute() or rel.startswith("/") or ".." in Path(rel).parts:
+        fail(f"the recording receipt's {label} path {value!r} escapes the "
+             f"submission directory")
+        return None
+    path = (REPO / rel).resolve()
+    if SUB.resolve() not in path.parents:
+        fail(f"the recording receipt's {label} path {value!r} is not under "
+             f"submission/")
+        return None
+    return path
+
+
 def check_freshness(receipt: dict, label: str, current: str) -> bool:
     got = receipt.get("source_tree_sha256")
     if got != current:
@@ -94,7 +112,9 @@ def check_recording_run(r: dict) -> bool:
         fail("the recording receipt names no run record. A run id with no "
              "record behind it is a string.")
         return False
-    path = REPO / rel
+    path = submission_path(rel, "run record")
+    if path is None:
+        return False
     if not path.is_file():
         fail(f"the recording receipt points at {rel}, which is not there")
         return False
@@ -118,13 +138,24 @@ def check_recording_run(r: dict) -> bool:
         fail("the clip's receipt and the run record it names disagree about "
              "which source tree produced them")
         return False
-    if rec.get("completion") not in (None, "complete"):
+    if rec.get("completion") != "complete":
         fail(f"the clip is of a run that ended {rec.get('completion')}. A "
              f"recording of a crashed scenario rehearses the capture path and "
              f"nothing else.")
         return False
-    if r.get("graph_snapshot_sha256") and \
-            rec.get("graph_snapshot_sha256") not in (None, r["graph_snapshot_sha256"]):
+    graph = submission_path(r.get("graph_snapshot"), "graph snapshot")
+    if graph is None:
+        return False
+    if not graph.is_file():
+        fail(f"the recording receipt points at {r.get('graph_snapshot')}, "
+             f"which is not there")
+        return False
+    graph_sha = sha256_file(graph)
+    if graph_sha != r.get("graph_snapshot_sha256"):
+        fail("the kept graph snapshot does not hash to what the recording "
+             "receipt says")
+        return False
+    if rec.get("graph_snapshot_sha256") != r.get("graph_snapshot_sha256"):
         fail("the receipt and the run record name different graph snapshots")
         return False
     # The overlay is what makes an unrelated clip impossible to substitute.
@@ -214,6 +245,9 @@ def main() -> int:
         if r.get("kind") != "recording-rehearsal":
             fail(f"receipt kind is {r.get('kind')!r}. Only "
                  f"scripts/rehearse_recording.sh writes this file.")
+            r = None
+        elif r.get("result") != "pass":
+            fail(f"recording rehearsal recorded result={r.get('result')}")
             r = None
     if r is not None:
         if not check_freshness(r, "recording", current):
