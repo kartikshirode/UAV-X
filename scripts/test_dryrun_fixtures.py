@@ -276,6 +276,16 @@ def _typed_receipt(sub, target):
         "run_id": "whatever", "scenario": "scenarios/relay_required.yaml"})
 
 
+# Round 8 made the checker refuse a receipt whose own result is not "pass", and
+# no case exercised it. A wrapper that ran, failed and stamped its failure is
+# exactly the receipt that must not certify a rehearsal.
+@case("a recording rehearsal that recorded a failure", "result=")
+def _recorded_failure(sub, target):
+    r = load(sub, "dryrun-recording-receipt.json")
+    r["result"] = "fail"
+    save(sub, "dryrun-recording-receipt.json", r)
+
+
 def run_checker(sub: Path) -> tuple:
     env = dict(os.environ)
     p = subprocess.run([sys.executable, str(CHECKER)], capture_output=True,
