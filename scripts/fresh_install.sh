@@ -41,7 +41,7 @@ ARCHIVE="${OUT}/uavx-source.zip"
 MANIFEST="${OUT}/source-manifest.json"
 TRANSCRIPT="${OUT}/fresh-install-transcript.log"
 RECEIPT="${OUT}/fresh-install-receipt.json"
-TARGET="${UAVX_FRESH_PREFIX:-$HOME/uavx-fresh-install}"
+TARGET="${UAVX_FRESH_PREFIX:-/tmp/uavx-fresh-install}"
 DISTRO="${UAVX_FRESH_DISTRO:-}"
 
 [ -f "$ARCHIVE" ]  || gdie "no archive at ${ARCHIVE}. Run scripts/freeze_source.sh first; this installs what is being submitted, not the working tree."
@@ -63,6 +63,10 @@ COMMIT="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1],encoding=
 # it is honest about which it was; a clean prefix sharing our HOME proves
 # nothing and is refused.
 if [ -n "$DISTRO" ]; then
+  [[ "$DISTRO" =~ ^[A-Za-z0-9_.-]+$ ]] \
+    || gdie "UAVX_FRESH_DISTRO contains shell metacharacters: ${DISTRO}"
+  command -v wsl.exe >/dev/null 2>&1 \
+    || gdie "UAVX_FRESH_DISTRO is set and wsl.exe is not available"
   TARGET_KIND="wsl-distro"
   TARGET_NAME="$DISTRO"
 else
@@ -73,21 +77,41 @@ else
   fi
 fi
 
+# This path is deleted recursively. Keep the accepted space narrow enough that
+# a missing variable or typo cannot erase a home, the repository or a distro.
+case "$TARGET" in
+  /tmp/uavx-fresh-*|/var/tmp/uavx-fresh-*) ;;
+  *) gdie "UAVX_FRESH_PREFIX must be an absolute disposable path named /tmp/uavx-fresh-* or /var/tmp/uavx-fresh-*. Refusing to clear ${TARGET}." ;;
+esac
+
 # Its own HOME, so no stamp from this machine is visible to the install.
 TARGET_HOME="${TARGET}/home"
+
+# Everything below runs on the target. With a distro set, that means inside it.
+on_target() {
+  # HOME is redirected either way, so ~/.uavx-setup starts empty and
+  # setup-all.sh cannot skip a step because this machine already ran it.
+  if [ -n "$DISTRO" ]; then
+    wsl.exe -d "$DISTRO" -- bash -lc "export HOME='${TARGET_HOME}'; mkdir -p \"\$HOME\"; $*"
+  else
+    HOME="${TARGET_HOME}" bash -lc "$*"
+  fi
+}
 
 STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # Clear it inside the environment it will be used in, not only from here.
 # With a distro set, removing a host path leaves the distro untouched.
 if [ -n "$DISTRO" ]; then
-  wsl.exe -d "$DISTRO" -- bash -lc "rm -rf '${TARGET}' && mkdir -p '${TARGET_HOME}'" \
+  on_target "rm -rf '${TARGET}' && mkdir -p '${TARGET_HOME}'" \
     || gdie "could not clear ${TARGET} inside ${DISTRO}"
+else
+  rm -rf "$TARGET"
+  mkdir -p "$TARGET" "$TARGET_HOME"
 fi
-rm -rf "$TARGET"
-mkdir -p "$TARGET" "$TARGET_HOME" "$OUT"
+mkdir -p "$OUT"
 
-printf 'target_kind=%s\ntarget=%s\narchive_sha256=%s\ncommit=%s\nstarted=%s\n\n' \
-  "$TARGET_KIND" "$TARGET_NAME" "$ARCHIVE_SHA" "$COMMIT" "$STARTED" > "$TRANSCRIPT"
+printf 'target_kind=%s\ntarget=%s\ntarget_path=%s\narchive_sha256=%s\ncommit=%s\nstarted=%s\n\n' \
+  "$TARGET_KIND" "$TARGET_NAME" "$TARGET" "$ARCHIVE_SHA" "$COMMIT" "$STARTED" > "$TRANSCRIPT"
 
 STEPS=()
 run_step() {
@@ -105,17 +129,6 @@ run_step() {
   printf '  ok    %-46s exit 0\n' "$label"
 }
 
-# Everything below runs on the target. With a distro set, that means inside it.
-on_target() {
-  # HOME is redirected either way, so ~/.uavx-setup starts empty and
-  # setup-all.sh cannot skip a step because this machine already ran it.
-  if [ -n "$DISTRO" ]; then
-    wsl.exe -d "$DISTRO" -- bash -lc "export HOME='${TARGET_HOME}'; mkdir -p \"\$HOME\"; $*"
-  else
-    HOME="${TARGET_HOME}" bash -lc "$*"
-  fi
-}
-
 SRC="${TARGET}/uavx-source"
 
 gsay "installing ${ARCHIVE_SHA:0:12} onto ${TARGET_KIND} ${TARGET_NAME}"
@@ -129,9 +142,9 @@ run_step "unpack the frozen archive into a clean target" \
 # path" and ran stage-1/setup/setup-all.sh, which is our path and not the
 # one a judge is handed. INSTALL.md was not even in the archive. The
 # label was the only thing claiming the delivered instructions work.
-[ -d "${SRC}" ] \
+on_target "test -d '${SRC}'" \
   || gdie "the archive unpacked and ${SRC} is not there, so nothing was installed"
-[ -f "${SRC}/INSTALL.md" ] \
+on_target "test -f '${SRC}/INSTALL.md'" \
   || gdie "the archive carries no INSTALL.md. It is a deliverable and it is what a judge runs first."
 
 run_step "the submitted INSTALL.md path" \
@@ -146,10 +159,7 @@ run_step "verify.sh inside the target" \
 run_step "smoke run, four vehicles airborne" \
   on_target "cd '${SRC}' && bash scripts/run_smoke.sh --vehicles 4 --runs-dir '${TARGET}/runs'"
 
-SMOKE_RUN=""
-if [ -f "${TARGET}/runs/latest.jsonl" ]; then
-  SMOKE_RUN="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1],encoding='utf-8')).get('run_id',''))" "${TARGET}/runs/latest.jsonl")"
-fi
+SMOKE_RUN="$(on_target "python3 -c \"import json;print(json.load(open('${TARGET}/runs/latest.jsonl',encoding='utf-8')).get('run_id',''))\"" 2>/dev/null || true)"
 [ -n "$SMOKE_RUN" ] \
   || gdie "the smoke run left no run id. An install that builds and cannot fly is not an install that works."
 
@@ -161,15 +171,16 @@ printf '\n=== installed version set\n%s\n[exit 0]\n' "$VERSIONS" >> "$TRANSCRIPT
 ENDED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 TRANSCRIPT_SHA="$(sha256sum "$TRANSCRIPT" | cut -d' ' -f1)"
 
-python3 - "$RECEIPT" "$TARGET_KIND" "$TARGET_NAME" "$TARGET_HOME" "$ARCHIVE_SHA" "$COMMIT" \
+python3 - "$RECEIPT" "$TARGET_KIND" "$TARGET_NAME" "$TARGET" "$TARGET_HOME" "$ARCHIVE_SHA" "$COMMIT" \
          "$STARTED" "$ENDED" "$TRANSCRIPT_SHA" "$SMOKE_RUN" "${STEPS[@]}" <<'PY'
 import json, os, sys, tempfile
-(receipt, kind, name, home, archive_sha, commit, started, ended, tsha,
+(receipt, kind, name, path, home, archive_sha, commit, started, ended, tsha,
  smoke, *steps) = sys.argv[1:]
 data = {
     "kind": "archive-install",
     "result": "pass",
-    "target": {"kind": kind, "name": name, "isolated_home": home},
+    "target": {"kind": kind, "name": name, "path": path,
+               "isolated_home": home},
     "archive_sha256": archive_sha,
     "commit_sha": commit,
     "started": started,
