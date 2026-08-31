@@ -191,7 +191,7 @@ def bind_to_run(path: Path, meta: dict, run_path: Path) -> None:
             f"{started} to {ended}. A snapshot taken before launch is the "
             f"previous scenario's graph.")
 
-    # And the record has to name the file, so W5 reads a hash rather than
+    # And the record has to name the file, so the final package reads a hash rather than
     # trusting that some snapshot was checked once.
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     if rec.get("graph_snapshot_sha256") != digest:

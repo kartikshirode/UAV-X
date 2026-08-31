@@ -14,7 +14,7 @@
 #
 # What this is NOT: a clean-machine install. It rebuilds from the working tree
 # into a fresh prefix on a machine that already has the apt packages. The
-# archive install onto a clean target is W5's job and is a different claim. Both
+# archive install onto a clean target is chunk 4.8's job and is a different claim. Both
 # are named for what they are, because round 5 is right that calling this a
 # fresh install would be a lie the gate then certifies.
 #
@@ -25,14 +25,34 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/gate-env.sh
 source "${HERE}/gate-env.sh"
-uavx_load_env
 
-TARGET="${UAVX_REHEARSE_PREFIX:-$HOME/uavx-rehearse}"
+TARGET="${UAVX_REHEARSE_PREFIX:-/tmp/uavx-rehearse-install}"
 OUT="${UAVX_REPO}/submission"
 TRANSCRIPT="${OUT}/dryrun-install-transcript.log"
 RECEIPT="${OUT}/dryrun-install-receipt.json"
 
+# Round 8 found that UAVX_REHEARSE_PREFIX=/ would send the old unconditional
+# rm straight at the filesystem root. Keep disposable builds in a named temp
+# path and reject a dangerous value before loading ROS or deleting anything.
+command -v realpath >/dev/null 2>&1 \
+  || gdie "realpath is required to validate UAVX_REHEARSE_PREFIX before deletion"
+TARGET="$(realpath -m -- "$TARGET")" \
+  || gdie "could not resolve UAVX_REHEARSE_PREFIX safely"
+case "$TARGET" in
+  /tmp/uavx-rehearse-?*|/var/tmp/uavx-rehearse-?*) ;;
+  *) gdie "UAVX_REHEARSE_PREFIX must be an absolute disposable path named /tmp/uavx-rehearse-* or /var/tmp/uavx-rehearse-*. Refusing to clear ${TARGET}." ;;
+esac
+
+# Point the loader at the empty rehearsal prefix before it sources anything.
+# Round 8 found the old order loading $HOME/uavx-install, so a stale project
+# overlay could satisfy commands that were meant to use this rebuild.
+export UAVX_BUILD_BASE="${TARGET}/build"
+export UAVX_INSTALL_BASE="${TARGET}/install"
+export UAVX_RUNS_DIR="${TARGET}/runs"
+uavx_load_env
+
 mkdir -p "$OUT"
+rm -f "$RECEIPT" "$TRANSCRIPT"
 rm -rf "$TARGET"
 mkdir -p "$TARGET"
 
@@ -80,7 +100,11 @@ run_step "colcon test in the fresh prefix" \
     --return-code-on-test-failure
 
 run_step "smoke run, four vehicles airborne" \
-  bash "${UAVX_REPO}/scripts/run_smoke.sh" --vehicles 4
+  env UAVX_BUILD_BASE="${TARGET}/build" \
+      UAVX_INSTALL_BASE="${TARGET}/install" \
+      UAVX_RUNS_DIR="${TARGET}/runs" \
+  bash "${UAVX_REPO}/scripts/run_smoke.sh" --vehicles 4 \
+    --runs-dir "${TARGET}/runs"
 
 ENDED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 TRANSCRIPT_SHA="$(sha256sum "$TRANSCRIPT" | cut -d' ' -f1)"

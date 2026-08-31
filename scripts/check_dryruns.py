@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """The two W3 rehearsals, checked rather than promised.
 
-stage-1/plan.md says a fresh-install dry run and a 60 second recording dry run
-both happen in W3, "so the week cannot be accepted without them and hand the
-bill to W5". Round 4 finding 1: `gate_w3` contained neither, and since gate.sh
+stage-1/plan.md says a rebuild dry run and a 60 second recording dry run
+both happen in W3, so the week cannot hand either risk to the submission tail.
+Round 4 finding 1: `gate_w3` contained neither, and since gate.sh
 is the only acceptance contract, W3 could go green having done neither and
 handed both to the four days that have no room for them.
 
 The recording one is the sharper risk. The `gazebo` GUI binary takes this WSL
 distro down, and it has done it three times. If the video path turns out not to
-work, that is a week's problem in W3 and a submission's problem in W5.
+work, that is a week's problem in W3 and a submission problem in chunk 4.8.
 
 Both receipts are tied to the current source tree, so a rehearsal from three
 weeks and two rewrites ago does not count as a rehearsal of this code.
@@ -21,13 +21,16 @@ Exit 0 if both rehearsals happened against this source.
 
 import hashlib
 import json
+import math
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from jsonschema_mini import validate                         # noqa: E402
 from source_tree_hash import digest, from_worktree          # noqa: E402
+from validate_record import semantic_errors                  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 SUB = REPO / "submission"
@@ -40,6 +43,8 @@ MIN_RECORDING_S = 55.0
 # zero exit beside it.
 STEPS = json.loads((REPO / "scripts" / "rehearsal-steps.json")
                    .read_text(encoding="utf-8"))["install"]
+RUN_SCHEMA = json.loads((REPO / "scenarios" / "run-record.schema.json")
+                        .read_text(encoding="utf-8"))
 
 problems: list[str] = []
 
@@ -66,7 +71,11 @@ def load(path: Path):
         fail(f"{path.relative_to(REPO).as_posix()} missing")
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, dict):
+            fail(f"{path.name} must contain one JSON object")
+            return None
+        return value
     except json.JSONDecodeError as exc:
         fail(f"{path.name}: {exc}")
         return None
@@ -75,16 +84,16 @@ def load(path: Path):
 def submission_path(value, label: str):
     """Resolve a receipt path and keep it inside submission/."""
     if not isinstance(value, str) or not value:
-        fail(f"the recording receipt names no {label}")
+        fail(f"the receipt names no valid {label}")
         return None
     rel = value.replace("\\", "/")
     if Path(rel).is_absolute() or rel.startswith("/") or ".." in Path(rel).parts:
-        fail(f"the recording receipt's {label} path {value!r} escapes the "
+        fail(f"the receipt's {label} path {value!r} escapes the "
              f"submission directory")
         return None
     path = (REPO / rel).resolve()
     if SUB.resolve() not in path.parents:
-        fail(f"the recording receipt's {label} path {value!r} is not under "
+        fail(f"the receipt's {label} path {value!r} is not under "
              f"submission/")
         return None
     return path
@@ -120,8 +129,11 @@ def check_recording_run(r: dict) -> bool:
         return False
     try:
         rec = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         fail(f"{rel}: {exc}")
+        return False
+    if not isinstance(rec, dict):
+        fail(f"{rel} must contain one JSON run record object")
         return False
 
     if rec.get("run_id") != r.get("run_id"):
@@ -143,6 +155,16 @@ def check_recording_run(r: dict) -> bool:
              f"recording of a crashed scenario rehearses the capture path and "
              f"nothing else.")
         return False
+
+    # Round 8 found the retained recording record checked through four fields
+    # only. The passing fixture was a hand-written four-field object, so the
+    # rehearsal could certify a clip with no provenance, times, vehicles or
+    # resources. Use the same complete record contract as W1.
+    contract_errors = validate(rec, RUN_SCHEMA) + semantic_errors(rec)
+    if contract_errors:
+        fail(f"the recording run does not satisfy the run record contract: "
+             f"{contract_errors[0]}")
+        return False
     graph = submission_path(r.get("graph_snapshot"), "graph snapshot")
     if graph is None:
         return False
@@ -157,6 +179,17 @@ def check_recording_run(r: dict) -> bool:
         return False
     if rec.get("graph_snapshot_sha256") != r.get("graph_snapshot_sha256"):
         fail("the receipt and the run record name different graph snapshots")
+        return False
+    scenario_name = Path(r["scenario"]).stem
+    seam = subprocess.run(
+        [sys.executable, str(REPO / "scripts" / "seam_graph.py"),
+         "--scenario", scenario_name, "--snapshot", str(graph),
+         "--expect-run", str(path)], capture_output=True, text=True,
+        cwd=str(REPO))
+    if seam.returncode != 0:
+        detail = (seam.stdout + seam.stderr).strip().splitlines()
+        fail(f"the kept graph snapshot was rejected by the seam checker: "
+             f"{detail[-1] if detail else 'no diagnostic'}")
         return False
     # The overlay is what makes an unrelated clip impossible to substitute.
     if r.get("overlay_text") != r.get("run_id"):
@@ -185,18 +218,20 @@ def main() -> int:
             fail(f"receipt kind is {r.get('kind')!r}. Only "
                  f"scripts/rehearse_install.sh writes this file, and it stamps "
                  f"what the rehearsal actually was. Calling a receipt-only "
-                 f"check a fresh install is how W5 inherits the risk anyway.")
+                 f"check a fresh install is how the submission tail inherits the risk anyway.")
         elif check_freshness(r, "rebuild", current):
-            tpath = REPO / (r.get("transcript") or "")
+            tpath = submission_path(r.get("transcript"), "rebuild transcript")
             steps = r.get("steps_run") or []
-            if not r.get("transcript") or not tpath.is_file():
+            if tpath is None:
+                pass
+            elif not tpath.is_file():
                 fail(f"the receipt names transcript {r.get('transcript')!r}, "
                      f"which is not there. The transcript is the evidence; the "
                      f"receipt is only the claim.")
             elif sha256_file(tpath) != r.get("transcript_sha256"):
                 fail("the transcript does not hash to what the receipt says. "
                      "One of them has been edited since the rehearsal ran.")
-            elif not r.get("target"):
+            elif not isinstance(r.get("target"), str) or not r["target"]:
                 fail("the receipt records no build target, so nothing says "
                      "where this was rebuilt")
             elif not Path(r["target"]).is_dir():
@@ -253,8 +288,10 @@ def main() -> int:
         if not check_freshness(r, "recording", current):
             pass
         else:
-            clip = REPO / (r.get("clip") or "")
-            if not r.get("clip") or not clip.is_file():
+            clip = submission_path(r.get("clip"), "recording clip")
+            if clip is None:
+                pass
+            elif not clip.is_file():
                 fail(f"recording rehearsal names clip {r.get('clip')!r}, which "
                      f"is not there. The receipt is the claim; the file is the "
                      f"evidence.")
@@ -262,8 +299,9 @@ def main() -> int:
                 fail("the clip does not hash to what the receipt says. Any "
                      "decodable video satisfied the old check; this one has to "
                      "be the video the rehearsal recorded.")
-            elif not r.get("run_id") or not r.get("scenario"):
-                fail("the recording receipt names no run id and scenario, so "
+            elif (not isinstance(r.get("run_id"), str) or not r["run_id"]
+                  or not isinstance(r.get("scenario"), str) or not r["scenario"]):
+                fail("the recording receipt names no valid run id and scenario, so "
                      "the clip is not bound to anything that ran")
             elif not check_recording_run(r):
                 pass
@@ -272,10 +310,16 @@ def main() -> int:
                      "apt install ffmpeg")
             else:
                 try:
-                    dur = float(subprocess.run(
+                    probe = subprocess.run(
                         ["ffprobe", "-v", "error", "-show_entries",
                          "format=duration", "-of", "default=nw=1:nk=1", str(clip)],
-                        capture_output=True, text=True, timeout=120).stdout.strip())
+                        capture_output=True, text=True, timeout=120)
+                    if probe.returncode != 0:
+                        raise ValueError(probe.stderr.strip()
+                                         or "ffprobe returned non-zero")
+                    dur = float(probe.stdout.strip())
+                    if not math.isfinite(dur):
+                        raise ValueError("ffprobe returned a non-finite duration")
                 except (ValueError, OSError, subprocess.SubprocessError) as exc:
                     dur = -1.0
                     fail(f"ffprobe could not read the rehearsal clip: {exc}")
@@ -299,7 +343,7 @@ def main() -> int:
     print()
     if problems:
         print(f"FAILED: {len(problems)} rehearsal problem(s)")
-        print("\nBoth of these belong to W3 on purpose. W5 is four days and has")
+        print("\nBoth of these belong to W3 on purpose. The submission tail has")
         print("no room to discover that the install or the screen capture does")
         print("not work. See stage-1/plan.md, week 3.")
         return 1

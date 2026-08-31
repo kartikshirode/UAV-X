@@ -27,8 +27,11 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 CHECKER = REPO / "scripts" / "check_dryruns.py"
+EXAMPLE = REPO / "scenarios" / "run-record.example.jsonl"
 STEPS = json.loads((REPO / "scripts" / "rehearsal-steps.json")
                    .read_text(encoding="utf-8"))["install"]
+sys.path.insert(0, str(REPO / "scripts"))
+from test_seam_fixtures import clean_graph                 # noqa: E402
 
 CASES: list = []
 
@@ -79,17 +82,30 @@ def build(sub: Path, target: Path, clip_src: Path) -> None:
     shutil.copyfile(clip_src, clip)
     run_id = "rehearsal_relay_required_20260915T091500Z"
     graph = sub / "dryrun-recording-graph.json"
-    graph.write_text(json.dumps({"run_id": run_id, "graph": {}}),
-                     encoding="utf-8")
+    graph_doc = clean_graph(3)
+    graph_doc["_meta"].update({
+        "captured_at": "2026-09-15T09:16:00Z",
+        "scenario": "relay_required",
+        "run_id": run_id,
+        "source_tree_sha256": src,
+    })
+    graph.write_text(json.dumps(graph_doc), encoding="utf-8")
     graph_sha = sha256_file(graph)
 
-    (sub / "dryrun-recording-run.jsonl").write_text(json.dumps({
+    record = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    record.update({
         "run_id": run_id,
         "scenario_path": "scenarios/relay_required.yaml",
+        "started_at": "2026-09-15T09:15:00Z",
+        "ended_at": "2026-09-15T09:19:00Z",
+        "requested_duration_s": 240,
+        "elapsed_sim_s": 240,
         "source_tree_sha256": src,
-        "completion": "complete",
+        "injected_events": [],
         "graph_snapshot_sha256": graph_sha,
-    }), encoding="utf-8")
+    })
+    (sub / "dryrun-recording-run.jsonl").write_text(json.dumps(record),
+                                                     encoding="utf-8")
 
     (sub / "dryrun-recording-receipt.json").write_text(json.dumps({
         "kind": "recording-rehearsal",
@@ -118,6 +134,17 @@ def save(sub: Path, name: str, data: dict) -> None:
     (sub / name).write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+def refresh_graph_binding(sub: Path) -> None:
+    graph = sub / "dryrun-recording-graph.json"
+    digest = sha256_file(graph)
+    receipt = load(sub, "dryrun-recording-receipt.json")
+    receipt["graph_snapshot_sha256"] = digest
+    save(sub, "dryrun-recording-receipt.json", receipt)
+    record = load(sub, "dryrun-recording-run.jsonl")
+    record["graph_snapshot_sha256"] = digest
+    save(sub, "dryrun-recording-run.jsonl", record)
+
+
 @case("a transcript nobody produced, with the right shape",
       "no completed section")
 def _typed_transcript(sub, target):
@@ -136,9 +163,24 @@ def _wrong_steps(sub, target):
     save(sub, "dryrun-install-receipt.json", r)
 
 
+@case("an install transcript path escaping the package",
+      "rebuild transcript path")
+def _transcript_escape(sub, target):
+    r = load(sub, "dryrun-install-receipt.json")
+    r["transcript"] = "submission/../../outside.log"
+    save(sub, "dryrun-install-receipt.json", r)
+
+
 @case("a build target that is not there", "does not exist")
 def _absent_target(sub, target):
     shutil.rmtree(target)
+
+
+@case("a build target with the wrong JSON type", "no build target")
+def _typed_target(sub, target):
+    r = load(sub, "dryrun-install-receipt.json")
+    r["target"] = [str(target)]
+    save(sub, "dryrun-install-receipt.json", r)
 
 
 @case("a receipt naming a run record that does not exist", "is not there")
@@ -151,6 +193,13 @@ def _no_record(sub, target):
 def _run_path_escape(sub, target):
     r = load(sub, "dryrun-recording-receipt.json")
     r["run_record"] = "submission/../../runs/latest.jsonl"
+    save(sub, "dryrun-recording-receipt.json", r)
+
+
+@case("a recording clip path escaping the package", "recording clip path")
+def _clip_path_escape(sub, target):
+    r = load(sub, "dryrun-recording-receipt.json")
+    r["clip"] = "submission/../../outside.mp4"
     save(sub, "dryrun-recording-receipt.json", r)
 
 
@@ -167,6 +216,13 @@ def _other_scenario(sub, target):
     rec = load(sub, "dryrun-recording-run.jsonl")
     rec["scenario_path"] = "scenarios/direct_only.yaml"
     save(sub, "dryrun-recording-run.jsonl", rec)
+
+
+@case("a recording scenario with the wrong JSON type", "valid run id and scenario")
+def _typed_scenario(sub, target):
+    r = load(sub, "dryrun-recording-receipt.json")
+    r["scenario"] = ["relay_required"]
+    save(sub, "dryrun-recording-receipt.json", r)
 
 
 @case("a clip whose frames carry somebody else's run id",
@@ -191,11 +247,26 @@ def _missing_completion(sub, target):
     save(sub, "dryrun-recording-run.jsonl", rec)
 
 
+@case("a recording run missing its clock contract", "run record contract")
+def _incomplete_run_contract(sub, target):
+    rec = load(sub, "dryrun-recording-run.jsonl")
+    del rec["clock_source"]
+    save(sub, "dryrun-recording-run.jsonl", rec)
+
+
 @case("a graph snapshot replaced after the rehearsal",
       "kept graph snapshot does not hash")
 def _swapped_graph(sub, target):
     (sub / "dryrun-recording-graph.json").write_text(
         json.dumps({"run_id": "another_run", "graph": {}}), encoding="utf-8")
+
+
+@case("a graph with no capture provenance", "rejected by the seam checker")
+def _graph_no_provenance(sub, target):
+    graph = load(sub, "dryrun-recording-graph.json")
+    del graph["_meta"]
+    save(sub, "dryrun-recording-graph.json", graph)
+    refresh_graph_binding(sub)
 
 
 @case("a hand-written receipt with no wrapper behind it", "receipt kind is")

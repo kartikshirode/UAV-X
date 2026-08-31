@@ -8,7 +8,7 @@
 #
 # This is the risk that most deserves a rehearsal. The `gazebo` GUI binary has
 # taken this WSL distro down three times, the video is a deliverable, and
-# finding out in W5 that there is no capture path is a submission-level problem
+# finding out during the submission tail that there is no capture path is a submission-level problem
 # with four days left.
 #
 # So the clip is captured here, from a scenario this script launches, with the
@@ -63,6 +63,7 @@ bash "${UAVX_REPO}/scripts/run_scenario.sh" "${SCENARIO}" --record "${CLIP}" \
      --record-seconds "${SECONDS_WANTED}" \
      --run-id "${RUN_ID}" \
      --overlay-text "${RUN_ID}" \
+     --runs-dir "${UAVX_RUNS_DIR}" \
   || gdie "the scenario run failed, so there is nothing to have recorded"
 
 RECORD="${UAVX_RUNS_DIR}/latest.jsonl"
@@ -78,7 +79,7 @@ GRAPH="${UAVX_RUNS_DIR}/latest-graph.json"
   || gdie "the run captured no ROS graph, so the seam pass would have nothing to check for this run"
 GRAPH_SHA="$(sha256sum "$GRAPH" | cut -d' ' -f1)"
 
-[ -f "$CLIP" ] || gdie "no clip at ${CLIP}. The capture path does not work, which is exactly what this rehearsal exists to find out in W3 rather than W5."
+[ -f "$CLIP" ] || gdie "no clip at ${CLIP}. The capture path does not work, which is exactly what this rehearsal exists to find out in W3 rather than during the submission tail."
 
 DUR="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$CLIP")"
 python3 -c "import sys;sys.exit(0 if float(sys.argv[1]) >= float(sys.argv[2]) else 1)" \

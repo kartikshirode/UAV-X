@@ -2,7 +2,7 @@
 # Install the frozen archive onto a clean target, and be the thing that writes
 # the receipt.
 #
-# Round 6 finding 1. The binding W5 claim is that the archive being submitted
+# Round 6 finding 1. The binding final-package claim is that the archive being submitted
 # installs and runs on a machine that is not this one. check_submission.py
 # compared three fields, archive_sha256, commit_sha and the string "pass", and
 # there was no script anywhere in the repository that produced them. A JSON
@@ -34,7 +34,6 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/gate-env.sh
 source "${HERE}/gate-env.sh"
-uavx_load_env
 
 OUT="${UAVX_REPO}/submission"
 ARCHIVE="${OUT}/uavx-source.zip"
@@ -43,6 +42,20 @@ TRANSCRIPT="${OUT}/fresh-install-transcript.log"
 RECEIPT="${OUT}/fresh-install-receipt.json"
 TARGET="${UAVX_FRESH_PREFIX:-/tmp/uavx-fresh-install}"
 DISTRO="${UAVX_FRESH_DISTRO:-}"
+
+# This path is deleted recursively. Validate it before reading prerequisites or
+# loading ROS so a dangerous value is refused for its real reason.
+command -v realpath >/dev/null 2>&1 \
+  || gdie "realpath is required to validate UAVX_FRESH_PREFIX before deletion"
+TARGET="$(realpath -m -- "$TARGET")" \
+  || gdie "could not resolve UAVX_FRESH_PREFIX safely"
+case "$TARGET" in
+  /tmp/uavx-fresh-?*|/var/tmp/uavx-fresh-?*) ;;
+  *) gdie "UAVX_FRESH_PREFIX must be an absolute disposable path named /tmp/uavx-fresh-* or /var/tmp/uavx-fresh-*. Refusing to clear ${TARGET}." ;;
+esac
+
+mkdir -p "$OUT"
+rm -f "$RECEIPT" "$TRANSCRIPT"
 
 [ -f "$ARCHIVE" ]  || gdie "no archive at ${ARCHIVE}. Run scripts/freeze_source.sh first; this installs what is being submitted, not the working tree."
 [ -f "$MANIFEST" ] || gdie "no source manifest at ${MANIFEST}"
@@ -73,17 +86,13 @@ else
   TARGET_KIND="clean-prefix"
   TARGET_NAME="$TARGET"
   if [ "${UAVX_FRESH_ALLOW_LOCAL:-0}" != "1" ]; then
-    gdie "no UAVX_FRESH_DISTRO set. Installing onto this machine with its own setup stamps present is not a fresh install, and W5 certifies that it is. Import a disposable distro, or set UAVX_FRESH_ALLOW_LOCAL=1 to accept the weaker clean-prefix claim deliberately."
+    gdie "no UAVX_FRESH_DISTRO set. Installing onto this machine with its own setup stamps present is not a fresh install, and the package check certifies that it is. Import a disposable distro, or set UAVX_FRESH_ALLOW_LOCAL=1 to accept the weaker clean-prefix claim deliberately."
   fi
 fi
 
-# This path is deleted recursively. Keep the accepted space narrow enough that
-# a missing variable or typo cannot erase a home, the repository or a distro.
-case "$TARGET" in
-  /tmp/uavx-fresh-*|/var/tmp/uavx-fresh-*) ;;
-  *) gdie "UAVX_FRESH_PREFIX must be an absolute disposable path named /tmp/uavx-fresh-* or /var/tmp/uavx-fresh-*. Refusing to clear ${TARGET}." ;;
-esac
-
+# Round 8 found this calling uavx_load_env on the host before entering the
+# clean target. A Windows host or an unprovisioned launcher then failed for
+# missing ROS even though installing ROS inside the target is this script's job.
 # Its own HOME, so no stamp from this machine is visible to the install.
 TARGET_HOME="${TARGET}/home"
 
@@ -92,9 +101,14 @@ on_target() {
   # HOME is redirected either way, so ~/.uavx-setup starts empty and
   # setup-all.sh cannot skip a step because this machine already ran it.
   if [ -n "$DISTRO" ]; then
-    wsl.exe -d "$DISTRO" -- bash -lc "export HOME='${TARGET_HOME}'; mkdir -p \"\$HOME\"; $*"
+    wsl.exe -d "$DISTRO" -- bash -lc "export HOME='${TARGET_HOME}' UAVX_INSTALL_ROOT='${TARGET}' UAVX_BUILD_BASE='${TARGET}/build' UAVX_INSTALL_BASE='${TARGET}/install' UAVX_RUNS_DIR='${TARGET}/runs'; mkdir -p \"\$HOME\"; $*"
   else
-    HOME="${TARGET_HOME}" bash -lc "$*"
+    HOME="${TARGET_HOME}" \
+      UAVX_INSTALL_ROOT="${TARGET}" \
+      UAVX_BUILD_BASE="${TARGET}/build" \
+      UAVX_INSTALL_BASE="${TARGET}/install" \
+      UAVX_RUNS_DIR="${TARGET}/runs" \
+      bash -lc "$*"
   fi
 }
 
@@ -108,8 +122,6 @@ else
   rm -rf "$TARGET"
   mkdir -p "$TARGET" "$TARGET_HOME"
 fi
-mkdir -p "$OUT"
-
 printf 'target_kind=%s\ntarget=%s\ntarget_path=%s\narchive_sha256=%s\ncommit=%s\nstarted=%s\n\n' \
   "$TARGET_KIND" "$TARGET_NAME" "$TARGET" "$ARCHIVE_SHA" "$COMMIT" "$STARTED" > "$TRANSCRIPT"
 
@@ -151,7 +163,7 @@ run_step "the submitted INSTALL.md path" \
   on_target "cd '${SRC}' && bash scripts/run_install_md.sh INSTALL.md"
 
 run_step "colcon build from the unpacked archive" \
-  on_target "cd '${SRC}' && colcon build --base-paths uavx_ws --build-base '${TARGET}/build' --install-base '${TARGET}/install' --symlink-install"
+  on_target "set +u; source /opt/ros/humble/setup.bash; source '${TARGET_HOME}/ws_uavx/install/setup.bash'; set -u; cd '${SRC}' && colcon build --base-paths uavx_ws --build-base '${TARGET}/build' --install-base '${TARGET}/install' --symlink-install"
 
 run_step "verify.sh inside the target" \
   on_target "cd '${SRC}' && bash stage-1/setup/verify.sh"

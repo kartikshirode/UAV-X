@@ -26,40 +26,45 @@ SCRIPT="$(mktemp)"
 trap 'rm -f "$SCRIPT"' EXIT
 
 python3 - "$DOC" "$SCRIPT" <<'PY'
-import re, shlex, sys
+import re, sys
 doc, out = sys.argv[1], sys.argv[2]
 text = open(doc, encoding="utf-8").read()
-blocks = re.findall(r"```(?:bash|sh|shell|console)\n(.*?)```", text, re.S)
+blocks = re.findall(r"```(bash|sh|shell|console)\n(.*?)```", text, re.S)
 if not blocks:
     sys.exit(f"{doc} contains no bash or sh code block, so it gives a reader "
              f"nothing to run. It is a deliverable and it is what a judge "
              f"opens first.")
 commands = []
-for block in blocks:
+script_lines = []
+for language, block in blocks:
     for line in block.splitlines():
         s = line.strip()
-        if not s or s.startswith("#"):
-            continue
-        if s.startswith("$ "):
-            s = s[2:]
-        commands.append(s)
+        if language == "console":
+            if not s.startswith("$ "):
+                continue
+            line = line[line.index("$ ") + 2:]
+            s = line.strip()
+        elif s.startswith("$ "):
+            line = line[line.index("$ ") + 2:]
+            s = line.strip()
+        script_lines.append(line)
+        if s and not s.startswith("#"):
+            commands.append(s)
 if not commands:
     sys.exit(f"{doc} has code blocks and no runnable command in them")
 lines = ["set -euo pipefail",
+         "PS4='+ INSTALL.md:${LINENO}: '",
          "trap 'rc=$?; printf \\\"\\nFAILED: INSTALL.md script line %s exited %s\\n\\\" \\\"$LINENO\\\" \\\"$rc\\\" >&2; exit \\\"$rc\\\"' ERR"]
-for index, command in enumerate(commands, 1):
-    lines.append(f"printf '\\n--- INSTALL.md [{index}] %s\\n' "
-                 f"{shlex.quote(command)}")
-    lines.append(command)
+lines += ["set -x", *script_lines]
 open(out, "w", encoding="utf-8", newline="\n").write("\n".join(lines) + "\n")
 print(f"  {len(commands)} command(s) from {len(blocks)} block(s) in {doc}")
 PY
 rc=$?
 [ "$rc" -eq 0 ] || exit "$rc"
 
-# One strict shell keeps `cd`, exported variables and sourced setup files alive
-# for later lines. Pipe failures also stop the install instead of being hidden
-# by a successful command on the right.
+# One strict shell keeps `cd`, exported variables, multiline commands and
+# sourced setup files alive for later lines. Pipe failures also stop the
+# install instead of being hidden by a successful command on the right.
 if ! bash "$SCRIPT"; then
   printf 'This is what a judge would hit. Fix the instructions, not this script.\n' >&2
   exit 1

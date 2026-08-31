@@ -38,7 +38,8 @@ def run(doc: Path) -> subprocess.CompletedProcess:
     env["PATH"] = os.pathsep.join([
         str(bin_dir), r"C:\Program Files\Git\usr\bin", env.get("PATH", "")])
     return subprocess.run([*bash_command(), str(RUNNER), str(doc)],
-                          capture_output=True, text=True, cwd=str(REPO), env=env)
+                          capture_output=True, text=True, cwd=str(doc.parent),
+                          env=env)
 
 
 def main() -> int:
@@ -55,12 +56,19 @@ def main() -> int:
 mkdir -p work
 cd work
 export UAVX_FIXTURE_VALUE=kept
-test \"$UAVX_FIXTURE_VALUE\" = kept
+printf '%s\\n' \\
+  \"$UAVX_FIXTURE_VALUE\" > value.txt
+test \"$(cat value.txt)\" = kept
+```
+
+```console
+$ test -f value.txt
+this line is command output, not a command
 ```
 """, encoding="utf-8")
         proc = run(good)
         if proc.returncode == 0:
-            print("ok    shell state carries across instruction lines")
+            print("ok    state, continuations and console output are handled")
         else:
             failures += 1
             print(f"FAIL  valid instructions exited {proc.returncode}")
