@@ -1,10 +1,10 @@
 # Codex context, UAV-X Stage 1
 
-Everything a reviewer needs before reading a line of the plan. Written 29 August 2026, updated 30 August for round 8. Paste this first, then `_codex-prompt.md`.
+Everything a reviewer needs before reading a line of the plan. Written 29 August 2026, updated 31 August after round 8. Paste this first, then `_codex-prompt.md`.
 
 Nothing here restates a threshold or a parameter. Those live in `scripts/gate.sh` and `stage-1/architecture.md`, and this file's job is to say what the project is and what has already been decided, so a round does not spend itself rediscovering the shape.
 
-**Round 8 works differently from rounds 2 through 7.** Those reported findings and stopped; the author edited. Round 8 explores options, picks, edits, and iterates until the repository is green. `_codex-prompt.md` has the procedure.
+**Round 8 was a fix round, and it worked.** Rounds 2 through 7 reported findings and stopped; the author edited. Round 8 found 19 problems, laid out three approaches for each in `_design-options-round8.md`, made the changes itself and iterated to green. Round 9 runs the same way. `_codex-prompt.md` has the procedure.
 
 ## The competition
 
@@ -16,7 +16,7 @@ Build an autonomous UAV swarm that surveys a disaster location, holds end-to-end
 
 Five things go in that email: a 6 to 8 page technical proposal with the software architecture, a working proof-of-concept simulation, the source code, installation instructions, and a demo video.
 
-Roughly 15 teams qualify from Stage 1, out of 51 registered as of 30 August. Stage 1 qualifiers get INR 1 Lakh each.
+Roughly 15 teams qualify from Stage 1, out of 55 registered as of 31 August. Stage 1 qualifiers get INR 1 Lakh each.
 
 ### How it is judged
 
@@ -35,7 +35,7 @@ Roughly 15 teams qualify from Stage 1, out of 51 registered as of 30 August. Sta
 
 Easy to skip and all three are cheap. The solution must comply with Indian aviation and safety law. The entrant is responsible for not infringing third-party IP. And the organisers may modify, postpone or cancel any stage, with changes communicated through official channels.
 
-The published record is refetched and diffed every week by `scripts/check_competition_spec.py`. It has fired twice for real. On its first run it caught VJTI Mumbai being removed from the published collaborator list within 24 hours of the capture, which is the sentence the eligibility rule points at. On 30 August it caught a new problem statement published at a new URL, where Django had appended `_1` to the filename; the old URL still served the old bytes, and the document differed by one word.
+The published record is refetched and diffed every week by `scripts/check_competition_spec.py`. It has fired twice for real. On its first run it caught VJTI Mumbai being removed from the published collaborator list within 24 hours of the capture, which is the sentence the eligibility rule points at. On 30 August it caught a new problem statement published at a new URL, where Django had appended `_1` to the filename; the old URL still served the old bytes, and the document differed by one word. On 31 August it caught the `about` field dropping the words "and presented by IISERB". Three catches in six days, none of which moved an obligation, and the point is that nobody would have noticed any of them by hand.
 
 ## Who is building it
 
@@ -47,11 +47,11 @@ Execution is an autonomous agent loop. One tick runs one plan week; inside a wee
 
 ## Where things stand on 30 August
 
-Rounds 1 through 7 are done, 58 findings raised and all fixed. `.claude/review-status.json` holds the state; the documents deliberately do not carry it.
+Rounds 1 through 8 are done, 77 problems raised and all fixed. `.claude/review-status.json` holds the state; the documents deliberately do not carry it.
 
 **The environment is up and pinned.** Ubuntu 22.04.5, ROS 2 Humble, Gazebo Classic 11.10.2, PX4 v1.15.4, uXRCE-DDS agent v2.4.3, every one by SHA in `stage-1/setup/versions.lock`. `scripts/sitl_multi.sh` brings up 4 vehicles headless with a ROS namespace each.
 
-**The acceptance harness is finished and is most of what exists.** 28 scripts and five fixture suites: 37 seam fixtures, 31 submission checks, 10 rehearsal checks, 8 preflight decisions, and a grammar suite that parses all 107 `--require` expressions in the gate.
+**The acceptance harness is finished and is most of what exists.** 33 scripts and nine test suites: 42 seam fixtures, 49 submission checks, 20 rehearsal checks, 8 preflight decisions, the scenario, message, record and install-guide contracts, and a grammar suite that parses all 113 `--require` expressions in the gate.
 
 **No implementation code exists.** No `uavx_ws`, no `uavx_eval`, no scenario files, no `run_scenario.sh`. That imbalance is the current situation, not an oversight: the plan was reviewed before being built and the reviews kept finding real defects.
 
@@ -59,7 +59,7 @@ Rounds 1 through 7 are done, 58 findings raised and all fixed. `.claude/review-s
 
 **Human steps still block everything.** `gate_preflight` refuses to start any week without `submission/human-preflight.json`, which needs registration, the WhatsApp clarification channel, the organiser email, an eligibility declaration, a delivery route and a compliance sign-off. None are done. This is the author's to do and is not a finding.
 
-## What the seven rounds were mostly about
+## What the eight rounds were mostly about
 
 One failure mode, over and over: **a check that reports success on a broken system.**
 
@@ -77,7 +77,9 @@ Since then, in this repo:
 - Evidence paths resolved as `REPO / rel`, where an absolute path escapes the repository entirely.
 - bash 5.1, which is what the target runs, exiting 0 when a script fails to parse after one successful command. `bash -n` exits 0 on the same file.
 
-**Four of those were introduced by the fix for an earlier round.** Round 5 finding 1 and round 7 finding 1 were both self-inflicted by the preceding two commits. Assume the same of anything added since round 6, and assume it of your own edits in this round.
+Round 8 added nine more to that list. Two are worth naming. A literal `\n` sat where a line continuation was meant, and bash reads that as an argument called `n`, so `bash -n` and every other syntax check stayed green while the called program failed on an option it never received. And a Python shim on PATH could be found but not run, so two byte scans failed silently under a green header.
+
+**Several of those were introduced by the fix for an earlier round.** Round 5 finding 1 and round 7 finding 1 were both self-inflicted by the preceding two commits, and so were two of round 8's, the literal `\n` and the W1 chunk order. Assume the same of anything added in round 8, and assume it of your own edits in this round.
 
 ## The environment, and why it is a review topic
 
