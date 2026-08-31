@@ -402,6 +402,18 @@ else:
                  f"{runner_rows[0]} produces it")
 guard(before, "no chunk calls the scenario runner before its producing chunk")
 
+# Round 8 resolved the W1 contract tests against ${UAVX_WS_SRC} while every
+# other consumer, gate_build, check_seam.sh and standing rule 9, uses
+# ${UAVX_WS_SRC}/src. Four chunks could not have found a correct
+# implementation. One source root, or the gate lies about where code lives.
+before = len(problems)
+for m in re.finditer(r"\$\{UAVX_WS_SRC\}/(\S+)", gate):
+    if not m.group(1).startswith("src"):
+        fail(f"gate.sh resolves {m.group(0)} directly under the workspace. Our "
+             f"packages live in ${{UAVX_WS_SRC}}/src, so this path is one "
+             f"directory too high; use ${{UAVX_PKG_ROOT}}.")
+guard(before, "every package path in the gate goes through the one source root")
+
 # Round 7 finding 10: plan.md said the W4 fallback is link_loss with the
 # release rule disabled and decisions.md said a deterministic priority list
 # fixed at startup. Those are different systems supporting different claims,
