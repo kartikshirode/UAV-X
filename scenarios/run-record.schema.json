@@ -125,13 +125,17 @@
             "type": "string"
           },
           "requested_t": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0,
+            "description": "Scenario time the event was asked for."
           },
           "observed_t": {
             "type": [
               "number",
               "null"
-            ]
+            ],
+            "minimum": 0,
+            "description": "Scenario time the effect was first seen on the target, or null when it never was. Null is the honest answer and is what keeps the event out of injected_event_count."
           }
         }
       }
@@ -504,6 +508,15 @@
           "minimum": 0
         }
       }
+    },
+    "injected_event_observed": {
+      "type": "boolean",
+      "description": "True only when every injected event was seen to take effect on its target. Chunk 1.4: an injector that logs an intention satisfies any check that asks whether the event is listed, so the record separates the request from the observation and this flag reports the second. Untyped until chunk 1.7, which meant a record could carry the string 'true' and no schema pass would notice."
+    },
+    "injected_event_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "How many injected events were observed to take effect, not how many were requested. injected_events carries the per event detail."
     }
   },
   "allOf": [
