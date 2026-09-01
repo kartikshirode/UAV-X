@@ -19,12 +19,12 @@ bottom of this file.
 | `1.6` | the resource sampler | 27 tests, built on the gap between one process and its children |
 | `1.7` | the runner, the record writer, `run_scenario.sh` | a real run satisfying all ten gate requirements |
 
-179 package tests, 48 seam fixtures, 51 submission checks, 20 rehearsal
-checks, 8 preflight decisions, 113 gate expressions parsed, 21 shell scripts,
-static seam pass clean. Every one of those was run again at the end of the
-week, in a shell that did not belong to whoever wrote the code. Nine of those
-suites were run by hand until 1 September and are part of the gate now; see
-defect 14.
+179 package tests, 48 seam fixtures, 53 submission checks, 20 rehearsal
+checks, 8 preflight decisions, 19 launcher geometry checks, 113 gate
+expressions parsed, 21 shell scripts, static seam pass clean. Every one of
+those was run again at the end of the week, in a shell that did not belong to
+whoever wrote the code. Ten suites now, and until 1 September no gate ran any
+of them; see defect 14.
 
 ## The run that proves it
 
@@ -142,6 +142,28 @@ implementation or passed a broken one.
     them and run in preflight now, on every chunk, with no ROS environment
     needed. The two that cost about two minutes run once per week and again on
     chunk 4.8, the last thing before a human sends.
+15. **The ten expressions the gate asserts were copied into three files and
+    compared with nothing.** Two test files carried the list by hand, each under
+    a comment saying it came from `gate.sh`, and the memory ceiling had five
+    homes. A copy that drifts here asserts last week's contract and passes, so
+    it fails silently rather than loudly. `check_docs.py` reads the list out of
+    `w1_runner` and compares both copies now, and the ceiling has one home that
+    the others import.
+16. **The tilt check added in defect 13 failed open.** `awk` reads a
+    non-numeric field as zero, so an error line, an empty answer or a changed
+    output format each produced a confident 0.00 degrees and the launcher would
+    have called a vehicle level that it had never measured. It refuses anything
+    that is not six numbers now, and `scripts/test_launcher_geometry.py` runs
+    both of the launcher's calculations without a simulator: 19 checks over the
+    spawn line and the pose reading, seven of them malformed answers. The suite
+    found on its first run that five vehicles at the default spacing put two of
+    them on the lip. The count is fixed at four, so nothing depends on it, and
+    the guard would now stop it.
+17. **Any scenario could narrow what the seam pass demanded of it.** The
+    per-scenario `required_outside` override went in for the week 1 harness,
+    which runs before a swarm exists. Nothing stopped a week 3 or 4 scenario
+    from using it to drop the radio from its own list, which would have produced
+    a clean graph report for a run with no radio in it. Week 1 only now.
 
 ## Where the numbers in defects 11 to 14 come from
 
@@ -166,6 +188,35 @@ reproducible: `--vehicles 2 --spacing 20` puts two vehicles back on it and the
 launcher refuses, every time.
 
 ## Outstanding, carried into week 2
+
+The audit is [docs/audits/week-1.md](../audits/week-1.md). Four of its findings
+are open and three of them are here.
+
+**Poses are sampled at a quarter of the frozen rate.** The runner samples at
+5 Hz, hardcoded in the module, while `architecture.md` names 20 Hz as the
+coverage source and again for the separation monitor. Week 2 computes coverage
+off sampled poses, so a survey scored at a quarter of the intended resolution is
+a different measurement, and no scenario file can correct it because the rate is
+not read from one. **This is the first thing to fix.**
+
+**Nothing records where each vehicle stands, and defect 13 moved them.**
+Position comes from PX4's local frame, whose origin is each vehicle's own spawn
+point, while the design fixes all geometry in one frame with the ground station
+at the origin. The record carries a home altitude per vehicle and no home x or
+y. Any week converting sampled poses into the frozen frame needs those offsets,
+and the only place they are written down is an awk expression in a shell script.
+The launcher prints them; the runner should record them.
+
+**`run_smoke.sh` writes no valid run record, and `architecture.md` says it
+does.** The four smoke files carry `kind: smoke-placeholder` and admit in a note
+that they do not validate. The deferral was reasonable when the record writer
+did not exist. Carrying it silently while citing those runs as chunk 1.2's proof
+was not, which is why it is written here now.
+
+**The proposal's architecture section was not written.** The plan asks for it
+this week, outside the chunk table, and `check_docs.py` matches only the 25
+chunk rows, so nothing looked. Three more of these sections are due and the
+submission cannot go without the proposal.
 
 **`--record` is validated and not implemented, and exits 40.** There is no
 headless capture path on this stack: the world carries no camera sensor and

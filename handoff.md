@@ -150,9 +150,10 @@ NEXT-WEEK: 2
 
 Week 2 is the survey and the first mesh work. Before any of it, read
 [docs/progress/week-1.md](docs/progress/week-1.md) and
-[docs/audits/week-1.md](docs/audits/week-1.md); between them they carry 14
+[docs/audits/week-1.md](docs/audits/week-1.md); between them they carry 17
 defects found in the acceptance harness itself, and the harness is what every
-later week is graded by.
+later week is graded by. Four audit findings are still open, and the first of
+them, the pose sampling rate, decides what week 2's coverage number means.
 
 ## Execution notes
 
