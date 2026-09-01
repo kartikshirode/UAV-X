@@ -12,6 +12,25 @@ REPO = Path(__file__).resolve().parent.parent
 CHECKER = REPO / "scripts" / "validate_record.py"
 EXAMPLE = REPO / "scenarios" / "run-record.example.jsonl"
 
+# Chunk 1.7. architecture.md calls this the checked example, and it was checked
+# only against the schema. It carried gazebo11 where versions.lock enforces
+# gazebo, and it was missing both event fields w1_runner asserts of every
+# harness run, so the one record in the repository showing what a passing run
+# looks like could not have passed. These are the requirements the gate makes
+# of a harness record, copied from gate.sh w1_runner.
+HARNESS_REQUIREMENTS = [
+    "completion==complete",
+    "clock_source==ros_sim_time",
+    "pose_sample_count>=100",
+    "vehicle_ids_observed==uav_1,uav_2,uav_3,uav_4",
+    "injected_event_observed==true",
+    "injected_event_count>=1",
+    "resources.peak_rss_mib>0",
+    "resources.peak_rss_mib<10500",
+    "resources.swap_used_mib==0",
+    "resources.samples>=10",
+]
+
 
 def run(path: Path) -> tuple[int, str]:
     proc = subprocess.run([sys.executable, str(CHECKER), str(path)],
@@ -73,5 +92,48 @@ def main() -> int:
     return 0
 
 
+def check_example_against_the_gate() -> int:
+    """The example must satisfy what the gate asks of a harness run."""
+    import json as _json
+    sys.path.insert(0, str(REPO / "scripts"))
+    from validate_record import check_require                  # noqa: E402
+    from check_submission_const import PEAK_RSS_CEILING_MIB    # noqa: E402
+
+    record = _json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    bad = 0
+    for expression in HARNESS_REQUIREMENTS:
+        why = check_require(record, expression)
+        if why:
+            print(f"  FAIL  the checked example fails {expression}: {why}")
+            bad += 1
+    ceiling = record["resources"]["peak_rss_mib"]
+    if ceiling >= PEAK_RSS_CEILING_MIB:
+        print(f"  FAIL  the example claims {ceiling} MiB resident, at or over "
+              f"the {PEAK_RSS_CEILING_MIB} MiB ceiling")
+        bad += 1
+    lock_path = REPO / "stage-1" / "setup" / "versions.lock"
+    pins = {}
+    for line in lock_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            pins[key.strip()] = value.strip()
+    for key, want in pins.items():
+        got = record["versions"].get(key)
+        if got in (None, "fixture"):
+            continue
+        if got != want:
+            print(f"  FAIL  the example pins {key}={got!r}, versions.lock "
+                  f"says {want!r}")
+            bad += 1
+    if not bad:
+        print(f"  ok    the checked example satisfies all "
+              f"{len(HARNESS_REQUIREMENTS)} harness requirements and the lock")
+    return bad
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    # Both, and the exit code is the worse of the two. A suite that checks the
+    # fixtures and not the example everyone copies is checking the easy half.
+    rc = main()
+    sys.exit(1 if check_example_against_the_gate() else rc)
