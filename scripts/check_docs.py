@@ -414,6 +414,82 @@ for m in re.finditer(r"\$\{UAVX_WS_SRC\}/(\S+)", gate):
              f"directory too high; use ${{UAVX_PKG_ROOT}}.")
 guard(before, "every package path in the gate goes through the one source root")
 
+# Chunk 1.7, found while cross-checking the runner contract. 27 of the paths
+# the gate asserts on had no definition in run-record.schema.json. The schema
+# sets additionalProperties true, so a record carrying them still validates
+# and nothing pins their type: separation_violations could arrive as a string
+# and relay_role_moved as the word "true", and the schema pass would agree.
+#
+# The schema is described everywhere as the provenance contract every run must
+# satisfy, so a gate requirement it says nothing about is a hole in that
+# contract. Defining all 27 now would lock in decisions that belong to the
+# weeks that produce them, so instead the gap is written down and can only
+# shrink. Each week deletes its own entries as it lands. A path that is
+# neither defined nor listed here fails.
+UNTYPED_GATE_PATHS = {
+    # W2, the survey and evaluator fields.
+    "coverage_fraction", "coverage_source", "vehicles_completed",
+    "delivery_ratio",
+    # W3, the communication and relay claim.
+    "delivery_ratio_by_node", "relay_role_holder", "relay_role_moved",
+    "time_to_reconnect_s", "observations_set_equal", "min_pairwise_separation_m",
+    # W4, fault recovery and safety.
+    "coverage_fraction_at_kill", "strip_reassigned_to", "relay_role_released",
+    "route_restored_after_blackout", "mover_returned_to_station",
+    "outage_count_after_release", "outage_duration_s",
+    "delivery_ratio_after_recovery", "separation_violations",
+    "collision_contacts", "yield_events_by_node", "yield_hold_seconds",
+    "observations.unexpected_count",
+}
+
+before = len(problems)
+schema_doc = json.loads((REPO / "scenarios" / "run-record.schema.json")
+                        .read_text(encoding="utf-8"))
+
+
+def schema_knows(path: str) -> bool:
+    node = schema_doc
+    for part in path.split("."):
+        properties = node.get("properties") or {}
+        # A per node map is defined once and keyed by vehicle at runtime, so
+        # a.b where a is an open object counts as known.
+        if part not in properties:
+            return node.get("type") == "object" and "properties" not in node
+        node = properties[part]
+    return True
+
+
+# The left operand is always a path. The right operand is a literal unless it
+# is dotted, which is the only shape the grammar reads as another field, so
+# `completion==complete` contributes one path and not two.
+gate_paths = set()
+for expr in re.findall(r'--require "([^"]+)"', gate):
+    sides = re.split(r"==|!=|>=|<=|=~|>|<", expr)
+    left = sides[0].strip()
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", left):
+        gate_paths.add(left)
+    for side in sides[1:]:
+        side = side.strip()
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z0-9_.]+", side):
+            gate_paths.add(side)
+
+for path in sorted(gate_paths):
+    root = path.split(".")[0]
+    if schema_knows(path) or path in UNTYPED_GATE_PATHS or root in UNTYPED_GATE_PATHS:
+        continue
+    fail(f"gate.sh asserts on {path} and run-record.schema.json neither "
+         f"defines it nor lists it as still untyped. A requirement the "
+         f"provenance contract says nothing about cannot constrain a type.")
+
+stale = sorted(x for x in UNTYPED_GATE_PATHS
+               if schema_knows(x) and "." not in x)
+for path in stale:
+    fail(f"{path} is defined in run-record.schema.json and still listed as "
+         f"untyped in check_docs.py. Delete it from UNTYPED_GATE_PATHS; the "
+         f"list only shrinks.")
+guard(before, f"every gate requirement is typed or declared untyped, "
+              f"{len(UNTYPED_GATE_PATHS)} still to define")
+
 # Round 7 finding 10: plan.md said the W4 fallback is link_loss with the
 # release rule disabled and decisions.md said a deterministic priority list
 # fixed at startup. Those are different systems supporting different claims,
