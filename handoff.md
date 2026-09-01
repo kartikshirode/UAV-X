@@ -16,7 +16,11 @@ Repo: github.com/kartikshirode/UAV-X. This project is its own repository and doe
 
 ## Where we are
 
-Day 4, 29 August. Six Codex rounds are done, 54 findings fixed, and the acceptance harness is finished. No project code has been written yet, which is now the problem rather than the plan: the original week 1 is spent and the plan has been rebuilt into four weeks starting 30 August. See [stage-1/plan.md](stage-1/plan.md), Why four weeks and not five.
+Day 7, 1 September. Week 1 is built. All seven chunks are implemented, four vehicles have flown, and the harness produces a run record and a graph snapshot that the seam pass accepts. The week is **not accepted**, because acceptance is `bash scripts/gate.sh 1` and that refuses to start without `submission/human-preflight.json`. What landed, what broke and what is still open is in [docs/progress/week-1.md](docs/progress/week-1.md).
+
+Registration came through on 1 September and the id is `UAVX-8C4749FDD12C`. The preflight schema requires it now, because the other two fields in that block are a date and an address and a person can type both without ever having registered.
+
+The plan is four weeks starting 30 August, rebuilt after the original week 1 went on reviews. See [stage-1/plan.md](stage-1/plan.md), Why four weeks and not five.
 
 **Decided and locked** in [stage-1/decisions.md](stage-1/decisions.md): WSL2 Ubuntu 22.04 with ROS 2 Humble, PX4 v1.15 and Gazebo Classic; the comms layer gates at the ROS 2 application layer; solo entry at 4 to 6 hours a day; 4 vehicles.
 
@@ -33,7 +37,7 @@ Day 4, 29 August. Six Codex rounds are done, 54 findings fixed, and the acceptan
 
 It took seven failed runs. Four of them presented as something other than their cause and two passed a green check while broken, so the failure notes in [stage-1/setup/README.md](stage-1/setup/README.md) are worth reading before touching any version pin.
 
-What this does not prove: nothing has flown. Four vehicles airborne together is the W1 gate and is still ahead.
+That table was written before anything flew. Four vehicles now arm, climb to separate layer altitudes, hold and land, headless, in one command.
 
 **The plan is built for the loop and the harness exists.** Four weeks and 25 chunks. A week ends in `bash scripts/gate.sh <N>`; a chunk is `bash scripts/gate.sh <N>.<M>` and is the unit you actually work in. That script is the only definition of any threshold; the plan, decisions and loop config describe it and never restate it. The frozen design is [stage-1/architecture.md](stage-1/architecture.md).
 
@@ -75,13 +79,13 @@ Flight is 25% and the tooling hands it to you. Budget one week on flight and two
 ## What's not done, in order of risk
 
 1. **The next round of the plan review.** Each round's fixes get read only by their author until Codex sees them, which is the position that produced 11 findings the first time and 9 the last. Prompt is in [_codex-review-prompt.md](_codex-review-prompt.md); current position in `.claude/review-status.json`.
-2. **Nothing has flown a mission.** Four vehicles come up headless with a ROS namespace each and hold, which is measured. Arming, taking off and flying a pattern is W1 and has not been done.
+2. **No mission has been flown.** Four vehicles arm, climb, hold and land, and one scenario runs end to end and publishes a record. The survey pattern, the mesh layer and the relay logic are weeks 2 to 4 and none of them exists.
 3. **Recording the video.** The `gazebo` GUI binary takes the distro down, so the one thing still blocked is the part that needs a picture. `gzclient` is installed and untested. Deal with it well before 20 September, and keep the headless fallback.
 4. **The organiser email.** Drafted in [stage-1/organiser-email.md](stage-1/organiser-email.md), not sent.
 
 Closed on 26 August: whether Gazebo runs here at all, and whether four vehicles fit. `gzserver` starts headless and leaves the distro alone; only the GUI binary is dangerous. `scripts/sitl_multi.sh` brings up 4 PX4 instances with a ROS namespace each and 43 topics apiece, and the whole stack costs under 800 MB of the 11.5 GB available.
 
-## Running it, once there is anything to run
+## Running it
 
 The environment is up and verified, and the state table above is the current one. This section is how to drive it.
 
@@ -103,11 +107,16 @@ Baramati HPC is available in principle. Full notes in [_compute.md](_compute.md)
 
 Where it earns its place is the scenario sweep after the simulation works: swarm sizes, failure timings, range thresholds, topologies, all as one Slurm array job. The IDS project at `MagaMinds/June/Adversarial IDS/tools/hpc/` has a working sweep-and-collect pattern to adapt rather than rewrite.
 
-## Do these in week 1, before technical work
+## The human steps, and none of them is done by code
 
-- Register on techfest.org under Competitions, then PUSHPAK Grand Challenge
-- **Check no attachment to the PUSHPAK project, the Drone Centre, or the organising or host institutions.** This disqualifies an entry at any stage.
-- Send the organiser email, drafted in [stage-1/organiser-email.md](stage-1/organiser-email.md)
+`bash scripts/gate.sh 1` cannot start until `submission/human-preflight.json` exists, so this list is the thing standing between week 1 and acceptance. Registration is the only one closed.
+
+- ~~Register on techfest.org under Competitions, then PUSHPAK Grand Challenge.~~ Done 1 September, id `UAVX-8C4749FDD12C`.
+- **Declare no attachment to the PUSHPAK project, the Drone Centre, or the organising or host institutions.** This disqualifies an entry at any stage, so the declaration is dated and signed rather than assumed.
+- Send the organiser email, drafted in [stage-1/organiser-email.md](stage-1/organiser-email.md).
+- Join the WhatsApp clarification channel, and record when it was last read.
+- Record the delivery route and the attachment budget in MB.
+- Get the BVLOS regulatory position reviewed by a person, and record who and when. Stage 1 and Stage 2 fly nothing, so the statement is that no operational permission attaches and the obligations before physical flight sit in the proposal. A checker can confirm the citations resolve. Only a person can sign that the reading is right.
 
 Team size is settled: solo entry.
 
@@ -129,11 +138,21 @@ Carried from the Vaani and Adversarial IDS handoffs, same servers:
 
 ## Honest gaps
 
-- Nothing has flown a mission. Vehicles come up headless with a namespace each and hold; none has armed or taken off.
-- Only the W1 gate path has run end to end. Every later gate calls scripts that do not exist yet, `run_scenario.sh` and `uavx_eval.check` among them. They fail with a clear message, which is correct, but untested against real work.
-- `check_submission.py` has only ever been run against an empty package, where it correctly refuses. The seam checker has nine fixtures and passes them, but has never seen a real ROS graph.
+- No mission has been flown. Four vehicles arm, climb, hold and land; nothing has surveyed anything or relayed a packet.
+- Weeks 2 to 4 call `uavx_eval.check`, which does not exist. It fails with a clear message, which is correct, and untested against real work. `run_scenario.sh` was in that list until week 1 built it.
+- `check_submission.py` has still only run against an empty package and against its own fixtures, never against a real one. The seam checker has 48 fixtures now and has seen exactly one real ROS graph. That graph failed it on three endpoints, and none of the three was a bypass, which is the argument for capturing more of them.
 - The same mistake has now been caught twice: a checker that only examines what its author thought to list, confirming what its author already believed. First the frozen topology, where the relay kill turned out to be a no-op. Then the integrated mission, where the survey box sat 240.8 m from the anchor while the design claimed 250. `check_geometry.py` now walks every pair at every sampled instant of every trajectory. Assume that class of mistake is hiding somewhere else too, and that the next place it turns up will also look thoroughly checked.
 - Three checkers found bugs in themselves while being written, which is the argument for writing the fixtures. The seam suite exposed a `grep` under `pipefail` that killed the static pass mid-scan: it printed its header, exited 1 and checked nothing, and nobody had noticed because `uavx_ws/src` does not exist yet so the guard above it always fired first.
+
+## Next
+
+NEXT-WEEK: 2
+
+Week 2 is the survey and the first mesh work. Before any of it, read
+[docs/progress/week-1.md](docs/progress/week-1.md) and
+[docs/audits/week-1.md](docs/audits/week-1.md); between them they carry 14
+defects found in the acceptance harness itself, and the harness is what every
+later week is graded by.
 
 ## Execution notes
 

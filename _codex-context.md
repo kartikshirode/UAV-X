@@ -1,6 +1,6 @@
 # Codex context, UAV-X Stage 1
 
-Everything a reviewer needs before reading a line of the plan. Written 29 August 2026, updated 31 August after round 8. Paste this first, then `_codex-prompt.md`.
+Everything a reviewer needs before reading a line of the plan. Written 29 August 2026, updated 1 September after week 1 was built. Paste this first, then `_codex-prompt.md`.
 
 Nothing here restates a threshold or a parameter. Those live in `scripts/gate.sh` and `stage-1/architecture.md`, and this file's job is to say what the project is and what has already been decided, so a round does not spend itself rediscovering the shape.
 
@@ -45,19 +45,21 @@ Execution is an autonomous agent loop. One tick runs one plan week; inside a wee
 
 **That is why the plan has to be rigid.** Anything left ambiguous becomes a coin flip made by an agent with no context, and a wrong flip costs days out of 28. Judge everything by "can an agent execute this without guessing", not by "is this reasonable for a human".
 
-## Where things stand on 30 August
+## Where things stand on 1 September
 
 Rounds 1 through 8 are done, 77 problems raised and all fixed. `.claude/review-status.json` holds the state; the documents deliberately do not carry it.
 
 **The environment is up and pinned.** Ubuntu 22.04.5, ROS 2 Humble, Gazebo Classic 11.10.2, PX4 v1.15.4, uXRCE-DDS agent v2.4.3, every one by SHA in `stage-1/setup/versions.lock`. `scripts/sitl_multi.sh` brings up 4 vehicles headless with a ROS namespace each.
 
-**The acceptance harness is finished and is most of what exists.** 33 scripts and nine test suites: 42 seam fixtures, 49 submission checks, 20 rehearsal checks, 8 preflight decisions, the scenario, message, record and install-guide contracts, and a grammar suite that parses all 113 `--require` expressions in the gate.
+**The acceptance harness is finished.** 35 scripts, nine of them test suites: 48 seam fixtures, 51 submission checks, 20 rehearsal checks, 8 preflight decisions, the scenario, message, record and install-guide contracts, and a grammar suite that parses all 113 `--require` expressions in the gate.
 
-**No implementation code exists.** No `uavx_ws`, no `uavx_eval`, no scenario files, no `run_scenario.sh`. That imbalance is the current situation, not an oversight: the plan was reviewed before being built and the reviews kept finding real defects.
+**Week 1 is built and week 1 is not accepted.** `uavx_ws` holds `uavx_msgs` with the five frozen types and `uavx_sim` with the scenario loader, the event injector, the graph capture, the resource sampler, the record writer and the runner, at 179 package tests. `scenarios/harness_check.yaml` and `scripts/run_scenario.sh` exist. Four vehicles arm, climb to separate layers, hold and land, and one scenario runs end to end and publishes a record and a graph the seam pass accepts. `uavx_eval` still does not exist; it belongs to week 2.
+
+**Week 1 found 14 defects in the acceptance harness and 0 in the plan.** They are listed in `docs/progress/week-1.md`. The worst was a missing boolean case in the `--require` grammar, which made 17 gate expressions unsatisfiable by any record the schema would also accept, and those expressions carry weeks 3 and 4. The second worst is that the seam pass had never run over a real ROS graph; all 48 fixtures were written by hand, and the first captured graph failed on three endpoints. The fourteenth is that no gate ran any of the nine fixture suites that prove the checkers work; they run in preflight now. A reviewer should read that list before trusting any checker here, including the ones the reviews already approved.
 
 **The plan is four weeks and 25 chunks**, 30 August to 26 September. It was five weeks until 29 August; the first four days produced no implementation, so the packaging tail was distributed into the weeks rather than cutting scope. `stage-1/plan.md`, section "Why four weeks and not five", has the reasoning. Every chunk has its own gate: `bash scripts/gate.sh 1.3` runs one, `bash scripts/gate.sh chunks` lists all 25.
 
-**Human steps still block everything.** `gate_preflight` refuses to start any week without `submission/human-preflight.json`, which needs registration, the WhatsApp clarification channel, the organiser email, an eligibility declaration, a delivery route and a compliance sign-off. None are done. This is the author's to do and is not a finding.
+**Human steps still block everything.** `gate_preflight` refuses to start any week without `submission/human-preflight.json`, which needs registration, the WhatsApp clarification channel, the organiser email, an eligibility declaration, a delivery route and a compliance sign-off. Registration closed on 1 September and the block now requires the issued id, `UAVX-` and 12 upper case hex characters, because a date and an address can both be typed by somebody who never registered. The other five are open. This is the author's to do and is not a finding.
 
 ## What the eight rounds were mostly about
 
