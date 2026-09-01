@@ -26,28 +26,28 @@ week, in a shell that did not belong to whoever wrote the code.
 
 ## The run that proves it
 
-`runs/harness_check_20260901T095331Z.jsonl`, made against the tree as
-committed at `24a4f78`, so its `source_tree_sha256` covers the runner that
-wrote it.
+`runs/harness_check_20260901T111030Z.jsonl`, made against the tree as
+committed at `3415c3d`. Its `source_tree_sha256` is
+`7bc9a5566937d26ebf6ece4a37938e9502a5f27e9a2cf92d72de764e8110285b`, which is
+the digest of that commit, so the record covers the runner and the launcher
+that produced it and not some edit sitting beside them.
 
 | Requirement | Value |
 | --- | --- |
 | `completion` | complete |
 | `clock_source` | ros_sim_time |
-| `pose_sample_count` | 832 |
+| `pose_sample_count` | 836 |
 | `vehicle_ids_observed` | uav_1, uav_2, uav_3, uav_4 |
 | `injected_event_observed` | true, a JSON boolean |
 | `injected_event_count` | 1 |
-| `resources.peak_rss_mib` | 503.047, about 5 percent of the ceiling |
+| `resources.peak_rss_mib` | 504.262 |
 | `resources.swap_used_mib` | 0.0 |
 | `resources.samples` | 60 |
 
-`check_seam.sh` accepts the captured graph. `run_scenario.sh` against an
-absent path returns 10 and leaves no `latest` artifact, in both orderings.
+`check_seam.sh` accepts the captured graph against that record. `run_scenario.sh`
+against an absent path returns 10 and leaves `latest` byte for byte unchanged.
 
-That run is the one the gate expressions were checked against, and it is also
-the run where uav_3 stopped at 11.98 m. Four more followed the launcher fix in
-defect 13, and every vehicle reached its layer in all of them.
+Six runs sit under `runs/`, and the altitudes are the reason there are six.
 
 | Run | uav_1, 30 m | uav_2, 40 m | uav_3, 50 m | uav_4, 60 m | preparation |
 | --- | --- | --- | --- | --- | --- |
@@ -56,11 +56,13 @@ defect 13, and every vehicle reached its layer in all of them.
 | `...104415Z` | 30.40 | 40.43 | 50.40 | 60.46 | 25.8 s |
 | `...104637Z` | 30.38 | 40.47 | 50.47 | 60.48 | 25.6 s |
 | `...105016Z` | 30.38 | 40.48 | 50.44 | 60.45 | 25.9 s |
+| `...111030Z` | 30.38 | 40.44 | 50.44 | 60.45 | 25.8 s |
 
-Preparation is wall clock from launch to every vehicle being ready. It fell by
-95 seconds because nothing is fighting a failsafe any more. All ten gate
-expressions and the graph pass hold on the last of those runs as well; I ran
-them again rather than assuming the fix left them alone.
+The first is from before the launcher fix in defect 13 and is kept as the other
+half of the comparison. Preparation is wall clock from launch to every vehicle
+being ready, and it fell by 95 seconds because nothing is fighting a failsafe
+any more. I re-ran all ten expressions and the graph pass on the last row
+rather than assuming the fix left them alone.
 
 ## Defects found while building, and fixed
 
