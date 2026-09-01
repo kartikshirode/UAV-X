@@ -39,5 +39,27 @@
     "starts": "2026-08-30",
     "sends": "2026-09-26",
     "why": "the first four days produced no implementation, so the packaging tail was distributed into the weeks rather than cutting scope. W4 keeps 5 build days for the 45% of the rubric that lives there."
+  },
+  "build_state": {
+    "week": 1,
+    "chunks_built": "1.1 to 1.7, all seven",
+    "accepted": false,
+    "why_not_accepted": "gate.sh 1 calls gate_preflight, which refuses to start without submission/human-preflight.json. Every check the chunk gates run has been run directly and passes; none of that is acceptance.",
+    "evidence": "runs/harness_check_20260901T095331Z.jsonl, made against the tree at 24a4f78 so its source_tree_sha256 covers the runner",
+    "suites": {
+      "package_tests": 178,
+      "seam_fixtures": 48,
+      "submission_checks": 49,
+      "rehearsal_checks": 20,
+      "preflight_decisions": 8,
+      "gate_expressions": 113,
+      "shell_scripts": 21
+    },
+    "carried_into_week_2": [
+      "uav_3, PX4 instance 2, has never reached its 50 m layer inside the 120 s climb budget across seven runs. Week 2's survey depends on it.",
+      "--record is validated and not implemented, exits 40. No headless capture path exists on this stack. Chunk 3.6 owns it and rehearse_recording.sh fails until then.",
+      "The ROS 2 CLI daemon wedges and answers topic list with an empty stdout. The runner restarts it and retries; sitl_multi.sh unchanged."
+    ],
+    "defects_found_in_the_harness": 12
   }
 }
