@@ -120,22 +120,24 @@ gate_preflight() {
   gsay "preflight: the shell scripts parse"
   bash "${UAVX_REPO}/scripts/check_shell.sh" || gdie "a shell script in this repo is broken"
 
-  # Week 1, found while auditing the week. Nine suites under scripts/ exist to
+  # Week 1, found while auditing the week. Ten suites under scripts/ exist to
   # prove the checkers themselves work, and no gate ran a single one of them.
   # Every threshold in this file is enforced by a checker, so a regression in
   # seam_graph.py or in validate_record.py's grammar would have passed every
   # week in silence. Week 1 found exactly that class of defect twelve times,
   # and the only reason it was caught is that somebody ran these by hand.
   #
-  # Seven of the nine cost about 7 seconds between them, so they run on every
+  # Eight of the ten cost about 7 seconds between them, so they run on every
   # chunk. test_submission_fixtures and test_dryrun_fixtures cost about two
   # minutes and run once per week, in gate_harness_slow below.
   gsay "preflight: the checkers still pass their own fixtures"
   local suite
-  for suite in test_require_grammar test_record_contract test_scenario_fixtures                test_install_md_fixtures test_gate_preflight test_message_contract                test_seam_fixtures; do
+  for suite in test_require_grammar test_record_contract test_scenario_fixtures \
+               test_install_md_fixtures test_gate_preflight test_message_contract \
+               test_launcher_geometry test_seam_fixtures; do
     python3 "${UAVX_REPO}/scripts/${suite}.py" > /dev/null       || gdie "${suite}.py failed. A checker this gate relies on is broken, so no result below it means anything."
   done
-  printf '  7 suites pass their own fixtures\n'
+  printf '  8 suites pass their own fixtures\n'
 
   # The organisers can change the rules or the timeline at any point, and the
   # only way we would find out is by looking.
