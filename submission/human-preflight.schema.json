@@ -16,7 +16,8 @@
       "type": "object",
       "required": [
         "done",
-        "email"
+        "email",
+        "competition_id"
       ],
       "properties": {
         "done": {
@@ -29,6 +30,11 @@
           "minLength": 6,
           "pattern": "@",
           "description": "The registered address. The submission has to come from it."
+        },
+        "competition_id": {
+          "type": "string",
+          "pattern": "^UAVX-[0-9A-F]{12}$",
+          "description": "The id Techfest issues on registration, UAVX- followed by 12 upper case hex characters. Added 1 September, when the first one arrived. The two fields beside it are things a person types, and a date and an address can both be typed by somebody who never registered. This one cannot be guessed, so it is the only part of this block that is evidence rather than a claim. The organisers can also be asked to confirm it, which is the point of recording it rather than trusting the date."
         }
       }
     },

@@ -12,7 +12,9 @@ Register on techfest.org, Competitions, PUSHPAK Grand Challenge, UAV-X.
 
 This is the competition's entry mechanism. There is no submission portal, so registration is the only thing that connects your email to an entry.
 
-Record: the date, and the registered email address.
+Record: the date, the registered email address, and **the competition id Techfest issues**, which looks like `UAVX-` followed by 12 upper case hex characters.
+
+The id is the part that matters. A date and an address are both things a person types, and either can be typed by somebody who never registered; the schema accepted that for six rounds. An issued id cannot be guessed and the organisers can be asked to confirm it, so it is the only line in this section that is evidence rather than a claim.
 
 ## 2. Eligibility
 
@@ -67,7 +69,7 @@ Write `submission/human-preflight.json`:
 
 ```json
 {
-  "registered":        {"done": "2026-08-27", "email": "..."},
+  "registered":        {"done": "2026-08-27", "email": "...", "competition_id": "UAVX-0123456789AB"},
   "eligibility":       {"done": "2026-08-27", "declaration": "no attachment to PUSHPAK, the Drone Centre, IIT Bombay, IISER Bhopal or VJTI Mumbai"},
   "clarification_channel": {"done": "2026-08-27", "last_checked": "2026-08-27"},
   "organiser_email":   {"sent": "2026-08-27", "answers": "pending", "fallback": "repo link plus zip, video under 180 s", "last_checked": "2026-08-27"},

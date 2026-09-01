@@ -58,7 +58,8 @@ def main() -> int:
 
     d = receipt["delivery"]
     print(f"  ok    registered {receipt['registered']['done']} as "
-          f"{receipt['registered']['email']}")
+          f"{receipt['registered']['email']}, "
+          f"{receipt['registered']['competition_id']}")
     print(f"  ok    eligibility declared {receipt['eligibility']['done']}")
     print(f"  ok    clarification channel joined "
           f"{receipt['clarification_channel']['done']}")
