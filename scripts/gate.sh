@@ -120,6 +120,23 @@ gate_preflight() {
   gsay "preflight: the shell scripts parse"
   bash "${UAVX_REPO}/scripts/check_shell.sh" || gdie "a shell script in this repo is broken"
 
+  # Week 1, found while auditing the week. Nine suites under scripts/ exist to
+  # prove the checkers themselves work, and no gate ran a single one of them.
+  # Every threshold in this file is enforced by a checker, so a regression in
+  # seam_graph.py or in validate_record.py's grammar would have passed every
+  # week in silence. Week 1 found exactly that class of defect twelve times,
+  # and the only reason it was caught is that somebody ran these by hand.
+  #
+  # Seven of the nine cost about 7 seconds between them, so they run on every
+  # chunk. test_submission_fixtures and test_dryrun_fixtures cost about two
+  # minutes and run once per week, in gate_harness_slow below.
+  gsay "preflight: the checkers still pass their own fixtures"
+  local suite
+  for suite in test_require_grammar test_record_contract test_scenario_fixtures                test_install_md_fixtures test_gate_preflight test_message_contract                test_seam_fixtures; do
+    python3 "${UAVX_REPO}/scripts/${suite}.py" > /dev/null       || gdie "${suite}.py failed. A checker this gate relies on is broken, so no result below it means anything."
+  done
+  printf '  7 suites pass their own fixtures\n'
+
   # The organisers can change the rules or the timeline at any point, and the
   # only way we would find out is by looking.
   #
@@ -163,8 +180,7 @@ gate_preflight() {
   # could run happily after a checkout changed the stack under them.
   gsay "preflight: stack matches versions.lock"
   bash "${UAVX_REPO}/stage-1/setup/verify.sh" >/dev/null 2>&1     || gdie "verify.sh failed. The installed stack does not match stage-1/setup/versions.lock. Run it directly to see which pin drifted."
-  printf '  locked
-'
+  printf '  locked\n'
 
   gsay "preflight: no simulator left running from a previous gate"
   for p in gzserver gzclient px4 MicroXRCEAgent; do
@@ -770,6 +786,18 @@ w4_submit() {
   esac
 }
 
+# The two fixture suites that cost real time, about two minutes between them.
+# Too much to pay on all 25 chunks, cheap once a week. Chunk 4.8 pays it too,
+# because that is the last thing that runs before a human sends the package and
+# check_submission.py is the only thing standing between a broken package and
+# the organisers.
+gate_harness_slow() {
+  gsay "harness: the two slow fixture suites"
+  python3 "${UAVX_REPO}/scripts/test_submission_fixtures.py" > /dev/null     || gdie "test_submission_fixtures.py failed, so check_submission.py cannot be trusted about any package."
+  python3 "${UAVX_REPO}/scripts/test_dryrun_fixtures.py" > /dev/null     || gdie "test_dryrun_fixtures.py failed, so check_dryruns.py cannot be trusted about any rehearsal receipt."
+  printf '  2 suites pass their own fixtures\n'
+}
+
 # ------------------------------------------------------------------ dispatch
 #
 # A chunk is the unit of work. `gate.sh 1.3` runs one chunk and nothing else,
@@ -782,19 +810,21 @@ w4_submit() {
 case "$WEEK" in
   preflight) gate_preflight ;;
   chunks|list) list_chunks; exit 0 ;;
-  1) gate_preflight; gate_build; gate_w1 ;;
-  2) gate_preflight; gate_build; gate_w2 ;;
-  3) gate_preflight; gate_build; gate_w3 ;;
+  1) gate_preflight; gate_harness_slow; gate_build; gate_w1 ;;
+  2) gate_preflight; gate_harness_slow; gate_build; gate_w2 ;;
+  3) gate_preflight; gate_harness_slow; gate_build; gate_w3 ;;
   # W4 ends in the submission gate, so the record has to be verified online
   # rather than against a check somebody ran last week. See finding 8.
-  4) export UAVX_SPEC_STRICT=1; gate_preflight; gate_build; gate_w4 ;;
+  4) export UAVX_SPEC_STRICT=1; gate_preflight; gate_harness_slow; gate_build; gate_w4 ;;
   *.*)
     fn="$(chunk_fn "$WEEK")"
     [ -n "$fn" ] || gdie "unknown chunk: ${WEEK}. Run: bash scripts/gate.sh chunks"
     # The submission chunk is the one that sends, so it gets the same strict
     # record check the whole week does.
     [ "$WEEK" = "4.8" ] && export UAVX_SPEC_STRICT=1
-    gate_preflight; gate_build; "$fn"
+    gate_preflight
+    [ "$WEEK" = "4.8" ] && gate_harness_slow
+    gate_build; "$fn"
     gsay "chunk ${WEEK} (${fn}) PASSED"
     exit 0 ;;
   *) gdie "unknown week: ${WEEK}. Weeks are 1 to 4; run: bash scripts/gate.sh chunks" ;;
