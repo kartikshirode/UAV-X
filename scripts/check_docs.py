@@ -101,6 +101,92 @@ for rel in tracked:
              f"success.")
 guard(before, f"{scanned} tracked text files, none with carriage returns")
 
+# Week 1 audit finding 2. The ten expressions w1_runner asserts are written out
+# by hand in two test files, each carrying a comment that says "copied from
+# gate.sh", and the memory ceiling is written out in a third. Nothing compared
+# any copy with the original. That is round 2 finding 2 exactly, three drifted
+# copies of one threshold, moved out of documents and into tests where the
+# anti-restatement rule below cannot reach them. A copy that drifts here does
+# not fail loudly. It asserts last week's contract and passes.
+print("--- the gate list, wherever it has been written out again")
+before = len(problems)
+
+
+def gate_function_requires(body: str, name: str) -> list:
+    """Every --require expression inside one gate function, in order."""
+    start = body.find("\n" + name + "() {")
+    if start < 0:
+        return []
+    depth, end = 0, len(body)
+    for i in range(start, len(body)):
+        if body[i] == "{":
+            depth += 1
+        elif body[i] == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    return re.findall(r'--require "([^"]+)"', body[start:end])
+
+
+def literal_list(rel: str, name: str) -> list:
+    """The string literals in a python list assigned to name, without importing."""
+    body = read(rel)
+    m = re.search(r"^" + name + r"\s*=\s*[\[(](.*?)[\])]", body, re.S | re.M)
+    return re.findall(r'"([^"]+)"', m.group(1)) if m else []
+
+
+# gate.sh is read again further down for the typed-requirement check; this
+# runs before that, so it reads it here.
+want = gate_function_requires(read("scripts/gate.sh"), "w1_runner")
+if not want:
+    fail("cannot find w1_runner's --require list in gate.sh, so no copy of it "
+         "can be held to anything")
+else:
+    copies = [("scripts/test_record_contract.py", "HARNESS_REQUIREMENTS"),
+              ("uavx_ws/src/uavx_sim/test/test_run_record.py", "GATE_REQUIRES")]
+    for rel, name in copies:
+        got = literal_list(rel, name)
+        if not got:
+            fail(rel + " has no " + name + " list to compare with gate.sh. If it "
+                 "was renamed, rename it here rather than losing the check.")
+        elif got != want:
+            fail(rel + ":" + name + " has drifted from w1_runner in gate.sh. "
+                 "missing " + repr([e for e in want if e not in got]) +
+                 ", extra " + repr([e for e in got if e not in want]))
+    guard(before, str(len(want)) + " w1_runner expressions, and the " +
+          str(len(copies)) + " places they are copied to, agree with gate.sh")
+
+# The memory ceiling had four homes. It has a name now, and a bare literal
+# anywhere except its definition and the gate is a fifth home waiting to drift.
+before = len(problems)
+ceiling = re.search(r"PEAK_RSS_CEILING_MIB\s*=\s*(\d+)",
+                    read("scripts/check_submission_const.py"))
+if not ceiling:
+    fail("scripts/check_submission_const.py no longer defines "
+         "PEAK_RSS_CEILING_MIB, which is where the memory ceiling lives")
+else:
+    value = ceiling.group(1)
+    allowed = {"scripts/check_submission_const.py", "scripts/gate.sh",
+               "scripts/check_docs.py"}
+    listing = subprocess.run(["git", "-C", str(REPO), "ls-files", "*.py", "*.sh"],
+                             capture_output=True, text=True, check=True).stdout
+    for rel in listing.split():
+        if rel in allowed:
+            continue
+        for n, line in enumerate(read(rel).splitlines(), 1):
+            if "PEAK_RSS_CEILING_MIB" in line:
+                continue
+            # A line that is one of the expressions checked against gate.sh
+            # above is already held to the original, so it is not a fifth home.
+            if any(expr in line for expr in want):
+                continue
+            if re.search(r"(?<![0-9.])" + value + r"(?![0-9.])", line):
+                fail(rel + ":" + str(n) + " writes the memory ceiling " + value +
+                     " out again. Import PEAK_RSS_CEILING_MIB instead.")
+    guard(before, "the memory ceiling " + value + " is written down twice, in "
+                  "its definition and in the gate")
+
 print("--- banned claims")
 
 # The launcher. Using PX4's own script crashes the distro, so no document may
@@ -453,7 +539,7 @@ for m in re.finditer(r"\$\{UAVX_WS_SRC\}/(\S+)", gate):
              f"directory too high; use ${{UAVX_PKG_ROOT}}.")
 guard(before, "every package path in the gate goes through the one source root")
 
-# Chunk 1.7, found while cross-checking the runner contract. 27 of the paths
+# Chunk 1.7, found while cross-checking the runner contract. 25 of the paths
 # the gate asserts on had no definition in run-record.schema.json. The schema
 # sets additionalProperties true, so a record carrying them still validates
 # and nothing pins their type: separation_violations could arrive as a string
@@ -461,7 +547,7 @@ guard(before, "every package path in the gate goes through the one source root")
 #
 # The schema is described everywhere as the provenance contract every run must
 # satisfy, so a gate requirement it says nothing about is a hole in that
-# contract. Defining all 27 now would lock in decisions that belong to the
+# contract. Defining all 25 now would lock in decisions that belong to the
 # weeks that produce them, so instead the gap is written down and can only
 # shrink. Each week deletes its own entries as it lands. A path that is
 # neither defined nor listed here fails.
