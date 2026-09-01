@@ -26,7 +26,9 @@ Exit 0 if the documents agree with each other and with scripts/gate.sh.
 """
 
 import json
+import pathlib
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -37,6 +39,15 @@ REPO = Path(__file__).resolve().parent.parent
 DOCS = ["handoff.md", "context.md", "stage-1/plan.md", "stage-1/decisions.md",
         "stage-1/architecture.md", ".claude/weekly-loop.md",
         "stage-1/setup/README.md", "stage-1/human-preflight.md"]
+
+# Week 1 audit finding 5. The progress and audit files are the only documents a
+# week produces, and none of the rules below applied to them, so the one
+# document written by the agent under review was the one document nothing
+# checked. Globbed rather than listed, because week 2 should not have to
+# remember to add itself.
+DOCS += sorted(str(q.relative_to(REPO)).replace("\\", "/")
+               for d in ("docs/progress", "docs/audits")
+               for q in (REPO / d).glob("*.md"))
 
 problems: list[str] = []
 
@@ -61,6 +72,34 @@ def guard(before: int, msg: str) -> None:
 
 
 text = {d: read(d) for d in DOCS}
+
+# Week 1 audit finding 13. check_shell.sh scans `git ls-files "*.sh"`, so a
+# carriage return in a .md or a .json was invisible: stage-1/setup/README.md had
+# carried 94 CRLF pairs for days under a .gitattributes that says eol=lf. On a
+# .sh a CR kills line 1 while the caller reports success, which is round 6
+# again, and the reason to catch it everywhere is that the next file to acquire
+# one from a Windows editor will not be a shell script.
+TEXT_SUFFIXES = {".md", ".py", ".sh", ".json", ".yaml", ".yml", ".txt",
+                 ".lock", ".cfg", ".xml", ".msg", ".jsonl", ".gitattributes"}
+
+print("--- line endings")
+before = len(problems)
+tracked = subprocess.run(["git", "-C", str(REPO), "ls-files"],
+                         capture_output=True, text=True, check=True).stdout.split()
+scanned = 0
+for rel in tracked:
+    if pathlib.Path(rel).suffix not in TEXT_SUFFIXES:
+        continue
+    f = REPO / rel
+    if not f.is_file():
+        continue
+    scanned += 1
+    n = f.read_bytes().count(b"\r\n")
+    if n:
+        fail(f"{rel} carries {n} carriage returns. .gitattributes says eol=lf, "
+             f"and a CR in a shell script kills line 1 while the caller reports "
+             f"success.")
+guard(before, f"{scanned} tracked text files, none with carriage returns")
 
 print("--- banned claims")
 
