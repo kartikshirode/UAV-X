@@ -16,7 +16,7 @@ bottom of this file.
 | `1.3` | `harness_check.yaml` and the scenario loader | `check_scenario.py` plus 46 rejection tests |
 | `1.4` | the event injector | 17 tests, built around requested against observed |
 | `1.5` | graph capture | 27 tests, asserted against the real `seam_graph.py` |
-| `1.6` | the resource sampler | 27 tests, measured 12.5 MiB root against 639 MiB group |
+| `1.6` | the resource sampler | 27 tests, built on the gap between one process and its children |
 | `1.7` | the runner, the record writer, `run_scenario.sh` | a real run satisfying all ten gate requirements |
 
 179 package tests, 48 seam fixtures, 51 submission checks, 20 rehearsal
@@ -99,9 +99,12 @@ implementation or passed a broken one.
 7. **A literal `\n` sat where a line continuation was meant** in chunk 1.3's
    gate line, which bash reads as an argument called `n` while every syntax
    check stays green.
-8. **27 gate requirements had no definition in the run record schema**, so
-   nothing pinned their type. Two are now typed and the remaining 25 are
-   declared, in a list that can only shrink.
+8. **25 gate requirements had no definition in the run record schema**, so
+   nothing pinned their type. Two are typed now, `injected_event_observed` and
+   `injected_event_count`, and the remaining 23 are declared in a list that can
+   only shrink. `check_docs.py` prints that number on every run, so it is worth
+   reading rather than trusting this sentence: the first version of this line
+   said 27 and 25, and both were wrong.
 9. **The checked example could not have passed the gate.** It disagreed with
    `versions.lock` on three pins and carried neither event field.
 10. **`ros2 node info` rows without a colon** stored the topic as its own type,
@@ -139,6 +142,28 @@ implementation or passed a broken one.
     them and run in preflight now, on every chunk, with no ROS environment
     needed. The two that cost about two minutes run once per week and again on
     chunk 4.8, the last thing before a human sends.
+
+## Where the numbers in defects 11 to 14 come from
+
+Standing rule 3 says every number in a document traces to a run record under
+`runs/`. The altitude, preparation and resource figures above do. The
+diagnostic figures in defects 11 to 14 do not, and it is worth being exact
+about that rather than leaving them looking like run data.
+
+| Figure | Read from | In the repository |
+| --- | --- | --- |
+| innovation ratios, sample counts, ground speed, roll | PX4 ULOG under `~/.ros` and the PX4 log directory | no |
+| resting pose and tilt per model | `gz model -m iris_N -p` while the stack was up | no |
+| tilt 9.58 and 9.74 degrees | the launcher's own refusal message | no |
+| the 5 cm lip and the plate size | `~/.gazebo/models/asphalt_plane/model.sdf` | no, it is outside the repo |
+| altitudes, preparation, resources | the six run records | yes |
+
+Nothing in the first four rows can be re-derived from a checkout, because the
+logs live outside it and the runs that produced them are gone. They are honest
+readings and they are not reproducible evidence, which is a different thing.
+The claim they support, that a vehicle standing on a 5 cm lip fails to fly, is
+reproducible: `--vehicles 2 --spacing 20` puts two vehicles back on it and the
+launcher refuses, every time.
 
 ## Outstanding, carried into week 2
 
