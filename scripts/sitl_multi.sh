@@ -16,6 +16,10 @@
 #   scripts/sitl_multi.sh --vehicles 4 [--model iris] [--world empty]
 #                         [--hold 60] [--spacing 5]
 #
+# Vehicles stand in a line along y, spaced --spacing apart and centred on the
+# origin, and the launcher checks each one is actually level before it reports
+# the stack healthy. See the spawn loop for why both of those matter.
+#
 # Holds the stack up for --hold seconds, then tears everything down. Exits
 # non-zero if any required process is missing at any point.
 
@@ -30,6 +34,11 @@ MODEL=iris
 WORLD=empty
 HOLD=60
 SPACING=5
+# How far from level a vehicle may rest and still be asked to fly. Measured on
+# this machine: a vehicle standing on flat ground settles at 0.09 deg, and one
+# standing on the lip described in the spawn loop settles at 9 deg. Anything
+# between the two is a vehicle nobody meant to put there.
+MAX_TILT_DEG=2.0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -148,19 +157,44 @@ while [ "$i" -lt "$VEHICLES" ]; do
     --mavlink_cam_udp_port $((14530 + i)) \
     --output-file "$sdf" > /dev/null || gdie "jinja_gen failed for instance ${i}"
 
+  # Where this vehicle stands, and the whole reason the line is centred on the
+  # origin rather than running out from it.
+  #
+  # empty.world lays an asphalt_plane over the ground plane. The model Gazebo
+  # actually resolves for it on this machine is ~/.gazebo/models/asphalt_plane,
+  # which is 20 x 20 x 0.1 m, not the 200 x 200 copy PX4 ships under
+  # Tools/simulation/gazebo-classic. The user model path wins, so the paved
+  # square ends at y = +/-10 m with a 5 cm lip down to the ground plane.
+  #
+  # The old layout was y = i * spacing, which put instance 2 at y = 10 exactly,
+  # astride that lip. Measured: instances 0 and 1 rest at z = 0.1044 on the
+  # asphalt and instance 3 at z = 0.0542 on the ground plane, all three level to
+  # 0.09 deg, while instance 2 rests at z = 0.0910 and 9.0 deg of roll. It then
+  # takes off tilted, its EKF fails the post-takeoff navigation test, failsafe
+  # fires, and it flies away instead of climbing. That was uav_3 never reaching
+  # its 50 m layer. Spawning the same four instances in reverse order moved the
+  # tilt to whichever one was handed y = 10, so it was the ground underneath and
+  # never the instance number.
+  #
+  # Centred, four vehicles at 5 m span y = -7.5 to +7.5 and every one of them
+  # stands on flat asphalt. Integer arithmetic cannot hold the half spacing an
+  # even vehicle count needs, hence awk.
+  y="$(awk -v i="$i" -v n="$VEHICLES" -v s="$SPACING" \
+       'BEGIN { printf "%.3f", (i - (n - 1) / 2) * s }')"
+
   (
     cd "$workdir"
     PX4_SIM_MODEL="gazebo-classic_${MODEL}" \
     PX4_UXRCE_DDS_NS="$ns" \
-    PX4_GZ_MODEL_POSE="0,$((i * SPACING))" \
+    PX4_GZ_MODEL_POSE="0,${y}" \
       "${BUILD}/bin/px4" -i "$i" -d "${BUILD}/etc" > out.log 2> err.log &
   )
 
   sleep 2
   gz model --spawn-file="$sdf" --model-name="${MODEL}_${i}" \
-    -x 0 -y $((i * SPACING)) -z 0.83 > /dev/null 2>&1 \
+    -x 0 -y "$y" -z 0.83 > /dev/null 2>&1 \
     || gwarn "gz model spawn reported a problem for instance ${i}"
-  printf '  instance %d  ns=%s  sys_id=%d\n' "$i" "$ns" $((1 + i))
+  printf '  instance %d  ns=%s  sys_id=%d  y=%s\n' "$i" "$ns" $((1 + i)) "$y"
   i=$((i + 1))
 done
 
@@ -185,6 +219,35 @@ printf '  gzclient           absent, as required\n'
 
 pgrep -x MicroXRCEAgent >/dev/null 2>&1 || gdie "the agent is not running"
 printf '  agent              up\n'
+
+# Every vehicle has to be standing level before it is asked to fly, and the
+# only way to know is to ask Gazebo where each model came to rest rather than
+# trusting the pose it was spawned with. A vehicle settled on a slope lifts off
+# with its thrust vector tilted, and what reaches whoever is reading the log is
+# not "instance 2 is on a slope" but a navigation failure, a failsafe and a
+# climb that stops tens of metres short of the layer. That cost this repo seven
+# runs. The spawn loop above explains the slope; this is what catches it if a
+# future --spacing or --vehicles walks the formation off the asphalt again.
+gsay "checking every vehicle is standing level"
+tilted=""
+i=0
+while [ "$i" -lt "$VEHICLES" ]; do
+  # Six numbers, x y z roll pitch yaw, on one line. timeout, because a wedged
+  # gazebo transport would otherwise hang the launcher past the caller's
+  # readiness window and the caller would blame the vehicles.
+  pose="$(timeout 15 gz model -m "${MODEL}_${i}" -p 2>/dev/null || true)"
+  [ -n "$pose" ] \
+    || gdie "gazebo reports no pose for ${MODEL}_${i}. The model never spawned, so nothing was flying under that name."
+  tilt="$(printf '%s\n' "$pose" \
+    | awk '{ r = ($4 < 0) ? -$4 : $4; p = ($5 < 0) ? -$5 : $5;
+             printf "%.2f", ((r > p) ? r : p) * 57.29578 }')"
+  over="$(awk -v t="$tilt" -v m="$MAX_TILT_DEG" 'BEGIN { print (t > m) ? 1 : 0 }')"
+  printf '  instance %d tilt     %s deg\n' "$i" "$tilt"
+  [ "${over:-1}" -eq 0 ] || tilted="${tilted} ${i}(${tilt} deg)"
+  i=$((i + 1))
+done
+[ -z "$tilted" ] \
+  || gdie "resting above ${MAX_TILT_DEG} deg of tilt, so not fit to take off:${tilted}. The formation has reached the edge of the asphalt_plane, whose lip is at y = +/-10 m. Lower --spacing or --vehicles until it fits."
 
 # Every vehicle must be individually visible to ROS 2, not just present in sum.
 missing=""
