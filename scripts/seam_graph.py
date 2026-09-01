@@ -75,7 +75,11 @@ def load_manifest(scenario: str) -> dict:
         "infra_sub": set(m["ros_infrastructure"]["subscribe"]),
         "expected": set(expected),
         "week": s["week"],
-        "required_outside": set(m.get("required_outside", [])),
+        # A scenario may narrow this, and only narrow it deliberately.
+        # harness_check runs no swarm at all, so demanding the radio
+        # and the collector of it would fail a correct week 1.
+        "required_outside": set(s.get("required_outside",
+                                      m.get("required_outside", []))),
         "required_endpoints": m.get("required_endpoints", {}),
         "snapshot_meta": m.get("snapshot_required_meta", []),
     }

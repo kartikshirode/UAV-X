@@ -61,6 +61,31 @@ def add_node(g: dict, node: str, spec: dict) -> dict:
     return g
 
 
+def harness_graph() -> dict:
+    """The graph week 1 actually produces.
+
+    Chunk 1.7. There are no routers, no mission executors and no GCS in week
+    one because none of them are built yet, so clean_graph would put six
+    processes in a scenario whose manifest expects none. harness_check exists
+    to prove the harness and is never cited as evidence, which is exactly why
+    its graph is allowed to be this thin, and exactly why the runner has to be
+    in it: a snapshot of a scenario that never ran is not evidence of anything.
+    """
+    g = {"_meta": {
+        "captured_at": "2026-09-20T10:00:00",
+        "scenario": "harness_check",
+        "run_id": "harness_1",
+        "source_tree_sha256": "0" * 64,
+        "commands": {"node_list": {"cmd": "ros2 node list", "returncode": 0}},
+    }}
+    add_node(g, "/scenario_runner", {
+        "publishers": [ep("/rosout", LOG)],
+        "subscribers": [ep("/parameter_events", PARAM)],
+        "services": [], "actions": [],
+    })
+    return g
+
+
 def clean_graph(week: int) -> dict:
     """The graph a correct implementation produces.
 
@@ -148,6 +173,35 @@ def _c3(g):
 
 @case("clean W4 graph, role managers present", "mission_integrated", 4, None)
 def _c4(g):
+    return g
+
+
+@case("clean W1 harness graph, no swarm at all", "harness_check", 1, None)
+def _c1(g):
+    return harness_graph()
+
+
+@case("a harness graph with no runner in it", "harness_check", 1,
+      "/scenario_runner is absent")
+def _no_runner(g):
+    # The narrowing that lets week 1 pass without a radio must not also let a
+    # snapshot pass with nothing in it. required_outside is overridden per
+    # scenario, not switched off.
+    g = harness_graph()
+    del g["/scenario_runner"]
+    del g["_meta"]["commands"]["/scenario_runner"]
+    return g
+
+
+@case("a swarm process running under the harness scenario", "harness_check", 1,
+      "in neither this scenario's manifest")
+def _swarm_in_harness(g):
+    g = harness_graph()
+    add_node(g, "/uav_1/router", {
+        "publishers": [ep("/uavx/uav_1/tx", PACKET)],
+        "subscribers": [ep("/uavx/uav_1/rx", PACKET)],
+        "services": [], "actions": [],
+    })
     return g
 
 
