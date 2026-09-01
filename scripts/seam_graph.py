@@ -311,7 +311,8 @@ def check(graph: dict, man: dict) -> list:
 
         if node in man["outside"]:
             v += check_outside(node, ep, vehicles, packet,
-                                        (man.get("outside_allow") or {}).get(node))
+                               (man.get("outside_allow") or {}).get(node),
+                               man["infra_pub"], man["infra_sub"])
             continue
         if node not in man["expected"]:
             continue  # already reported above; do not double-count its topics
@@ -388,7 +389,8 @@ def check_endpoint(node, own, kind, topic, typ, man, packet) -> list:
     return []
 
 
-def check_outside(node, ep, vehicles, packet, allow=None) -> list:
+def check_outside(node, ep, vehicles, packet, allow=None,
+                  man_infra_pub=(), man_infra_sub=()) -> list:
     """The three processes that sit outside the swarm still have limits.
 
     The link layer is the radio and the collector is the observer. Neither may
@@ -413,6 +415,19 @@ def check_outside(node, ep, vehicles, packet, allow=None) -> list:
     if allow:
         for kind in KINDS:
             listed = allow.get(kind, [])
+            # Chunk 1.7. ros_infrastructure is honoured for swarm nodes and
+            # was not honoured here, so the allowlist demanded that every
+            # outside process re-declare topics nobody chooses. Every rclpy
+            # node publishes /parameter_events whether its author wants it or
+            # not, and architecture.md requires the runner to read /clock,
+            # since every _s time in the record is simulated time. A correct
+            # runner therefore failed on two endpoints it could not avoid.
+            # The SwarmPacket ban below runs over these too, so an infra
+            # topic is still no place to hide swarm payload.
+            if kind == "publishers":
+                listed = list(listed) + sorted(man_infra_pub)
+            elif kind == "subscribers":
+                listed = list(listed) + sorted(man_infra_sub)
             for e in ep.get(kind, []):
                 topic = e["topic"] if isinstance(e, dict) else e
                 if not any(fnmatch.fnmatch(topic, pat) for pat in listed):

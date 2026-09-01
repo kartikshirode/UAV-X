@@ -205,6 +205,59 @@ def _swarm_in_harness(g):
     return g
 
 
+@case("swarm payload on an infrastructure topic", "harness_check", 1,
+      "which is not a tx or rx topic")
+def _packet_on_infra(g):
+    # Chunk 1.7 let outside processes hold /clock and /parameter_events
+    # without listing them, because every rclpy node publishes the second and
+    # architecture.md requires the runner to read the first. That allowance is
+    # only safe while the type ban still runs over those topics. If this case
+    # ever passes, the infrastructure allowance has become a side channel with
+    # the runner carrying it, which is round 7 finding 6 all over again.
+    g = harness_graph()
+    g["/scenario_runner"]["publishers"].append(ep("/parameter_events", PACKET))
+    return g
+
+
+@case("the simulator holding a topic nobody listed", "harness_check", 1,
+      "not in its allowlist")
+def _gazebo_extra(g):
+    # /gazebo is described rather than exempted. It is the simulator, so it
+    # publishes the clock and the ground truth, and that is all it may do.
+    g = harness_graph()
+    add_node(g, "/gazebo", {
+        "publishers": [ep("/clock", "rosgraph_msgs/msg/Clock"),
+                       ep("/uavx/uav_1/rx", POSE)],
+        "subscribers": [], "services": [], "actions": [],
+    })
+    return g
+
+
+@case("the simulator, exactly as it really appears", "harness_check", 1, None)
+def _gazebo_real(g):
+    # Taken from runs/latest-graph.json, the first graph this checker ever saw
+    # that came off a real ROS system. Three of these endpoints were violations
+    # an hour ago and none of them was a bypass.
+    g = harness_graph()
+    add_node(g, "/gazebo", {
+        "publishers": [ep("/clock", "rosgraph_msgs/msg/Clock"),
+                       ep("/parameter_events", PARAM),
+                       ep("/performance_metrics",
+                          "gazebo_msgs/msg/PerformanceMetrics"),
+                       ep("/rosout", LOG)],
+        "subscribers": [ep("/clock", "rosgraph_msgs/msg/Clock"),
+                        ep("/parameter_events", PARAM)],
+        "services": [ep("/spawn_entity", "gazebo_msgs/srv/SpawnEntity"),
+                     ep("/gazebo/get_parameters",
+                        "rcl_interfaces/srv/GetParameters")],
+        "actions": [],
+    })
+    g["/scenario_runner"]["publishers"].append(ep("/parameter_events", PARAM))
+    g["/scenario_runner"]["subscribers"] = [
+        ep("/clock", "rosgraph_msgs/msg/Clock")]
+    return g
+
+
 @case("W4 processes running under a W3 scenario", "relay_required", 4,
       "in neither this scenario's manifest")
 def _w4_in_w3(g):

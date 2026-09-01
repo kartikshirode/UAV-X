@@ -9,7 +9,8 @@
   "outside_processes": [
     "/link_layer",
     "/metrics_collector",
-    "/scenario_runner"
+    "/scenario_runner",
+    "/gazebo"
   ],
   "_outside_note": "Matched by exact name. Substring matching gave anything called /uav_2/link_layer_helper the link layer's exemption to read ground truth, which is the whole bypass.",
   "swarm_packet_type": "uavx_msgs/msg/SwarmPacket",
@@ -203,14 +204,38 @@
         "/rosout"
       ],
       "subscribers": [
-        "/gazebo/model_states",
         "/parameter_events"
       ],
       "services": [
         "/scenario_runner/*"
       ],
       "actions": []
+    },
+    "/gazebo": {
+      "publishers": [
+        "/clock",
+        "/performance_metrics",
+        "/gazebo/model_states",
+        "/gazebo/link_states",
+        "/rosout"
+      ],
+      "subscribers": [
+        "/gazebo/set_model_state",
+        "/gazebo/set_link_state"
+      ],
+      "services": [
+        "/gazebo/*",
+        "/spawn_entity",
+        "/delete_entity",
+        "/get_model_list",
+        "/pause_physics",
+        "/unpause_physics",
+        "/reset_simulation",
+        "/reset_world"
+      ],
+      "actions": []
     }
   },
-  "_harness_note": "Chunk 1.7. gate.sh runs check_seam.sh --scenario harness_check and no such manifest existed, so that line exited 2, CANNOT CHECK, and the chunk could never have passed. harness_check runs the harness and nothing else: there are no routers, no mission executors and no GCS in week 1, because none of them are built yet. So its expected set is empty and the only process it requires is the runner. required_outside is overridden here rather than globally, so a real scenario still has to show the radio and the collector; a scenario that quietly dropped either would be claiming delivery numbers that came from somewhere else."
+  "_harness_note": "Chunk 1.7. gate.sh runs check_seam.sh --scenario harness_check and no such manifest existed, so that line exited 2, CANNOT CHECK, and the chunk could never have passed. harness_check runs the harness and nothing else: there are no routers, no mission executors and no GCS in week 1, because none of them are built yet. So its expected set is empty and the only process it requires is the runner. required_outside is overridden here rather than globally, so a real scenario still has to show the radio and the collector; a scenario that quietly dropped either would be claiming delivery numbers that came from somewhere else.",
+  "_gazebo_note": "Chunk 1.7, the first time this checker ever ran over a graph captured from a real ROS system rather than a synthetic fixture. /gazebo is a ROS node and appears in every scenario graph, and nothing accounted for it, so a correct run failed with the simulator itself listed as an unaccounted-for member of the swarm. It is the simulator: it publishes the clock and the ground truth and it owns the world services. The seam rule was never about who publishes ground truth, it is about who reads it, and the SwarmPacket ban below still applies to it like anything else."
 }
