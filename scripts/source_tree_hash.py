@@ -73,11 +73,20 @@ def from_worktree() -> dict:
     clean tree and its commit produce identical ids. One process for the whole
     list rather than one per file.
     """
+    # Chunk 1.7. This listed tracked files only, so a run made before its
+    # own runner was committed recorded a source_tree_sha256 that did not
+    # cover the code that produced it. The docstring calls this hash wider
+    # than commit_sha, which ignores uncommitted code; that was true of
+    # modified tracked files and false of new ones. --others with
+    # --exclude-standard adds the untracked files git would show you and
+    # respects .gitignore, so build output and the ignored spec receipt
+    # stay out of it.
     listing = subprocess.run(
-        ["git", "-C", str(REPO), "ls-files", "-z"],
+        ["git", "-C", str(REPO), "ls-files", "-z",
+         "--cached", "--others", "--exclude-standard"],
         capture_output=True, text=True, check=True).stdout
-    paths = [p for p in listing.split("\0")
-             if p and in_scope(p) and (REPO / p).is_file()]
+    paths = sorted({p for p in listing.split("\0")
+                    if p and in_scope(p) and (REPO / p).is_file()})
     if not paths:
         return {}
     hashed = subprocess.run(
