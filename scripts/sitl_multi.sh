@@ -40,6 +40,36 @@ SPACING=5
 # between the two is a vehicle nobody meant to put there.
 MAX_TILT_DEG=2.0
 
+# The two pieces of arithmetic this launcher gets wrong quietly, pulled out so
+# scripts/test_launcher_geometry.py can run them without a simulator. Week 1
+# audit finding 9: the tilt check was the one control this week added against
+# the defect that cost seven runs, and nothing exercised it. check_shell.sh runs
+# `bash -n`, which sees no further into an awk program than into a comment.
+#
+# >>> spacing-awk, extracted verbatim by scripts/test_launcher_geometry.py
+UAVX_SPACING_AWK='BEGIN { printf "%.3f", (i - (n - 1) / 2) * s }'
+# <<< spacing-awk
+#
+# Six numbers, x y z roll pitch yaw, on one line. The first version took $4 and
+# $5 off whatever arrived: awk reads a non-numeric field as 0, so a changed
+# output format, an error line or an empty answer all produced a confident
+# 0.00 degrees and the launcher called a vehicle level that it had never
+# measured. Nothing about a guard that fails open is better than no guard.
+#
+# >>> tilt-awk, extracted verbatim by scripts/test_launcher_geometry.py
+UAVX_TILT_AWK='
+NF == 6 &&
+$4 ~ /^-?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?$/ &&
+$5 ~ /^-?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?$/ {
+  r = ($4 < 0) ? -$4 : $4
+  p = ($5 < 0) ? -$5 : $5
+  printf "%.2f", ((r > p) ? r : p) * 57.29578
+  seen = 1
+  exit
+}
+END { if (!seen) exit 1 }'
+# <<< tilt-awk
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --vehicles) VEHICLES="$2"; shift 2 ;;
@@ -179,8 +209,7 @@ while [ "$i" -lt "$VEHICLES" ]; do
   # Centred, four vehicles at 5 m span y = -7.5 to +7.5 and every one of them
   # stands on flat asphalt. Integer arithmetic cannot hold the half spacing an
   # even vehicle count needs, hence awk.
-  y="$(awk -v i="$i" -v n="$VEHICLES" -v s="$SPACING" \
-       'BEGIN { printf "%.3f", (i - (n - 1) / 2) * s }')"
+  y="$(awk -v i="$i" -v n="$VEHICLES" -v s="$SPACING" "$UAVX_SPACING_AWK")"
 
   (
     cd "$workdir"
@@ -238,9 +267,8 @@ while [ "$i" -lt "$VEHICLES" ]; do
   pose="$(timeout 15 gz model -m "${MODEL}_${i}" -p 2>/dev/null || true)"
   [ -n "$pose" ] \
     || gdie "gazebo reports no pose for ${MODEL}_${i}. The model never spawned, so nothing was flying under that name."
-  tilt="$(printf '%s\n' "$pose" \
-    | awk '{ r = ($4 < 0) ? -$4 : $4; p = ($5 < 0) ? -$5 : $5;
-             printf "%.2f", ((r > p) ? r : p) * 57.29578 }')"
+  tilt="$(printf '%s\n' "$pose" | awk "$UAVX_TILT_AWK")" \
+    || gdie "gazebo answered for ${MODEL}_${i} and the answer was not a pose: '${pose}'. Six numbers were expected. A guard that reads an unparseable answer as level is worse than no guard, so this stops here."
   over="$(awk -v t="$tilt" -v m="$MAX_TILT_DEG" 'BEGIN { print (t > m) ? 1 : 0 }')"
   printf '  instance %d tilt     %s deg\n' "$i" "$tilt"
   [ "${over:-1}" -eq 0 ] || tilted="${tilted} ${i}(${tilt} deg)"
