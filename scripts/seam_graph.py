@@ -51,6 +51,28 @@ def die(msg: str) -> None:
     sys.exit(2)
 
 
+def required_outside(manifest: dict, block: dict, name: str) -> list:
+    """The outside processes a scenario must show, and who may say otherwise.
+
+    Week 1 audit finding 12. The per-scenario override went in for
+    harness_check, which runs before any swarm node exists and so cannot show
+    the radio or the collector. Nothing constrained it. Any scenario could have
+    dropped /link_layer from its own list, and the graph pass would then report
+    a clean seam for a run with no radio in it, which is the one thing this
+    checker exists to notice. A week 3 or 4 scenario has a radio by definition,
+    so the allowance belongs to week 1 alone.
+    """
+    if "required_outside" not in block:
+        return list(manifest.get("required_outside", []))
+    week = block.get("week")
+    if week != 1:
+        die(f"scenario {name} is week {week} and overrides required_outside. "
+            f"That allowance exists for the week 1 harness, which runs before "
+            f"any swarm node is built. A later scenario narrowing this list is "
+            f"how a run with no radio in it passes a graph check.")
+    return list(block["required_outside"])
+
+
 def load_manifest(scenario: str) -> dict:
     if not MANIFESTS.is_file():
         die(f"{MANIFESTS} is missing")
@@ -75,11 +97,7 @@ def load_manifest(scenario: str) -> dict:
         "infra_sub": set(m["ros_infrastructure"]["subscribe"]),
         "expected": set(expected),
         "week": s["week"],
-        # A scenario may narrow this, and only narrow it deliberately.
-        # harness_check runs no swarm at all, so demanding the radio
-        # and the collector of it would fail a correct week 1.
-        "required_outside": set(s.get("required_outside",
-                                      m.get("required_outside", []))),
+        "required_outside": set(required_outside(m, s, scenario)),
         "required_endpoints": m.get("required_endpoints", {}),
         "snapshot_meta": m.get("snapshot_required_meta", []),
     }
