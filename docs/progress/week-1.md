@@ -22,7 +22,9 @@ bottom of this file.
 179 package tests, 48 seam fixtures, 51 submission checks, 20 rehearsal
 checks, 8 preflight decisions, 113 gate expressions parsed, 21 shell scripts,
 static seam pass clean. Every one of those was run again at the end of the
-week, in a shell that did not belong to whoever wrote the code.
+week, in a shell that did not belong to whoever wrote the code. Nine of those
+suites were run by hand until 1 September and are part of the gate now; see
+defect 14.
 
 ## The run that proves it
 
@@ -124,7 +126,19 @@ implementation or passed a broken one.
     in reverse order moved the fault to whichever instance was handed y = 10,
     so it was the ground and never the vehicle. The line is centred on the
     origin now, and the launcher asks Gazebo for each resting pose and refuses
-    to report the stack healthy above 2 degrees of tilt.
+    to report the stack healthy above 2 degrees of tilt. The guard was watched
+    failing for the right reason: `--vehicles 2 --spacing 20` puts both back on
+    the lip at y = +/-10, they settle at 9.58 and 9.74 degrees and the launcher
+    exits 1 naming the asphalt edge.
+14. **No gate ran the suites that prove the checkers work.** Nine fixture
+    suites sit under `scripts/`, and `scripts/gate.sh` ran none of them. Every
+    threshold in the gate is enforced by a checker, so a regression in
+    `seam_graph.py` or in the `--require` grammar would have gone through every
+    week in silence. Twelve of the thirteen defects above are in that layer and
+    every one was caught by hand. Seven of the suites cost 7 seconds between
+    them and run in preflight now, on every chunk, with no ROS environment
+    needed. The two that cost about two minutes run once per week and again on
+    chunk 4.8, the last thing before a human sends.
 
 ## Outstanding, carried into week 2
 
@@ -140,11 +154,13 @@ runner restarts the daemon before each bring-up and retries up to three times.
 Defect 13 changed `sitl_multi.sh` for a different reason and left this alone;
 its 15 second settle is the underlying tightness.
 
-**`sitl_multi.sh` gives gzserver a 2 second grace on teardown and no KILL**, so
-two direct invocations back to back can trip the launcher's own check that port
-11345 is free. The scenario runner sends TERM and then KILL and is unaffected,
-which is why this has never shown up in a gate. It will bite whoever runs the
-launcher by hand.
+**`sitl_multi.sh` gives gzserver a 2 second grace on teardown and no KILL.**
+Reproduced while testing the tilt guard: two direct invocations back to back,
+and the second died on the launcher's own check that port 11345 is free, with a
+gzserver still holding it. The scenario runner sends TERM and then KILL and is
+unaffected, which is why no gate has ever seen this. It will bite whoever runs
+the launcher by hand, and the leftover process then blocks the next gate at
+preflight.
 
 ## Why this file has no done marker
 
