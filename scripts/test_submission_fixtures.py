@@ -767,7 +767,8 @@ def _lower_id(dest, built):
     # absent one, because it looks checked.
     p = dest / "human-preflight.json"
     receipt = json.loads(p.read_text(encoding="utf-8"))
-    receipt["registered"]["competition_id"] =         receipt["registered"]["competition_id"].lower()
+    block = receipt["registered"]
+    block["competition_id"] = block["competition_id"].lower()
     p.write_text(json.dumps(receipt, indent=2), encoding="utf-8")
 
 
