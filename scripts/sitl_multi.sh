@@ -113,6 +113,27 @@ while [ "$i" -lt "$VEHICLES" ]; do
   workdir="${BUILD}/rootfs/${i}"
   mkdir -p "$workdir"
 
+  # PX4 SITL imports parameters.bson from its working directory at boot and
+  # writes it back at shutdown, so instance N silently inherits whatever
+  # instance N left on disk the last time it ran. After two smoke runs the four
+  # files had already diverged. The airframe was never the part that drifted:
+  # SYS_AUTOSTART read 10015 on all four, and rcS recomputes it from
+  # PX4_SIM_MODEL on every boot anyway. The calibration drifted. Instance 2
+  # alone had persisted CAL_GYRO0_PRIO=50 and a gyro bias of
+  # CAL_GYRO0_XOFF=0.0374, YOFF=-0.0080, ZOFF=-0.0013 that the other three did
+  # not carry, and instance 2 was the one vehicle that took 36s to arm and then
+  # never finished its landing. Standing rule 4 asks that a run replay exactly,
+  # and a run whose sensor calibration depends on an earlier run cannot. W4
+  # injects faults, so it would be diagnosing yesterday's leftovers.
+  #
+  # Both parameter files have to go, not just the primary: rcS falls back to
+  # the backup when the primary is missing. With neither present it imports
+  # nothing, prints nothing, and boots from defaults. dataman goes for the same
+  # reason, it is mission and geofence storage and a mission left there by an
+  # earlier experiment is the same bug.
+  rm -f "${workdir}/parameters.bson" "${workdir}/parameters_backup.bson"
+  rm -f "${workdir}/dataman"
+
   # One namespace per vehicle. Without this every instance lands in the same
   # one and ROS 2 cannot tell them apart.
   sdf="/tmp/uavx_${MODEL}_${i}.sdf"
