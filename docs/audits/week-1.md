@@ -8,8 +8,9 @@ every one of them in my own shell, because a report is a claim and this repo has
 now been bitten twice by checkers that confirmed what their author already
 believed. Every verdict below is something I ran, not something I was told.
 
-Nine findings are fixed and committed. Four are carried into week 2, and one of
-those four needs a person rather than a commit.
+Thirteen findings came from that pass and a fourteenth turned up while closing
+it. Ten are fixed and committed. Four are carried into week 2, and one of those
+four needs a person rather than a commit.
 
 AUDIT-COMPLETE
 
@@ -30,6 +31,7 @@ AUDIT-COMPLETE
 | 11 | nothing records where each vehicle stands | confirmed | week 2 |
 | 12 | a scenario may narrow what the seam pass demands | confirmed | fixed |
 | 13 | carriage returns, and a printf broken across a line | confirmed, one half weaker than reported | fixed |
+| 14 | the week notes carried the marker that says the week passed | found while closing | fixed |
 
 ## Fixed
 
@@ -133,6 +135,24 @@ the fix. I committed first and ran once more against a clean tree, and that
 run's tree digest is the digest of its own commit exactly. The week notes now
 cite that run.
 
+**14. The sentence saying this week was not accepted was itself the receipt
+saying it was.** Found while running the closing checks, not by the audit pass.
+The week notes explained the done marker by quoting it, and the loop greps for
+that literal string rather than reading the sentence around it. So the
+supervisor would have read week 1 as accepted, on the strength of a paragraph
+whose entire point was that it had not been.
+
+The notes no longer spell the marker out, and `check_docs.py` fails any week
+file carrying its own done marker while `submission/human-preflight.json` is
+absent. That condition is exact rather than a judgment about prose: every week
+gate runs the preflight first and the preflight refuses without that file, so a
+marker written before it exists cannot have been earned. Watched failing.
+
+This one is worth more than its size. Every other finding here is about a
+checker that might miss something. This is a document that could have told the
+automation the opposite of what it said to a human, and the two readers would
+never have compared notes.
+
 ## Carried into week 2
 
 **1. `run_smoke.sh` does not write a run record, and `architecture.md` says it
@@ -199,4 +219,4 @@ is finding 2.
 skipped rather than answered with invented findings.
 
 Cannot certify: approach correctness, statistical validity of results, anything requiring the blocked or external resources.
-Findings: 13
+Findings: 14

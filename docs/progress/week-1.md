@@ -240,7 +240,11 @@ preflight.
 
 ## Why this file has no done marker
 
-`WEEK-1-DONE` goes in when `bash scripts/gate.sh 1` passes. It cannot run:
+The done marker the loop greps for goes in when `bash scripts/gate.sh 1`
+passes, and this file deliberately does not spell it out, because a sentence
+explaining a marker is indistinguishable from the marker itself to the thing
+looking for it. That very sentence used to carry it, so the supervisor would
+have read this week as accepted while the gate had never run. It cannot run:
 every chunk gate calls `gate_preflight` first, and that refuses to start
 without `submission/human-preflight.json`, which records registration, the
 eligibility declaration, the clarification channel, the organiser email, the
