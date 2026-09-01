@@ -187,6 +187,36 @@ else:
     guard(before, "the memory ceiling " + value + " is written down twice, in "
                   "its definition and in the gate")
 
+# Week 1, found while closing the audit. The week notes explained the done
+# marker by quoting it, and the supervisor greps for the literal string, so the
+# sentence saying "this week is not accepted" was itself the receipt saying it
+# was. A marker cannot be honest while the gate that earns it cannot run, and no
+# week gate can run without the human preflight receipt, so that is the
+# condition checked here rather than any judgment about the prose.
+print("--- done markers say what happened")
+before = len(problems)
+preflight_done = (REPO / "submission" / "human-preflight.json").is_file()
+weeks_marked = []
+for rel in sorted(str(q.relative_to(REPO)).replace(chr(92), "/")
+                  for q in (REPO / "docs" / "progress").glob("week-*.md")):
+    week = re.search(r"week-(\d+)\.md$", rel)
+    if not week:
+        continue
+    marker = "WEEK-" + week.group(1) + "-DONE"
+    if marker in read(rel):
+        weeks_marked.append((rel, marker))
+if weeks_marked and not preflight_done:
+    for rel, marker in weeks_marked:
+        fail(f"{rel} carries {marker} and submission/human-preflight.json does "
+             f"not exist. Every week gate runs gate_preflight first and that "
+             f"refuses without it, so the gate that earns this marker has "
+             f"never run. Explaining the marker counts: the loop greps for the "
+             f"string, not for the sentence around it.")
+else:
+    guard(before, f"{len(weeks_marked)} week(s) marked done, and the preflight "
+                  f"receipt they need "
+                  f"{'exists' if preflight_done else 'is not needed yet'}")
+
 print("--- banned claims")
 
 # The launcher. Using PX4's own script crashes the distro, so no document may
