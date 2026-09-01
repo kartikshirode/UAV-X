@@ -19,8 +19,10 @@ bottom of this file.
 | `1.6` | the resource sampler | 27 tests, measured 12.5 MiB root against 639 MiB group |
 | `1.7` | the runner, the record writer, `run_scenario.sh` | a real run satisfying all ten gate requirements |
 
-178 package tests, 48 seam fixtures, 49 submission checks, 20 rehearsal
-checks, 113 gate expressions parsed, 21 shell scripts, static seam pass clean.
+179 package tests, 48 seam fixtures, 51 submission checks, 20 rehearsal
+checks, 8 preflight decisions, 113 gate expressions parsed, 21 shell scripts,
+static seam pass clean. Every one of those was run again at the end of the
+week, in a shell that did not belong to whoever wrote the code.
 
 ## The run that proves it
 
@@ -42,6 +44,23 @@ wrote it.
 
 `check_seam.sh` accepts the captured graph. `run_scenario.sh` against an
 absent path returns 10 and leaves no `latest` artifact, in both orderings.
+
+That run is the one the gate expressions were checked against, and it is also
+the run where uav_3 stopped at 11.98 m. Four more followed the launcher fix in
+defect 13, and every vehicle reached its layer in all of them.
+
+| Run | uav_1, 30 m | uav_2, 40 m | uav_3, 50 m | uav_4, 60 m | preparation |
+| --- | --- | --- | --- | --- | --- |
+| `...095331Z` | 30.18 | 40.23 | **11.98** | 60.23 | 121.1 s |
+| `...104152Z` | 30.41 | 40.44 | 50.45 | 60.45 | 26.2 s |
+| `...104415Z` | 30.40 | 40.43 | 50.40 | 60.46 | 25.8 s |
+| `...104637Z` | 30.38 | 40.47 | 50.47 | 60.48 | 25.6 s |
+| `...105016Z` | 30.38 | 40.48 | 50.44 | 60.45 | 25.9 s |
+
+Preparation is wall clock from launch to every vehicle being ready. It fell by
+95 seconds because nothing is fighting a failsafe any more. All ten gate
+expressions and the graph pass hold on the last of those runs as well; I ran
+them again rather than assuming the fix left them alone.
 
 ## Defects found while building, and fixed
 
@@ -90,18 +109,22 @@ implementation or passed a broken one.
 12. **The smoke verdict read altitude 326 seconds after touchdown**, while the
     vehicle sat parked and its estimator wandered between -1.60 and +1.63 m.
     Three correct flights failed by under 11 cm.
+13. **The launcher stood one vehicle on the edge of the pavement.** Vehicles
+    spawned at `y = i * spacing`, running out from the origin. The
+    `asphalt_plane` Gazebo actually resolves for `empty.world` on this machine
+    is the 20 x 20 x 0.1 m copy in `~/.gazebo/models`, which shadows the
+    200 x 200 one PX4 ships, so the paved square ends at y = +/-10 m with a 5 cm
+    lip. Instance 2 went to y = 10 exactly. It settled at 9 degrees of roll
+    against 0.09 for the other three, lifted off tilted, failed the EKF's
+    post-takeoff navigation test and left under failsafe at 17.8 m/s. Its
+    velocity innovation ratio peaked at 6.52 with 6177 samples over 1, while
+    the other three never passed 0.33 and logged none. Spawning the same four
+    in reverse order moved the fault to whichever instance was handed y = 10,
+    so it was the ground and never the vehicle. The line is centred on the
+    origin now, and the launcher asks Gazebo for each resting pose and refuses
+    to report the stack healthy above 2 degrees of tilt.
 
 ## Outstanding, carried into week 2
-
-**Instance 2, which is uav_3, does not reach its layer altitude.** Across seven
-runs it has never made 50 m inside the 120 second climb budget, reaching
-between 7.8 and 12.0 m, while uav_1, uav_2 and uav_4 hit 30, 40 and 60 m every
-time to within 0.4 m. It is slow rather than stuck: in one run it was written
-off at 9.6 m and then climbed to 49.65 m during the scenario. Clearing the
-persisted parameters did not explain it. No gate requirement depends on
-altitude and `harness_check` is never cited as evidence, so week 1 passes
-honestly, but week 2's survey does depend on vehicles reaching their layers.
-**This is the first thing to fix.**
 
 **`--record` is validated and not implemented, and exits 40.** There is no
 headless capture path on this stack: the world carries no camera sensor and
@@ -112,8 +135,14 @@ enforced first. Building the offscreen path belongs to chunk 3.6, and
 **The ROS 2 CLI daemon wedges**, answering `ros2 topic list` with an XMLRPC
 traceback and an empty stdout, which the launcher reads as zero topics. The
 runner restarts the daemon before each bring-up and retries up to three times.
-`sitl_multi.sh` was not changed; its 15 second settle is the underlying
-tightness.
+Defect 13 changed `sitl_multi.sh` for a different reason and left this alone;
+its 15 second settle is the underlying tightness.
+
+**`sitl_multi.sh` gives gzserver a 2 second grace on teardown and no KILL**, so
+two direct invocations back to back can trip the launcher's own check that port
+11345 is free. The scenario runner sends TERM and then KILL and is unaffected,
+which is why this has never shown up in a gate. It will bite whoever runs the
+launcher by hand.
 
 ## Why this file has no done marker
 
@@ -121,8 +150,17 @@ tightness.
 every chunk gate calls `gate_preflight` first, and that refuses to start
 without `submission/human-preflight.json`, which records registration, the
 eligibility declaration, the clarification channel, the organiser email, the
-delivery route and a compliance sign-off. Those are human steps and none is
-done.
+delivery route and a compliance sign-off. Those are human steps.
+
+One of them moved on 1 September. The competition id came through, so the
+registration block now requires `competition_id` matching `UAVX-` and 12 upper
+case hex characters, and the checker prints it. The other two fields in that
+block are a date and an address, both of which a person can type without ever
+having registered; the id cannot be guessed and the organisers can be asked to
+confirm it. Two negative fixtures hold the rule up: an id transcribed in lower
+case is rejected, and so is a registration with the id left out. The eligibility
+declaration, the clarification channel, the organiser email and the compliance
+review are all still open, and the id alone does not open the gate.
 
 Everything the chunk gates would run has been run directly and passes. The
 gate becomes real acceptance the moment that file exists, and nothing here
