@@ -11,6 +11,7 @@ import os
 
 import pytest
 
+from check_submission_const import PEAK_RSS_CEILING_MIB
 from uavx_sim import resource_sampler
 from uavx_sim.resource_sampler import (
     ProcessGone,
@@ -94,8 +95,8 @@ def test_the_peak_is_the_whole_group_and_not_the_reassuring_root_only_figure():
     """The failure this chunk exists to prevent.
 
     A sampler that reads pid 100 and stops there answers 120 MiB. The machine
-    is carrying 7920. Both numbers are below the 10500 MiB ceiling, so the
-    wrong one passes every gate and every later week inherits it.
+    is carrying 7920. Both are below the ceiling the gate asserts, so the wrong
+    one passes every gate and every later week inherits it.
     """
     probe = flat_runner_tree()
     sampler = ResourceSampler(root_pid=RUNNER, probe=probe)
@@ -361,9 +362,11 @@ def test_summary_is_exactly_the_block_the_run_record_asks_for():
     for key in ("peak_rss_mib", "swap_used_mib", "peak_at_s"):
         assert isinstance(got[key], float), key
         assert not isinstance(got[key], str)
-    # What scripts/gate.sh asserts on this block, spelled out.
+    # What scripts/gate.sh asserts on this block. The ceiling is imported
+    # rather than typed, because a copy of it here would pass while asserting
+    # a number the gate had moved on from.
     assert got["peak_rss_mib"] > 0
-    assert got["peak_rss_mib"] < 10500
+    assert got["peak_rss_mib"] < PEAK_RSS_CEILING_MIB
     assert got["swap_used_mib"] == 0
     assert got["samples"] >= 10
 

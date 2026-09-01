@@ -16,3 +16,14 @@ PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 
 if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
+
+# Week 1 audit finding 2. The memory ceiling the gate asserts had been written
+# out by hand in five places, and a copy that drifts does not fail loudly: it
+# asserts last week's contract and passes. It has one home,
+# scripts/check_submission_const.py, and these tests need to reach it. Adding
+# the directory here rather than in each test keeps the sys.path juggling in
+# one file, which is what this file is for.
+REPO_SCRIPTS = PACKAGE_ROOT.parent.parent.parent / "scripts"
+
+if REPO_SCRIPTS.is_dir() and str(REPO_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(REPO_SCRIPTS))

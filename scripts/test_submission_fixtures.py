@@ -52,6 +52,8 @@ SECTIONS = K.REQUIRED_SECTIONS
 
 TODAY = date.today().isoformat()
 
+from check_submission_const import PEAK_RSS_CEILING_MIB
+
 CASES: list = []
 
 
@@ -632,7 +634,7 @@ def _duplicate_delivery(dest, built):
 
 # Round 7 finding 5: the peak was required to exist and compared with nothing.
 @case("a run that needed more memory than the target has",
-      "against a 10500 MiB ceiling")
+      f"against a {PEAK_RSS_CEILING_MIB:.0f} MiB ceiling")
 def _over_memory(dest, built):
     p = (dest / built["manifest_runs"]["mission_integrated"])
     rec = json.loads(p.read_text(encoding="utf-8"))
