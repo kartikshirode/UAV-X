@@ -241,7 +241,8 @@ def build_package(dest: Path) -> dict:
     stub_fresh_install(dest, sha256_bytes(archive.read_bytes()), commit)
 
     (dest / "human-preflight.json").write_text(json.dumps({
-        "registered": {"done": "2026-08-27", "email": "someone@example.com"},
+        "registered": {"done": "2026-08-27", "email": "someone@example.com",
+                       "competition_id": "UAVX-000000000000"},
         "eligibility": {"done": "2026-08-27",
                         "declaration": "no attachment to PUSHPAK, the Drone "
                                        "Centre, IIT Bombay, IISER Bhopal or VJTI"},
@@ -755,6 +756,27 @@ def _wrong_ids(dest, built):
     rec["observations"]["delivered_ids"] = [
         f"uav_9:{i}" for i in range(len(rec["observations"]["generated_ids"]))]
     p.write_text(json.dumps(rec), encoding="utf-8")
+
+
+@case("a competition id transcribed in lower case", "does not match")
+def _lower_id(dest, built):
+    # The id is the only part of the registration block that cannot be typed by
+    # somebody who never registered, which is the whole reason it is required.
+    # Techfest issues it upper case. Lower case is what a careless copy out of a
+    # mail client produces, and an id that is nearly right is worse than an
+    # absent one, because it looks checked.
+    p = dest / "human-preflight.json"
+    receipt = json.loads(p.read_text(encoding="utf-8"))
+    receipt["registered"]["competition_id"] =         receipt["registered"]["competition_id"].lower()
+    p.write_text(json.dumps(receipt, indent=2), encoding="utf-8")
+
+
+@case("a registration with the id left out", "missing 'competition_id'")
+def _no_id(dest, built):
+    p = dest / "human-preflight.json"
+    receipt = json.loads(p.read_text(encoding="utf-8"))
+    del receipt["registered"]["competition_id"]
+    p.write_text(json.dumps(receipt, indent=2), encoding="utf-8")
 
 
 @case("a run produced from different source", "The evidence and the code do not match")
