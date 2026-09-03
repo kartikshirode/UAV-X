@@ -28,3 +28,10 @@ out/
 # os
 Thumbs.db
 .DS_Store
+
+# Launcher scratch inside runs/. scripts/sitl_multi.sh writes where it put every
+# vehicle and the runner reads it straight back into the record, so the content
+# is preserved as evidence in every run record and the file itself is rewritten
+# on each launch. The gate's absent-scenario probe is the same shape.
+runs/.launcher-spawn.json
+runs/.gate-absent-scenario.yaml

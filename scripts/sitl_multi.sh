@@ -40,6 +40,16 @@ SPACING=5
 # between the two is a vehicle nobody meant to put there.
 MAX_TILT_DEG=2.0
 
+# Where the launcher writes down what it did. Week 1 audit finding 11: this
+# script computed a spawn position per vehicle, printed it and threw it away.
+# PX4 reports position in each vehicle's own local frame, whose origin is that
+# vehicle's spawn point, while architecture.md fixes all geometry in one frame
+# with the ground station at the origin. Converting between the two needs the
+# offsets, and the only place they existed was the arithmetic below. Then defect
+# 13 moved every one of them by centring the line, and no artifact recorded
+# either the old positions or the new.
+SPAWN_MANIFEST="${UAVX_RUNS_DIR}/.launcher-spawn.json"
+
 # The two pieces of arithmetic this launcher gets wrong quietly, pulled out so
 # scripts/test_launcher_geometry.py can run them without a simulator. Week 1
 # audit finding 9: the tilt check was the one control this week added against
@@ -147,6 +157,8 @@ kill -0 "$GZ_PID" 2>/dev/null || gdie "gzserver died on startup, see /tmp/uavx-g
 
 gsay "spawning ${VEHICLES} x ${MODEL}"
 i=0
+spawn_rows=""
+spawn_sep=""
 while [ "$i" -lt "$VEHICLES" ]; do
   ns="uav_$((i + 1))"
   workdir="${BUILD}/rootfs/${i}"
@@ -210,6 +222,10 @@ while [ "$i" -lt "$VEHICLES" ]; do
   # stands on flat asphalt. Integer arithmetic cannot hold the half spacing an
   # even vehicle count needs, hence awk.
   y="$(awk -v i="$i" -v n="$VEHICLES" -v s="$SPACING" "$UAVX_SPACING_AWK")"
+  spawn_rows="${spawn_rows}${spawn_sep}{\"instance\": ${i}"
+  spawn_rows="${spawn_rows}, \"vehicle_id\": \"${ns}\""
+  spawn_rows="${spawn_rows}, \"x_m\": 0.0, \"y_m\": ${y}, \"z_m\": 0.83}"
+  spawn_sep=", "
 
   (
     cd "$workdir"
@@ -257,6 +273,18 @@ printf '  agent              up\n'
 # climb that stops tens of metres short of the layer. That cost this repo seven
 # runs. The spawn loop above explains the slope; this is what catches it if a
 # future --spacing or --vehicles walks the formation off the asphalt again.
+# One artifact, written by the only thing that knows, read by the runner. The
+# alternative was for the runner to recompute the formula above, which is the
+# copy-that-drifts pattern the week 1 audit spent its second finding on.
+{
+  printf '{"launcher": "scripts/sitl_multi.sh", "model": "%s", "world": "%s"' \
+    "$MODEL" "$WORLD"
+  printf ', "spacing_m": %s, "vehicles_requested": %s' "$SPACING" "$VEHICLES"
+  printf ', "frame": "gazebo world ENU, origin at the world origin, metres"'
+  printf ', "vehicles": [%s]}' "$spawn_rows"
+} > "$SPAWN_MANIFEST"
+printf '  spawn manifest     %s\n' "$SPAWN_MANIFEST"
+
 gsay "checking every vehicle is standing level"
 tilted=""
 i=0
