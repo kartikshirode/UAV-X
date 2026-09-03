@@ -81,6 +81,17 @@ no_garden() { [ "$(dpkg -l 2>/dev/null | grep -c '^ii  gz-garden' || true)" -eq 
 check "gzserver binary"       command -v gzserver
 check "gzclient binary"       command -v gzclient
 check "gazebo binary"         command -v gazebo
+
+# Found while building the cluster image, 3 September. PX4's own
+# Tools/setup/ubuntu.sh at the pinned commit adds packages.osrfoundation.org and
+# installs gz-garden on jammy, and setup-all.sh ran it immediately after the
+# step whose whole job is to remove exactly that. 04-px4.sh passes
+# --no-sim-tools now and asserts the same two things at install time. This pair
+# is here as well because gate_preflight runs this file before every chunk, so
+# it catches the repo coming back by any other route: a PX4 pin that moves the
+# Garden logic, or somebody running that script by hand.
+check "no osrfoundation repo"  test ! -f /etc/apt/sources.list.d/gazebo-stable.list
+check "gz-garden absent"       test "$(dpkg -l 2>/dev/null | grep -c '^ii  gz-garden' || true)" -eq 0
 check "gazebo package is 11.x" gz_is_11
 check "no Gazebo Garden"      no_garden
 [ -n "$GZ_PKG_VER" ] && printf '  gazebo package: %s\n' "$GZ_PKG_VER"
