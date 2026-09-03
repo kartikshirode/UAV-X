@@ -325,11 +325,13 @@ def test_the_relay_role_suspends_the_survey_and_a_release_resumes_it_in_place():
     assert executor.state is MissionState.RELAY
     assert executor.target() == slot
     # Reporting a position on the way to the slot must not retire a survey
-    # waypoint, and must not move the strip progress either. The vehicle
-    # crosses its own lanes on the way out; crediting that as survey work
-    # would report a strip as finished that nobody covered.
-    assert executor.update(interrupted) == slot
+    # waypoint. The last report is deliberately the waypoint the vehicle was
+    # flying to when it was taken: a position that would move the progress
+    # figure if it were being recorded. Reporting the slot last instead hides
+    # the fault, because the slot is behind the current leg and the
+    # projection clamps to zero either way.
     assert executor.update(slot) == slot
+    assert executor.update(interrupted) == slot
     assert executor.visited == tuple(path[:2])
     assert executor.progress_fraction() == pytest.approx(progress)
 
@@ -339,6 +341,35 @@ def test_the_relay_role_suspends_the_survey_and_a_release_resumes_it_in_place():
     assert executor.progress_fraction() == pytest.approx(progress)
     fly(executor)
     assert executor.visited == tuple(path)
+
+
+def test_flying_out_to_the_relay_slot_is_not_progress_through_the_strip():
+    """The relay crosses its own lanes on the way out and covers none of them.
+
+    Progress through a strip is what `coverage_fraction_at_kill` rests on, so
+    a vehicle that was taken for the relay role has to come back reporting
+    the progress it left with. Crediting the flight to the slot would report
+    a strip as further along than anybody flew it, and the ground under the
+    difference is never surveyed by anyone.
+
+    The position reported here is the waypoint the vehicle was heading for
+    when it was taken, which sits at the far end of the leg the progress
+    figure is measured along. A relay flight recorded as survey work would
+    move the figure by that whole leg.
+    """
+    executor, _strip, path = executor_for("uav_3")
+    executor.update(path[0])
+    executor.update(path[1])
+    interrupted = executor.target()
+    before = executor.progress_fraction()
+
+    executor.assign_relay((317.3, -36.8, 75.0))
+    executor.update(interrupted)
+    assert executor.progress_fraction() == pytest.approx(before)
+
+    executor.release()
+    assert executor.progress_fraction() == pytest.approx(before)
+    assert executor.target() == interrupted
 
 
 def test_a_release_without_an_assignment_does_nothing():
