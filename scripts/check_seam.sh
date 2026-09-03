@@ -67,10 +67,26 @@ pass() { printf '  ok         %s\n' "$*"; }
 # named `not_link_layer/model.py` could read ground truth without a violation.
 # Match the package path, not a suggestive substring. The evaluator package is
 # the only other privileged tree.
+#
+# Chunk 2.3, and it is round 7 finding 1 and the week 1 audit's second finding
+# wearing a third face: a gate path written by hand against a layout nobody had
+# built yet. `rel` is relative to uavx_ws/src, and an ament_python module lands
+# at <package>/<package>/<module>.py, so the real link layer is
+# uavx_comms/uavx_comms/link_layer.py and matched neither pattern. w3_seam_static
+# would have reported a correct link layer as reading ground truth and failed the
+# week. Verified before the fix: that path fell through to `checked`.
+#
+# uavx_eval was exempt only by luck. Its pattern ends in a bare `*`, which a case
+# glob lets cross directory separators, so uavx_eval/uavx_eval/check.py matched
+# where uavx_comms could not. Left as it is rather than tightened, because the
+# evaluator package is privileged in whole and narrowing it here would be a
+# second change riding on the back of a fix.
 privileged_source() {
   local rel="${1#"$SRC/"}"
   case "$rel" in
-    uavx_comms/link_layer.py|uavx_comms/link_layer/*.py|uavx_eval/*) return 0 ;;
+    uavx_comms/uavx_comms/link_layer.py) return 0 ;;
+    uavx_comms/uavx_comms/link_layer/*.py) return 0 ;;
+    uavx_eval/*) return 0 ;;
     *) return 1 ;;
   esac
 }
