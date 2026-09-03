@@ -192,12 +192,40 @@ launcher refuses, every time.
 The audit is [docs/audits/week-1.md](../audits/week-1.md). Four of its findings
 are open and three of them are here.
 
-**Poses are sampled at a quarter of the frozen rate.** The runner samples at
-5 Hz, hardcoded in the module, while `architecture.md` names 20 Hz as the
-coverage source and again for the separation monitor. Week 2 computes coverage
-off sampled poses, so a survey scored at a quarter of the intended resolution is
-a different measurement, and no scenario file can correct it because the rate is
-not read from one. **This is the first thing to fix.**
+**Poses cannot be sampled at the frozen rate, and the cause is now known.**
+The runner sampled at 5 Hz while `architecture.md` names 20 Hz as the coverage
+source and again for the separation monitor. The target is 20 Hz now and the
+runner records the rate it actually reached beside the rate it asked for, which
+is what made the rest of this visible.
+
+It reaches 9.78 Hz. Three things were ruled out by measurement rather than by
+argument:
+
+- **Not MAVLink.** `take_sample` counts a pose only when the estimate is fresh,
+  so PX4's stream rate is a ceiling. The runner now asks for
+  `LOCAL_POSITION_NED` at 50 Hz, the command is accepted with result 0, and PX4
+  does stream at 50 Hz. The sample count did not move.
+- **Not the real time factor.** Measured at 0.9996, so a second of simulated
+  time is a second of wall time and the two rates are the same rate.
+- **It is `/clock`.** Gazebo publishes it at exactly 10.000 Hz with a 0.100 s
+  step, `libgazebo_ros_init`'s default. Every `_s` field in a record is measured
+  against that clock and the sampler runs on it, so a sample can land only once
+  per tick. Across eight archived runs the ratio of pose samples to clock
+  messages is 0.402 at the old 5 Hz target and **exactly 1.000** at 20 Hz. The
+  sampler is hard against the clock.
+
+Two ways of raising it were tried on 3 September and both failed, each recorded
+in `sitl_multi.sh` so nobody repeats them. `-p publish_rate:=100` is refused
+because the parameter is a double, and it fails as gzserver aborting with a core
+dump rather than as a message about a type. `--ros-args -p publish_rate:=100.0`
+dies with `Invalid logfile [publish_rate:=100.0]`, because gzserver's parser is
+`boost::program_options` and knows nothing about `--ros-args`.
+
+The route left is a plugin block in the world file, which means bringing a world
+into this repository instead of using PX4's copy. That changes what the
+simulation runs and it is not a change to make in passing. **This is still the
+first thing to fix**, and it is now a known problem with a known cause rather
+than a number nobody could explain.
 
 **Nothing records where each vehicle stands, and defect 13 moved them.**
 Position comes from PX4's local frame, whose origin is each vehicle's own spawn
