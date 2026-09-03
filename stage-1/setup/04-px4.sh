@@ -20,8 +20,50 @@ cd "$PX4_DIR"
 say "PX4 checkout is $(git describe --tags 2>/dev/null || echo unknown)"
 
 if ! already_did px4-deps; then
-  say "PX4 dependency script, skipping the NuttX cross-compiler since this is SITL only"
-  bash ./Tools/setup/ubuntu.sh --no-nuttx
+  # --no-sim-tools matters more than --no-nuttx and it went in late, found while
+  # building the cluster image. Read Tools/setup/ubuntu.sh at the pinned commit,
+  # lines 220 to 240: on Ubuntu 22.04 its simulation branch prints "Gazebo
+  # (Garden) will be installed. Earlier versions will be removed", adds
+  # packages.osrfoundation.org to the apt sources and installs gz-garden.
+  #
+  # That is precisely the sequence 03-gazebo-classic.sh exists to undo, and
+  # setup-all.sh runs 03 and then 04, so this step was putting back what the
+  # step before it had just taken out. A fresh machine following INSTALL.md
+  # would have ended with the Garden repo enabled and Classic at risk on the
+  # next apt upgrade. This one escaped because 03 was evidently re-run by hand
+  # afterwards; gz-plugin2-cli and gz-transport12-cli are still installed here
+  # as residue, while the repo itself is gone.
+  #
+  # Every simulation dependency that branch installs is listed by hand below,
+  # minus the Garden packages, and minus ant and openjdk, which exist only for
+  # jmavsim and nothing in this repo uses jmavsim. This exact sequence built PX4
+  # and flew four vehicles inside the cluster image, with all four git SHAs and
+  # all six apt pins matching versions.lock.
+  say "PX4 dependency script, without NuttX and without its simulation branch"
+  bash ./Tools/setup/ubuntu.sh --no-nuttx --no-sim-tools
+
+  say "the simulation dependencies PX4 needs, without the Garden packages"
+  sudo apt-get update
+  sudo apt-get install -y --no-install-recommends \
+    bc dmidecode gstreamer1.0-libav gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-ugly libeigen3-dev \
+    libgstreamer-plugins-base1.0-dev libimage-exiftool-perl libopencv-dev \
+    libxml2-utils pkg-config protobuf-compiler \
+    || die "the PX4 simulation dependencies would not install"
+
+  # Not decoration. This is what catches the same thing again if a future PX4
+  # pin moves the Garden logic somewhere else in that script.
+  [ ! -f /etc/apt/sources.list.d/gazebo-stable.list ] \
+    || die "the PX4 dependency script put the osrfoundation repo back. It serves Garden on jammy and 03-gazebo-classic.sh exists to keep it off this machine."
+  [ "$(dpkg -l 2>/dev/null | grep -c '^ii  gz-garden' || true)" -eq 0 ] \
+    || die "gz-garden is installed. Gazebo Classic is the pinned simulator and Garden conflicts with it."
+  for b in gzserver gzclient gazebo; do
+    command -v "$b" > /dev/null 2>&1 \
+      || die "the PX4 dependency install removed ${b}. Classic was installed by step 03 and something has taken it away."
+  done
+  say "gazebo is still $(dpkg-query -W -f='${Version}' gazebo 2>/dev/null || echo unknown)"
+
   done_with px4-deps
 fi
 
