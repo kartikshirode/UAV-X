@@ -583,20 +583,59 @@ def _s_service(src: Path):
         "self.srv = self.create_service(Elect, 'elect', cb)\n", encoding="utf-8")
 
 
-@static_case("the link layer reading ground truth, which is its job", None)
+# Chunk 2.3 found the exemption and this fixture agreeing with each other and
+# both being wrong about where a module lives. An ament_python package puts its
+# code at <package>/<package>/<module>.py, so the link layer is at
+# uavx_comms/uavx_comms/link_layer.py. Both of these built it one directory
+# higher, at a path no real package produces, so the suite proved the exemption
+# worked on a layout that does not exist and w3_seam_static would have failed a
+# correct link layer. A fixture written from the same assumption as the checker
+# tests the assumption, not the checker.
+GROUND_TRUTH_READ = (
+    "sub = self.create_subscription(ModelStates, '/gazebo/model_states', cb, 10)\n")
+
+
+@static_case("the link layer package reading ground truth, which is its job",
+             None)
 def _s_link_layer(src: Path):
+    (src / "uavx_comms" / "uavx_comms" / "link_layer").mkdir(parents=True)
+    (src / "uavx_comms" / "uavx_comms" / "link_layer" / "model.py").write_text(
+        GROUND_TRUTH_READ, encoding="utf-8")
+
+
+@static_case("the link layer as one module rather than a package", None)
+def _s_link_layer_flat(src: Path):
+    # Both shapes are legal and the exemption names both, so both are pinned.
+    (src / "uavx_comms" / "uavx_comms").mkdir(parents=True)
+    (src / "uavx_comms" / "uavx_comms" / "link_layer.py").write_text(
+        GROUND_TRUTH_READ, encoding="utf-8")
+
+
+@static_case("a link layer one directory above where a package puts it",
+             "ground truth")
+def _s_link_layer_wrong_depth(src: Path):
+    # The layout the exemption used to name. Nothing builds a package this way,
+    # and if this ever stops being a violation the exemption has drifted back
+    # to matching a path instead of a module.
     (src / "uavx_comms" / "link_layer").mkdir(parents=True)
     (src / "uavx_comms" / "link_layer" / "model.py").write_text(
-        "sub = self.create_subscription(ModelStates, '/gazebo/model_states', cb, 10)\n",
-        encoding="utf-8")
+        GROUND_TRUTH_READ, encoding="utf-8")
 
 
 @static_case("a module merely named like the link layer", "ground truth")
 def _s_link_layer_lookalike(src: Path):
-    (src / "uavx_comms" / "not_link_layer").mkdir(parents=True)
-    (src / "uavx_comms" / "not_link_layer" / "model.py").write_text(
-        "sub = self.create_subscription(ModelStates, '/gazebo/model_states', cb, 10)\n",
-        encoding="utf-8")
+    (src / "uavx_comms" / "uavx_comms" / "not_link_layer").mkdir(parents=True)
+    (src / "uavx_comms" / "uavx_comms" / "not_link_layer" / "model.py").write_text(
+        GROUND_TRUTH_READ, encoding="utf-8")
+
+
+@static_case("a sibling of the link layer reading ground truth", "ground truth")
+def _s_link_layer_sibling(src: Path):
+    # The router sits beside the link layer in the same package. Only the link
+    # layer is privileged, and this is the case that says so.
+    (src / "uavx_comms" / "uavx_comms").mkdir(parents=True)
+    (src / "uavx_comms" / "uavx_comms" / "router.py").write_text(
+        GROUND_TRUTH_READ, encoding="utf-8")
 
 
 def find_bash() -> "str | None":
