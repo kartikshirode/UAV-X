@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>uavx_comms</name>
+  <version>0.1.0</version>
+  <description>
+    The mesh. None of the accepted simulators model radio, so the link model,
+    the routing state machine and the relay election are the deliverable
+    rather than configuration.
+
+    Chunk 2.3 builds the pure half: functions and state machines a unit test
+    can drive with no ROS graph, no simulator and no wall clock. W3 wraps them
+    in nodes that publish only to their own tx and subscribe only to their own
+    rx, which is why nothing in this package names a topic or a vehicle id.
+  </description>
+  <maintainer email="megamindsresearch@gmail.com">kartikshirode</maintainer>
+  <license>MIT</license>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
