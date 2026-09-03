@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>uavx_mission</name>
+  <version>0.1.0</version>
+  <description>
+    The survey mission: the frozen box, the partitioner that splits it into one
+    strip per vehicle, the boustrophedon planner that covers a strip, and the
+    executor that flies the plan. Every module here is pure geometry and pure
+    state, so the planner and the partitioner are provable with no simulator.
+    The node is the only file that touches ROS, and it holds no endpoint outside
+    its own tx, its own rx and its own PX4 namespace.
+  </description>
+  <maintainer email="megamindsresearch@gmail.com">kartikshirode</maintainer>
+  <license>MIT</license>
+
+  <depend>rclpy</depend>
+  <depend>uavx_msgs</depend>
+  <exec_depend>px4_msgs</exec_depend>
+
+  <!-- The tests read the frozen pose rate out of the runner that samples at
+       it, rather than writing 20 Hz down a third time. -->
+  <test_depend>uavx_sim</test_depend>
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
