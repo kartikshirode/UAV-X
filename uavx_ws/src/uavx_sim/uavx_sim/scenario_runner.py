@@ -66,6 +66,7 @@ clean checkout.
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -127,7 +128,21 @@ TAKEOFF_CYCLES = 3
 STALLED_CLIMB_S = 20.0
 
 # Scenario time cadences.
-POSE_PERIOD_S = 0.2          # 5 Hz per vehicle
+# Week 1 audit finding 10. This was 0.2, which is 5 Hz, while architecture.md
+# names 20 Hz twice as frozen: once as the coverage source and once as the rate
+# the separation monitor runs at. Week 2 computes coverage_fraction from sampled
+# poses and never from the planned path, so a quarter of the intended resolution
+# is not a smaller number, it is a different measurement. The rate is
+# deliberately not a scenario knob. The design freezes it, and a scenario able to
+# override it could quietly change what its own coverage figure meant.
+POSE_HZ = 20.0               # frozen in architecture.md, section 6
+POSE_PERIOD_S = 1.0 / POSE_HZ
+# What we ask PX4 to stream. Above the sampling target on purpose, so the rate
+# is decided by the sampler rather than by whatever default PX4 chose for the
+# API link. A sample is only counted when the estimate is fresh, so a stream
+# slower than the target silently caps the rate and the record would claim a
+# resolution it never had.
+POSE_STREAM_HZ = 50.0
 RESOURCE_PERIOD_S = 1.0      # gate asks for resources.samples >= 10
 GRAPH_CAPTURE_FRACTION = 0.75
 
@@ -560,6 +575,17 @@ class Vehicle:
             source_component=190)
 
         self.state = "connect"
+        # Sampling window, so the record can state the rate it achieved rather
+        # than the rate it asked for. Week 1 audit finding 10 moved the target
+        # from 5 Hz to the 20 Hz architecture.md freezes, and the first run at
+        # the new target produced 2.5 times the samples rather than 4 times.
+        # take_sample counts a pose only when the estimate is fresh, so the
+        # ceiling is PX4's LOCAL_POSITION_NED stream and not the loop cadence.
+        # A coverage figure computed off poses has to know which rate it really
+        # got, so both numbers go in the record.
+        self.first_sample_s = None
+        self.last_sample_s = None
+        self.stream_requested = False
         self.entered_wall = 0.0
         self.sent_wall = -99.0
         self.attempts = 0
@@ -625,7 +651,43 @@ class Vehicle:
         base = self.z_ground if self.z_ground is not None else 0.0
         return -(self.z - base)
 
-    def take_sample(self):
+    def request_pose_stream(self):
+        """Ask PX4 for LOCAL_POSITION_NED faster than we intend to sample it.
+
+        PX4 picks a default rate per message for the API link, and asking for
+        samples faster than it streams just means most loop ticks find nothing
+        fresh. Requesting comfortably above the target leaves the sampler, not
+        the telemetry, deciding the rate. Sent once the link is up, and repeated
+        is harmless because SET_MESSAGE_INTERVAL is idempotent.
+        """
+        from pymavlink import mavutil
+
+        target = self.connection.target_system
+        if not target:
+            return False
+        interval_us = int(1e6 / POSE_STREAM_HZ)
+        self.connection.mav.command_long_send(
+            target, self.connection.target_component,
+            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
+            mavutil.mavlink.MAVLINK_MSG_ID_LOCAL_POSITION_NED,
+            interval_us, 0, 0, 0, 0, 0)
+        self.stream_requested = True
+        return True
+
+    def achieved_pose_hz(self):
+        """Samples per second of simulated time, over the window sampled.
+
+        None when there is not enough of a window to divide by. Two samples a
+        hundredth of a second apart would otherwise report a spectacular rate.
+        """
+        if self.first_sample_s is None or self.last_sample_s is None:
+            return None
+        window = self.last_sample_s - self.first_sample_s
+        if window < 1.0 or self.samples < 2:
+            return None
+        return round((self.samples - 1) / window, 2)
+
+    def take_sample(self, sim_s=None):
         """Count one pose sample if the estimate moved on since the last one.
 
         A vehicle that has stopped reporting stops contributing samples, which
@@ -636,6 +698,10 @@ class Vehicle:
             return False
         self.fresh = False
         self.samples += 1
+        if sim_s is not None:
+            if self.first_sample_s is None:
+                self.first_sample_s = sim_s
+            self.last_sample_s = sim_s
         self.max_altitude_m = max(self.max_altitude_m, self.altitude_m())
         return True
 
@@ -779,6 +845,7 @@ class Harness:
         self.scenario = scenario
         self.options = options
         self.runs_dir = Path(runs_dir)
+        self._spawn_cache = None
         self.run_id = run_id
 
         self.launcher = None
@@ -975,11 +1042,13 @@ class Harness:
 
             for vehicle in self.vehicles:
                 vehicle.drain(self.sim_now)
+                if not vehicle.stream_requested:
+                    vehicle.request_pose_stream()
 
             if self.sim_now >= next_pose:
                 next_pose = self.sim_now + POSE_PERIOD_S
                 for vehicle in self.vehicles:
-                    vehicle.take_sample()
+                    vehicle.take_sample(self.sim_now)
 
             self.injector.tick(self.sim_now)
             self.injector.poll_observations(self.sim_now)
@@ -1062,8 +1131,28 @@ class Harness:
         """
         return [vehicle.name for vehicle in self.vehicles if vehicle.samples > 0]
 
+    def spawn_of(self, name):
+        """Where the launcher put this vehicle, or None if it did not say.
+
+        Absent is a real answer and the record says so rather than dropping the
+        field. A stack brought up by something other than scripts/sitl_multi.sh
+        leaves no manifest, and a silently missing offset is how a later week
+        ends up converting poses against an origin it guessed.
+        """
+        if self._spawn_cache is None:
+            try:
+                self._spawn_cache = json.loads(
+                    (self.runs_dir / ".launcher-spawn.json")
+                    .read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                self._spawn_cache = {}
+        for row in self._spawn_cache.get("vehicles", []):
+            if row.get("vehicle_id") == name:
+                return row
+        return None
+
     @staticmethod
-    def _vehicle_metrics(vehicle):
+    def _vehicle_metrics(vehicle, spawn):
         """What one vehicle did, in enough detail to argue with.
 
         The altitude the takeoff was commanded against is in here beside the
@@ -1073,7 +1162,17 @@ class Harness:
         the wrong datum.
         """
         return {
+            # Audit finding 11. Every other position in this block is in the
+            # vehicle's own local frame, whose origin is where it was spawned.
+            # These two are what turn that into the single frame the design
+            # freezes. Read from the launcher's manifest rather than recomputed,
+            # so the formula has one home.
+            "spawn_x_m": spawn["x_m"] if spawn else None,
+            "spawn_y_m": spawn["y_m"] if spawn else None,
             "pose_samples": vehicle.samples,
+            "pose_rate_hz": vehicle.achieved_pose_hz(),
+            "first_sample_s": vehicle.first_sample_s,
+            "last_sample_s": vehicle.last_sample_s,
             "mavlink_messages": vehicle.messages,
             "max_altitude_m": round(vehicle.max_altitude_m, 2),
             "hover_target_m": vehicle.hover_alt_m,
@@ -1097,12 +1196,14 @@ class Harness:
             "clock_topic": "/clock",
             "clock_messages": self.clock_messages,
             "pose_source": "PX4 LOCAL_POSITION_NED over the MAVLink API link",
+            "pose_rate_hz_target": POSE_HZ,
+            "pose_stream_requested_hz": POSE_STREAM_HZ,
             "control_path": f"pymavlink COMMAND_LONG on udp "
                             f"{MAVLINK_BASE_PORT}+instance",
             "preparation_seconds_wall": round(self.prep_seconds, 1),
             "bring_up_attempts": self.bring_up_attempts,
             "vehicles_requested": len(self.scenario.vehicles),
-            "by_vehicle": {v.name: self._vehicle_metrics(v)
+            "by_vehicle": {v.name: self._vehicle_metrics(v, self.spawn_of(v.name))
                            for v in self.vehicles},
             "app_packets_note": (
                 "empty on purpose. There is no swarm node in week 1, so there "
