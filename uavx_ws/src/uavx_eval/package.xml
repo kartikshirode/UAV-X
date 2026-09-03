@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>uavx_eval</name>
+  <version>0.1.0</version>
+  <description>
+    The observer. It watches simulator ground truth and reports what the
+    vehicles actually did, and it holds uavx_eval.check, the provenance gate
+    every run record has to pass before any number in it is quoted.
+
+    It sits outside the swarm on purpose. stage-1/architecture.md section 1
+    lets this package and the link layer read ground truth, and lets nothing
+    else, which is why the metrics collector may measure coverage and
+    separation while no swarm node may.
+  </description>
+  <maintainer email="megamindsresearch@gmail.com">kartikshirode</maintainer>
+  <license>MIT</license>
+
+  <depend>rclpy</depend>
+  <depend>uavx_msgs</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
