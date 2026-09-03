@@ -222,8 +222,33 @@ gate_test() {
     --packages-select "$@" \
     --return-code-on-test-failure \
   || gdie "colcon test failed for: $*"
-  colcon test-result --test-result-base "${UAVX_BUILD_BASE}" --verbose \
-    || gdie "colcon test-result reported failures for: $*"
+
+  # Chunk 2.1 found this. `colcon test` is filtered by --packages-select and
+  # `colcon test-result` was not, so it read every package in the shared build
+  # base and reported the lot. Measured on 3 September: unfiltered says 145
+  # tests, which is uavx_mission's 81 plus uavx_eval's 64. A chunk could
+  # therefore be failed by a package it never ran, and two chunks worked in
+  # parallel could fail each other, which breaks the plan's promise that a
+  # chunk is the unit of work. Scoped per package now.
+  #
+  # And the count is checked, because `colcon test-result` over a package that
+  # produced no results at all says "0 tests, 0 errors, 0 failures" and exits
+  # 0. That is the whole failure mode the plan records for W2: the tests the
+  # week was built around lived in a package the gate never tested, so the week
+  # could pass with none of them written. A gate that accepts zero tests as a
+  # pass is the same hole one level down.
+  local pkg out count
+  for pkg in "$@"; do
+    [ -d "${UAVX_BUILD_BASE}/${pkg}" ] \
+      || gdie "no build output for ${pkg}. colcon reported success and produced no test result directory, so nothing below has been measured."
+    out="$(colcon test-result --test-result-base "${UAVX_BUILD_BASE}/${pkg}" --verbose)" \
+      || gdie "colcon test-result reported failures for: ${pkg}"
+    printf '%s' "$out" | tail -3
+    count="$(printf '%s' "$out" | grep -c -E '^Summary: [1-9][0-9]* test' || true)"
+    [ "${count:-0}" -ge 1 ] \
+      || gdie "${pkg} produced no test results. A package the gate tests and that reports zero tests is a package whose tests were never written or never collected, and colcon calls that success."
+    printf '  ok    %s reported tests, and they passed\n' "$pkg"
+  done
 }
 
 run_scenario() {
