@@ -1,0 +1,254 @@
+# The UAV-X simulation stack, packaged so it can run on a machine that has no
+# ROS, no Gazebo, no PX4, no cmake and no g++. That describes the Baramati
+# compute nodes, where the only container runtime is rootless podman.
+#
+# The stack this reproduces is pinned in stage-1/setup/versions.lock. That file
+# is copied into the build context and read here, so there is exactly one place
+# a version lives. Nothing below types a SHA or a version literal.
+#
+# Two kinds of pin, and they are treated differently on purpose:
+#
+#   git SHAs        permanent. If one cannot be checked out the build stops.
+#   apt versions    the archive owns these and drops old builds. The build asks
+#                   for the locked version, falls back to whatever is on offer,
+#                   and writes both into /opt/uavx/version-report.txt so a
+#                   mismatch is visible instead of silent.
+#
+# Build it with stage-1/hpc/build-image.slurm, not by hand. That script sets the
+# podman storage root to node-local /tmp and pins BUILD_JOBS, both of which
+# matter here; see its comments.
+
+FROM docker.io/osrf/ros:humble-desktop
+
+# This line does not do what it looks like it does, and it is kept only because
+# removing it would invalidate every cached layer below it. Measured on this
+# cluster with podman 5.6.0 on 3 September 2026: building in the default OCI
+# format, podman prints
+#
+#   SHELL is not supported for OCI image format ... Must use `docker` format
+#
+# and then runs every RUN step under /bin/sh anyway. A probe image proved it:
+# $0 came back as /bin/sh, [[ was "not found", `type source` failed, and a
+# `(false | true)` test showed pipefail was off. So no RUN step below may use
+# bash syntax, and the two that genuinely need bash call it by name.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# nproc inside a container on this cluster reports 256 even when the job asked
+# for fewer, because the cgroup cpuset is not narrowed. Anything that autoscales
+# would try to use the whole box. Every build step below takes its parallelism
+# from here and never from nproc.
+ARG BUILD_JOBS=16
+
+# PATH is extended, never replaced: the base image already puts
+# /opt/ros/humble/bin on it. /root/.local/bin is where PX4's dependency script
+# lands the python tools it installs with pip --user, and the PX4 build calls
+# some of them by name.
+#
+# MAKEFLAGS is deliberately not set globally. A global -j is inherited by every
+# nested make in the image, including the one colcon starts per package, and it
+# is the product of the two that takes a node down rather than either on its
+# own. Each build step below states its own parallelism.
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8 \
+    PATH=/root/.local/bin:${PATH}
+
+COPY versions.lock /opt/uavx/versions.lock
+
+# Reads one key out of the lock file and dies if the key is absent, the same way
+# stage-1/setup/00-common.sh does, so a typo cannot quietly build nothing.
+COPY lock.sh /usr/local/bin/uavx-lock
+COPY report.sh /usr/local/bin/uavx-report
+RUN chmod +x /usr/local/bin/uavx-lock /usr/local/bin/uavx-report
+
+# ---------------------------------------------------------------- base tools
+#
+# The apt sandbox is turned off first. This cluster's user has no /etc/subuid
+# entry, so a rootless container gets a single mapped UID and the _apt user does
+# not exist inside it. apt tries to drop privileges to _apt before downloading,
+# cannot, and the failure mode is a warning on a good day and a hard stop on a
+# bad one. Telling it to stay root is the honest fix, and inside a
+# single-user-namespace container it gives nothing away.
+#
+# iproute2, procps and psmisc are for the launcher rather than the build:
+# sitl_multi.sh uses ss to check port 11345 and pgrep/pkill to count and clear
+# processes.
+RUN echo "[stage base] $(date -Is)" \
+ && echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99-uavx-no-sandbox \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential ca-certificates cmake curl git gnupg iproute2 \
+      libxml2-dev libxml2-utils locales lsb-release make ninja-build \
+      pkg-config procps psmisc python3-colcon-common-extensions python3-dev \
+      python3-pip python3-venv \
+      rsync software-properties-common unzip wget xz-utils zip \
+ && locale-gen en_US en_US.UTF-8 \
+ && update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 \
+ && add-apt-repository -y universe \
+ && rm -rf /var/lib/apt/lists/* \
+ && echo "[stage base done] $(date -Is)"
+
+# PX4's Tools/setup/ubuntu.sh prefixes every apt line with sudo. It installs
+# sudo itself only when it sees /.dockerenv, and a podman build leaves
+# /run/.containerenv instead, so the script would die on its first sudo. Rather
+# than install real sudo and then reason about whether its setuid bit survived
+# an unpack with ignore_chown_errors, this is a shim: the build is already root,
+# so sudo has nothing to elevate.
+#
+# `exec env "$@"` and not `exec "$@"`. ubuntu.sh writes
+# `sudo DEBIAN_FRONTEND=noninteractive apt-get ...`, and a plain exec would try
+# to run the assignment as a program name.
+RUN printf '%s\n' '#!/bin/sh' 'exec env "$@"' > /usr/local/bin/sudo \
+ && chmod 755 /usr/local/bin/sudo
+
+# ------------------------------------------------------------ gazebo classic
+#
+# From Ubuntu universe, never from packages.osrfoundation.org. Gazebo Classic
+# went end of life in January 2025 and the osrfoundation repo now serves Garden
+# for jammy; adding it installs the Classic libraries and none of the Classic
+# binaries, so gzserver disappears and PX4 only finds out at launch. That is
+# recorded in stage-1/setup/03-gazebo-classic.sh and it cost a full build cycle
+# there. The check below is on the binaries for the same reason: dpkg-query
+# answers with a version for a package apt merely knows about.
+RUN echo "[stage gazebo] $(date -Is)" \
+ && apt-get update \
+ && GZ_VER="$(uavx-lock gazebo_version)" \
+ && if ! apt-get install -y --no-install-recommends "gazebo=$GZ_VER" "libgazebo-dev=$GZ_VER"; then \
+      echo "WARN: gazebo $GZ_VER is not in the archive, taking what is on offer"; \
+      apt-get install -y --no-install-recommends gazebo libgazebo-dev; \
+    fi \
+ && apt-get install -y --no-install-recommends ros-humble-gazebo-ros-pkgs \
+ && for b in gzserver gzclient gazebo gz; do \
+      command -v "$b" > /dev/null || { echo "FAILED: $b missing, Gazebo Classic did not land"; exit 1; }; \
+    done \
+ && rm -rf /var/lib/apt/lists/* \
+ && echo "[stage gazebo done] $(date -Is)"
+
+# ------------------------------------------------------------------- px4 src
+#
+# No --depth 1. PX4's build reads git describe for its version string and a
+# shallow clone breaks it.
+RUN echo "[stage px4 clone] $(date -Is)" \
+ && PX4_SHA="$(uavx-lock px4_sha)" \
+ && git clone https://github.com/PX4/PX4-Autopilot.git /root/PX4-Autopilot \
+ && cd /root/PX4-Autopilot \
+ && git cat-file -e "$PX4_SHA^{commit}" \
+ && git checkout --quiet --force "$PX4_SHA" \
+ && git submodule update --init --recursive --quiet \
+ && echo "[stage px4 clone done] $(date -Is) $(git describe --tags) $(git rev-parse --short HEAD)"
+
+# --no-nuttx because nothing here targets flight hardware. It also skips the
+# usermod -aG dialout line, which has no user to add inside an image.
+#
+# --no-sim-tools is the one deliberate departure from stage-1/setup/04-px4.sh,
+# and it is here to protect the step above rather than to save time. Read
+# Tools/setup/ubuntu.sh at the pinned commit, lines 220 to 240: on Ubuntu 22.04
+# its simulation branch prints "Gazebo (Garden) will be installed. Earlier
+# versions will be removed", adds packages.osrfoundation.org to the apt sources
+# and installs gz-garden. That is the exact sequence
+# stage-1/setup/03-gazebo-classic.sh was written to undo, and running it here
+# would take the Classic binaries back out of an image that had just installed
+# them. Every simulation dependency that branch installs is listed below by
+# hand instead, minus the Garden packages and minus ant and openjdk, which
+# exist only for jmavsim and nothing in this repo uses jmavsim.
+#
+# The verification block after the install is not decoration. It is the check
+# that catches this again if a future PX4 pin moves the Garden logic somewhere
+# else in the script.
+RUN echo "[stage px4 deps] $(date -Is)" \
+ && cd /root/PX4-Autopilot \
+ && bash ./Tools/setup/ubuntu.sh --no-nuttx --no-sim-tools \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+      bc dmidecode gstreamer1.0-libav gstreamer1.0-plugins-bad \
+      gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+      gstreamer1.0-plugins-ugly libeigen3-dev \
+      libgstreamer-plugins-base1.0-dev libimage-exiftool-perl libopencv-dev \
+      libxml2-utils pkg-config protobuf-compiler \
+ && test ! -f /etc/apt/sources.list.d/gazebo-stable.list \
+ && [ "$(dpkg -l 2>/dev/null | grep -c '^ii  gz-garden')" -eq 0 ] \
+ && for b in gzserver gzclient gazebo gz; do \
+      command -v "$b" > /dev/null || { echo "FAILED: PX4 dependency install removed $b"; exit 1; }; \
+    done \
+ && rm -rf /var/lib/apt/lists/* \
+ && echo "[stage px4 deps done] $(date -Is) gazebo still $(dpkg-query -W -f='${Version}' gazebo)"
+
+# make px4_sitl gazebo-classic builds AND launches, ending in sitl_run.sh with a
+# gzclient. That is fine at a desk and wrong inside an image build. These are
+# the two build-only targets. j= is PX4's own knob for the ninja job count;
+# without it ninja reads nproc and asks for 256 way parallelism.
+RUN echo "[stage px4 build] $(date -Is)" \
+ && cd /root/PX4-Autopilot \
+ && make px4_sitl_default j=$BUILD_JOBS \
+ && test -x build/px4_sitl_default/bin/px4 \
+ && echo "[stage px4 build done] $(date -Is)"
+
+RUN echo "[stage px4 gazebo plugins] $(date -Is)" \
+ && cd /root/PX4-Autopilot \
+ && make px4_sitl_default sitl_gazebo-classic j=$BUILD_JOBS \
+ && test -f build/px4_sitl_default/build_gazebo-classic/libgazebo_mavlink_interface.so \
+ && echo "[stage px4 gazebo plugins done] $(date -Is)"
+
+# ----------------------------------------------------------------- the agent
+#
+# v2.4.2 is the tag PX4 v1.15 names and it no longer builds: its superbuild
+# checks out Fast DDS branch 2.12.x, which eProsima deleted. The lock pins
+# v2.4.3, whose Fast DDS 2.14.x and Fast CDR 2.2.x still exist. If this step
+# ever dies with "Failed to checkout tag", that is what happened again.
+RUN echo "[stage xrce] $(date -Is)" \
+ && XRCE_SHA="$(uavx-lock xrce_agent_sha)" \
+ && git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git /root/src/Micro-XRCE-DDS-Agent \
+ && cd /root/src/Micro-XRCE-DDS-Agent \
+ && git cat-file -e "$XRCE_SHA^{commit}" \
+ && git checkout --quiet --force "$XRCE_SHA" \
+ && git submodule update --init --recursive --quiet \
+ && mkdir -p build && cd build \
+ && cmake .. \
+ && make -j$BUILD_JOBS \
+ && make install \
+ && ldconfig /usr/local/lib/ \
+ && command -v MicroXRCEAgent \
+ && echo "[stage xrce done] $(date -Is)"
+
+# -------------------------------------------------------- px4 message bridge
+# bash by name, because this is the one step that has to source a ROS setup
+# file and /bin/sh has no source builtin. See the note on the SHELL line.
+#
+# --parallel-workers 2 with MAKEFLAGS at half the job count, and not the other
+# way round. There are two packages in this workspace, so a high worker count
+# buys nothing, while the per-package make inherits MAKEFLAGS and multiplies by
+# it. 2 times half of 32 is 32, which is what the job asked Slurm for.
+RUN bash -eo pipefail -c 'echo "[stage ws] $(date -Is)" \
+ && mkdir -p /root/ws_uavx/src \
+ && MSGS_SHA="$(uavx-lock px4_msgs_sha)" \
+ && COM_SHA="$(uavx-lock px4_ros_com_sha)" \
+ && git clone https://github.com/PX4/px4_msgs.git /root/ws_uavx/src/px4_msgs \
+ && git -C /root/ws_uavx/src/px4_msgs cat-file -e "$MSGS_SHA^{commit}" \
+ && git -C /root/ws_uavx/src/px4_msgs checkout --quiet --force "$MSGS_SHA" \
+ && git clone https://github.com/PX4/px4_ros_com.git /root/ws_uavx/src/px4_ros_com \
+ && git -C /root/ws_uavx/src/px4_ros_com cat-file -e "$COM_SHA^{commit}" \
+ && git -C /root/ws_uavx/src/px4_ros_com checkout --quiet --force "$COM_SHA" \
+ && source /opt/ros/humble/setup.bash \
+ && cd /root/ws_uavx \
+ && MAKEFLAGS="-j$((BUILD_JOBS / 2))" colcon build --symlink-install --parallel-workers 2 \
+ && test -f install/setup.bash \
+ && echo "[stage ws done] $(date -Is)"'
+
+# ------------------------------------------------------- what actually landed
+#
+# Written to a file and not only to the build log, so the smoke job can print it
+# from inside a container nobody watched being built.
+# bash again, and -o pipefail specifically. Under /bin/sh a pipeline reports the
+# exit status of tee, so a report that found a mismatched SHA would be piped
+# into a file and the build would carry on and tag the image as good.
+RUN bash -eo pipefail -c 'uavx-report | tee /opt/uavx/version-report.txt'
+
+# gate-env.sh derives UAVX_PX4_DIR and UAVX_DEPS_WS from HOME, and the container
+# runs as root, so these are where the launcher will look for them.
+ENV UAVX_PX4_DIR=/root/PX4-Autopilot \
+    UAVX_DEPS_WS=/root/ws_uavx \
+    ROS_DISTRO_NAME=humble \
+    HEADLESS=1
+
+WORKDIR /root
+CMD ["/bin/bash"]
