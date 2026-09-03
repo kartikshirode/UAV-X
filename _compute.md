@@ -90,9 +90,9 @@ Carried from the earlier projects, plus two found today.
   through `ssh`. Write the file, `scp` it, run it. This is the same failure mode
   that mangles heredocs through `wsl.exe`, and it has cost this project time on
   both machines.
-- **`srun` was broken** on the older Slurm, failing with "Job credential
-  expired". The binary is present under 24.11.7 and whether it still fails is
-  being retested. Until that answer lands, everything goes through `sbatch`.
+- **`srun` is still broken** under Slurm 24.11.7. Retested on 3 September, job
+  989: it fails with "Job credential expired", exactly as it did on the older
+  version. Everything goes through `sbatch`, and there are no interactive jobs.
 - **uv venvs on the cluster have no pip.** Call `.venv/bin/python` directly.
 - **Only `torch-gpu` is built for sm_120.**
 
@@ -128,11 +128,18 @@ Three idle 256 core nodes with a terabyte each turn that from a week of serial
 runs into one array job. That was always the plan; the survey just makes it
 concrete.
 
-**The container is being proved now rather than in week 4.** The plan puts the
-sweep in week 4, and a container that turns out not to work would be discovered
-with no room left. Chunk 1.7 sits early in the plan for exactly this reason.
-Feasibility work is running in parallel with week 2 and lands in
-[stage-1/hpc/](stage-1/hpc/) when it has something to say.
+**The container works, proved on 3 September.** Four PX4 SITL vehicles reach
+ready for takeoff inside a rootless podman container on a compute node, under
+gzserver with no display, driven by this repository's own
+`scripts/sitl_multi.sh`. The image is 8.66 GB and builds in about 16 minutes
+from nothing, over half of that spent cloning PX4. Version fidelity is exact:
+six of six apt pins and four of four git SHAs match `versions.lock`. Full
+detail, including the four things that blocked it first, is in
+[stage-1/hpc/README.md](stage-1/hpc/README.md).
+
+That means week 4's sweep has a floor under it rather than a hope. What it does
+not yet have is image distribution, a harness that turns a scenario into a job,
+or any measurement of running several containers on one node at once.
 
 Nothing in weeks 2 or 3 depends on the cluster, and nothing should be made to.
 
