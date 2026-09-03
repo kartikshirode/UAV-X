@@ -145,6 +145,31 @@ AGENT_PID=$!
 sleep 3
 kill -0 "$AGENT_PID" 2>/dev/null || gdie "the agent died on startup, see /tmp/uavx-agent.log"
 
+# /clock runs at 10 Hz and that is the ceiling on everything the runner
+# measures in simulated time. libgazebo_ros_init defaults to 10 Hz and nothing
+# here changes it yet. Every `_s` field in a run record is measured against this
+# clock, and the runner samples poses on it, so a sample can land only once per
+# tick. Across eight archived runs the ratio of pose samples to clock messages
+# is 0.402 at a 5 Hz sampling target and exactly 1.000 at 20 Hz, so the sampler
+# is already against the wall and a record could otherwise claim a resolution it
+# never had. architecture.md freezes 20 Hz for the coverage source and for the
+# separation monitor, and week 2's coverage_fraction is computed off those
+# samples, so this has to be raised before that number means anything.
+#
+# Two ways of raising it were tried on 3 September and neither works:
+#
+#   -p publish_rate:=100     rclcpp refuses it, publish_rate is a double, and
+#                            the failure arrives as gzserver aborting with a
+#                            core dump rather than as a message about a type.
+#   --ros-args -p ...:=100.0 gzserver's own parser is boost::program_options
+#                            and knows nothing about --ros-args, so it takes
+#                            the leftover token as a positional and dies with
+#                            "Invalid logfile [publish_rate:=100.0]".
+#
+# The remaining route is a plugin block in the world file, which means bringing
+# a world into this repository rather than using PX4's copy. That is a change to
+# what the simulation runs and it is not being made in passing.
+
 gsay "starting gzserver headless, no client"
 WORLD_FILE="${GZ_DIR}/sitl_gazebo-classic/worlds/${WORLD}.world"
 [ -f "$WORLD_FILE" ] || gdie "no world file at ${WORLD_FILE}"
