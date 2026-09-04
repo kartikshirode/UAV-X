@@ -113,7 +113,16 @@ class MissionNode(Node):
             float(self.get_parameter("survey_altitude_m").value),
             start_north=bool(self.get_parameter("start_north").value),
         )
-        self.executor = MissionExecutor(
+        # Not self.executor. rclpy.node.Node defines `executor` as a
+        # property with a setter, and assigning to it calls
+        # new_executor.add_node(self) on whatever was assigned. Every
+        # mission executor died in this line with AttributeError:
+        # 'MissionExecutor' object has no attribute 'add_node', on the
+        # first survey run, which was the first time this node had ever
+        # been started. `executor` and `handle` are the only two settable
+        # properties Node has, and test_node_attributes.py now refuses
+        # either name on any node in this workspace.
+        self.mission = MissionExecutor(
             self.vehicle_id, strip, path,
             float(self.get_parameter("acceptance_radius_m").value))
 
@@ -139,7 +148,7 @@ class MissionNode(Node):
     def on_position(self, msg: VehicleLocalPosition) -> None:
         """Advance the plan on this vehicle's own PX4 estimate."""
         here = frames.px4_to_frozen((msg.x, msg.y, msg.z), self.home)
-        target = self.executor.update(here)
+        target = self.mission.update(here)
         if target is None:
             return
         stamp = self.get_clock().now().nanoseconds // 1000
