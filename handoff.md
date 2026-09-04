@@ -146,7 +146,7 @@ Carried from the Vaani and Adversarial IDS handoffs, same servers:
 
 ## Next
 
-NEXT-WEEK: 2
+NEXT-WEEK: 3
 
 Week 2 is the survey and the first mesh work. Before any of it, read
 [docs/progress/week-1.md](docs/progress/week-1.md) and

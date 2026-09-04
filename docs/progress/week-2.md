@@ -1,13 +1,13 @@
 # Week 2: the survey, the evaluator and the comms logic
 
-6 to 12 September on the plan. Built 3 September, ahead of it, because week 1
-finished early and the cluster became reachable the same day.
+6 to 12 September on the plan. Built 3 and 4 September, ahead of it, because
+week 1 finished early and the cluster became reachable the same day.
 
-Three of the four chunks are implemented and one is not started. The week is
-**not accepted**: acceptance is `bash scripts/gate.sh 2` exiting 0, and chunk
-2.4 does not exist yet. Until 4 September no gate could run at all, because
-`submission/human-preflight.json` did not exist. It does now, and the first
-thing running a gate did was find a fifth harness defect, below.
+All four chunks are in and the week is accepted. `bash scripts/gate.sh 2`
+exited 0 on 4 September, so WEEK-2-DONE. The two runs behind it are
+`harness_check_20260904T022051Z`, which 2.2 breaks on purpose to watch the
+provenance check refuse it, and `survey_baseline_20260904T022321Z`, which is
+the survey.
 
 ## What landed
 
@@ -16,12 +16,7 @@ thing running a gate did was find a fifth harness defect, below.
 | `2.1` | `uavx_mission`, the planner, the partitioner and the executor | 81 tests, and 24 mutations of wrong implementations all caught |
 | `2.2` | `uavx_eval`, the collector and the provenance check | 64 tests, and each of 13 rejection rules disabled in turn to watch its test fail |
 | `2.3` | `uavx_comms`, the link model, routing and election | 91 tests, and 52 mutations all caught |
-| `2.4` | the survey scenario and the coverage run | **not started** |
-
-415 package tests across four packages, 51 seam fixtures, 53 submission checks,
-19 launcher geometry checks, 113 gate expressions, 25 shell scripts. The three
-chunk gates were run directly, because every gate calls `gate_preflight` first
-and that refuses without the human receipt.
+| `2.4` | the survey scenario and the coverage run | `survey_baseline_20260904T022321Z`, every cell of the frozen box covered |
 
 ## The evidence worth reading
 
@@ -51,9 +46,59 @@ could never equal the generated set. A lease renewed for a relay that had died,
 so the epoch never closed. And an epoch counter that reached 56 for a single
 failure, because the give-up path did not arm its own suppression.
 
+**The survey covered the box completely.** Four vehicles, 420 s, 400
+cells of 400 seen, off 16,692 sampled poses and 4,269 ground truth frames, in a
+peak of 947.5 MiB. The figure comes from where the vehicles were and not from
+where the planner meant to send them, and the label saying so is in the record
+beside it. It took four attempts to get a number that meant anything, and the
+first three are the section below.
+
+## What flying the survey found
+
+Chunk 2.4 is the first chunk in this project that started our own nodes inside a
+simulator. Four defects surfaced in the first four minutes of doing that, and
+every one of them sat in code that already had tests passing over it.
+
+1. **The mission node could not construct itself.** `rclpy.node.Node` defines
+   `executor` as a property with a setter, and the setter calls `add_node` on
+   whatever it is handed, so `self.executor = MissionExecutor(...)` raised
+   `AttributeError` in every vehicle. `executor` and `handle` are the only two
+   settable properties the base class has and the node had picked one of them.
+   Chunk 2.1 proved the planner and the executor as arithmetic with no ROS
+   anywhere, which was right for the arithmetic and left twenty lines of wiring
+   never once executed. `test_node_attributes.py` reads the reserved names out
+   of rclpy and the assignments out of the tree, so neither side is a copy, and
+   it scans every package rather than the one that had the bug.
+2. **The topic the coverage metric is scored from did not exist.**
+   `libgazebo_ros_state` is a WorldPlugin and `gzserver -s` loads SystemPlugins,
+   so the launcher's attempt to load it produced one line in a log nobody was
+   reading and no `/gazebo/model_states` at all. The captured graph proves it:
+   `/gazebo` published the clock, the performance metrics and `/rosout`, and
+   nothing else. Chunk 2.2 built a collector against a topic that has never been
+   on this stack, and its 64 tests all passed because they hand it poses
+   directly. The first survey flew the whole run and reported nothing covered.
+   A WorldPlugin is declared inside a world, so this repository carries one now.
+3. **The vehicles landed halfway through and kept reporting offboard.** The
+   offboard heartbeat was published inside the position callback, so it depended
+   on another topic's cadence and stopped outright when the plan finished, which
+   is exactly when the vehicle is airborne and needs to hold. PX4's own rcS sets
+   the offboard loss timeout to half a second in SITL. The log reads: offboard
+   granted, failsafe activated, matching flight task was not able to run, landing
+   detected, disarmed by landing. It has its own timer now.
+4. **The collector's final payload could never publish.** `rclpy.init` installs
+   signal handlers that shut the context down before the exception reaches any
+   `finally`, so the one payload marked final, the one the runner waits for and
+   builds the record from, always failed with an invalid context. The node owns
+   its own handlers now and restores them on the way out.
+
+The simulated battery is a fifth, and it is a property of the simulator rather
+than a defect: it drains to half in a minute, so every run longer than that
+flies on a warning. The runner raises the floor before a survey starts, through
+the same echo and confirm path the cruise speed uses.
+
 ## Defects found in the acceptance harness
 
-Week 1 found fourteen. Week 2 has found five more, and three of them would have
+Week 1 found fourteen. Week 2 has found seven more, and five of them would have
 failed correct code rather than passed broken code.
 
 1. **A chunk was judged by every package in the build base.** `colcon test` is
@@ -100,6 +145,22 @@ failed correct code rather than passed broken code.
    the generated bindings and pins `SwarmPacket`'s fields, their order, the
    `uint32` sequence and the five `kind` constants. A widened type, a changed
    constant and a reordered field were each watched failing it.
+6. **The publisher of ground truth was an unaccounted-for member of the swarm.**
+   The world plugin registers its own node beside `/gazebo` rather than
+   publishing through it, and nothing in `seam_manifests.json` knew about it, so
+   the first graph that carried ground truth failed the seam pass. It is chunk
+   1.7's `/gazebo` finding one plugin later, and the answer is the same: the
+   seam rule is about who reads ground truth and not who publishes it.
+7. **The one scenario with no radio was required to show one.** A scenario may
+   narrow the list of outside processes its graph must contain, and that
+   allowance was restricted to week 1 on the reasoning that a later scenario has
+   a radio by definition. `survey_baseline` does not: `architecture.md` section 6
+   disables communications in it so the run measures the mission alone. The rule
+   moved rather than the scenario. Weeks 1 and 2 may drop a required process and
+   must record which frozen decision removed it, weeks 3 and 4 may not drop one
+   at all, and the checker prints the reason it accepted. `harness_check` had
+   been overriding in silence since week 1 and six of its fixtures went red the
+   moment a reason became mandatory, which is how the silence was noticed.
 
 ## The cluster
 
@@ -116,17 +177,27 @@ sharing a node.
 
 ## Outstanding
 
-**Chunk 2.4 is not started.** The survey scenario, the coverage run and the
-`coverage_source` the gate requires. It is the first chunk this week that needs
-the simulator and the first that integrates the three packages above.
+**The altitude layers cannot guarantee the separation floor.** `altitude_layer_m` and the
+separation floor are both frozen at 10 m in `architecture.md` section 5, so two
+vehicles on adjacent layers passing one above the other sit exactly on the
+floor, and any altitude error at all breaches it. PX4 holds altitude to about a
+tenth of a metre. The accepted survey run recorded a closest approach of 9.90 m
+and one frame under the floor, which is that arithmetic and not a control
+failure. Nothing in week 2 asserts separation, so this does not touch the gate
+that just passed; `mission_integrated` in week 4 requires zero violations across
+its whole run and will fail on it. Two frozen numbers are in conflict and
+standing rule 4 forbids an agent from moving either, so it is written down here
+instead. Widening the layer spacing and lowering the floor both change a figure
+the proposal quotes.
 
-**Poses reach 9.78 Hz against a frozen 20 Hz.** Carried from week 1 with its
-cause now known: gazebo publishes `/clock` at 10 Hz and the sampler cannot
-outrun it. Chunk 2.1 measured what that costs and it is less than it sounds. At
-survey speed the along-track sample spacing is 0.307 m against a 12 m sensor
-footprint, so the rate changes the resolution of the measurement rather than
-whether the plan covers. The remaining route is a world file carried in this
-repository instead of PX4's copy.
+**Poses reach the clock and no further.** Carried from week 1 with its cause
+now known and its cost now measured. Gazebo publishes `/clock` at 10 Hz and
+neither the pose sampler nor the ground truth sampler can outrun it; the survey
+run took 4268 ground truth frames at exactly 10.0 Hz against a 20 Hz target. It
+has been attacked three ways and the third is new: a plugin block in the world
+file cannot carry it, because `libgazebo_ros_init` is a SystemPlugin and only
+WorldPlugins may be declared in a world. What it costs is resolution rather than
+coverage, which the survey now demonstrates rather than argues.
 
 **Two frozen documents need a person, and no agent may settle either.**
 `architecture.md` section 4 step 1 puts `slot_position` in the ELECTION message,
@@ -135,17 +206,10 @@ which is not known until step 3. Chunk 2.3 put it in ASSIGN and recorded the
 contradiction rather than editing the document. Separately, `survey_baseline`
 names a cruise speed and no survey speed, where `mission_integrated` freezes
 both; chunk 2.1 made it configuration and tested feasibility at the slower
-figure, which is the conservative direction.
+figure, which is the conservative direction, and the scenario file flies the
+faster one.
 
 **`check_geometry.py` carries the survey box as function locals.** The same four
-numbers now live there and in `architecture.md`, and nothing compares them. It
-is the shape of every drift finding this project has had.
-
-## Why this file has no done marker
-
-The done marker goes in when `bash scripts/gate.sh 2` passes, and this file does
-not spell it out, because the loop greps for the string rather than reading the
-sentence around it. The receipt `gate_preflight` needs exists since 4 September,
-so the gate runs; it fails at `w2_survey` because chunk 2.4 has not been built.
-Two dates in that receipt, the clarification channel and the organiser reply
-inbox, go stale after 14 days and have to be renewed before the send.
+numbers now live there, in `architecture.md`, in `uavx_mission.survey_area` and
+in `scenarios/survey_baseline.yaml`. The last two are compared with each other
+and with the document; the checker's copy is compared with nothing.
