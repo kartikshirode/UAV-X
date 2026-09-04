@@ -45,6 +45,17 @@ from uavx_mission.survey_area import (BASELINE_CELL_M, BASELINE_SENSOR_RADIUS_M,
 # architecture.md section 6: observation packets, 5 Hz per surveying vehicle.
 OBSERVATION_HZ = 5.0
 
+# PX4 leaves offboard when OffboardControlMode stops arriving, and PX4's own
+# rcS sets COM_OF_LOSS_T to half a second in SITL. Chunk 2.4's second survey
+# run lost all four vehicles to that: the heartbeat was published inside the
+# position callback, so it depended on another topic's cadence and stopped
+# outright the moment the plan finished, which is exactly when the vehicle is
+# still airborne and needs to hold. PX4 fell back to position control, found no
+# manual control to read, logged "Matching flight task was not able to run" and
+# landed the vehicle. It has its own timer now, well above the 2 Hz PX4 asks
+# for and independent of everything else.
+CONTROL_MODE_HZ = 20.0
+
 # architecture.md section 3, "What delivered once means". Both are frozen and
 # both are named rather than written into the call below, because a bare 300
 # beside a bare 256 in a message builder is unreadable and unsearchable.
@@ -139,29 +150,54 @@ class MissionNode(Node):
             self.on_position, PX4_QOS)
 
         self.sequence = 0
+        # The last setpoint sent, so the heartbeat timer can keep holding it
+        # after the plan is finished. None until the first position arrives.
+        self.last_setpoint = None
         self.create_timer(1.0 / OBSERVATION_HZ, self.publish_observation)
+        self.create_timer(1.0 / CONTROL_MODE_HZ, self.publish_control_mode)
         self.get_logger().info(
             f"{self.vehicle_id} surveying strip {strip.index}, "
             f"x {strip.x_min:.3f} to {strip.x_max:.3f}, "
             f"{len(path)} waypoints")
 
+    def stamp(self) -> int:
+        """Microseconds, the way every PX4 message here is timestamped."""
+        return self.get_clock().now().nanoseconds // 1000
+
+    def publish_control_mode(self) -> None:
+        """The offboard heartbeat, and the setpoint that goes with it.
+
+        Unconditional. A vehicle that has finished its plan is still flying,
+        and one whose position estimate has gone quiet for a moment is too, so
+        neither may stop this. When the plan is done the last setpoint is
+        republished, which holds the vehicle where it finished rather than
+        handing PX4 nothing to fly to.
+        """
+        mode = OffboardControlMode()
+        mode.timestamp = self.stamp()
+        mode.position = True
+        self.control_mode.publish(mode)
+
+        if self.last_setpoint is None:
+            return
+        setpoint = TrajectorySetpoint()
+        setpoint.timestamp = mode.timestamp
+        setpoint.position = list(self.last_setpoint)
+        self.setpoint.publish(setpoint)
+
     def on_position(self, msg: VehicleLocalPosition) -> None:
-        """Advance the plan on this vehicle's own PX4 estimate."""
+        """Advance the plan on this vehicle's own PX4 estimate.
+
+        This decides where to go. Publishing is the timer's job, so a gap in
+        this topic slows the plan down and never drops the vehicle out of
+        offboard.
+        """
         here = frames.px4_to_frozen((msg.x, msg.y, msg.z), self.home)
         target = self.mission.update(here)
         if target is None:
             return
-        stamp = self.get_clock().now().nanoseconds // 1000
-
-        mode = OffboardControlMode()
-        mode.timestamp = stamp
-        mode.position = True
-        self.control_mode.publish(mode)
-
-        setpoint = TrajectorySetpoint()
-        setpoint.timestamp = stamp
-        setpoint.position = [float(v) for v in frames.frozen_to_px4(target, self.home)]
-        self.setpoint.publish(setpoint)
+        self.last_setpoint = [float(v) for v in
+                              frames.frozen_to_px4(target, self.home)]
 
     def on_packet(self, msg: SwarmPacket) -> None:
         """Everything arriving from the radio, which in W2 is nothing.
