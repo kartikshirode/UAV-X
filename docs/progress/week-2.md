@@ -4,9 +4,10 @@
 finished early and the cluster became reachable the same day.
 
 Three of the four chunks are implemented and one is not started. The week is
-**not accepted**, for the same reason week 1 is not: acceptance is
-`bash scripts/gate.sh 2` and that cannot run until
-`submission/human-preflight.json` exists.
+**not accepted**: acceptance is `bash scripts/gate.sh 2` exiting 0, and chunk
+2.4 does not exist yet. Until 4 September no gate could run at all, because
+`submission/human-preflight.json` did not exist. It does now, and the first
+thing running a gate did was find a fifth harness defect, below.
 
 ## What landed
 
@@ -52,7 +53,7 @@ failure, because the give-up path did not arm its own suppression.
 
 ## Defects found in the acceptance harness
 
-Week 1 found fourteen. Week 2 has found four more, and three of them would have
+Week 1 found fourteen. Week 2 has found five more, and three of them would have
 failed correct code rather than passed broken code.
 
 1. **A chunk was judged by every package in the build base.** `colcon test` is
@@ -86,6 +87,19 @@ failed correct code rather than passed broken code.
    03 was re-run by hand afterwards, and the residue is still installed. Found
    while building the cluster image, which is a fair argument for having built
    it.
+5. **W1.1 tested a package that had no tests.** `w1_msgs` calls
+   `gate_test uavx_msgs`, and `uavx_msgs` was five `.msg` files and a
+   CMakeLists that generates them, with nothing under `test/`. `colcon test`
+   reported 0 tests, and until defect 2 was fixed the gate called that a pass,
+   so the line was decoration and the only real check was the contract
+   comparison after it. The first full run of `bash scripts/gate.sh 1`, on
+   4 September once the preflight receipt existed, failed on its first chunk
+   for exactly this. The question plan.md asks of 1.1 is whether the five
+   types resolve and `SwarmPacket` carries its identity fields, so the fix is
+   a test that asks it: `test/test_interfaces.py` imports all five types from
+   the generated bindings and pins `SwarmPacket`'s fields, their order, the
+   `uint32` sequence and the five `kind` constants. A widened type, a changed
+   constant and a reordered field were each watched failing it.
 
 ## The cluster
 
@@ -131,8 +145,7 @@ is the shape of every drift finding this project has had.
 
 The done marker goes in when `bash scripts/gate.sh 2` passes, and this file does
 not spell it out, because the loop greps for the string rather than reading the
-sentence around it. The gate cannot run: `gate_preflight` refuses without
-`submission/human-preflight.json`, which records registration, the eligibility
-declaration, the clarification channel, the organiser email, the delivery route
-and a compliance sign-off. Registration is done and the issued id is recorded.
-The other five are open and no amount of code closes them.
+sentence around it. The receipt `gate_preflight` needs exists since 4 September,
+so the gate runs; it fails at `w2_survey` because chunk 2.4 has not been built.
+Two dates in that receipt, the clarification channel and the organiser reply
+inbox, go stale after 14 days and have to be renewed before the send.
