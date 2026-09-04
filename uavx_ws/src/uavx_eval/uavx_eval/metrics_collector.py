@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import math
+import signal
 
 import rclpy
 from gazebo_msgs.msg import ModelStates
@@ -157,11 +158,40 @@ class MetricsCollectorNode(Node):
 
 
 def main(args=None) -> int:
+    """Sample until asked to stop, then publish the payload that counts.
+
+    The signal handling is not decoration. `rclpy.init` installs handlers for
+    SIGINT and SIGTERM that shut the context down before the exception reaches
+    any `finally`, so the final publish below ran against a dead context and
+    logged "publisher's context is invalid" every single time. Chunk 2.4's
+    first survey run found it: the runner waits for a final payload, and this
+    node could never send one.
+
+    So the handlers are replaced after init with ones that only set a flag,
+    the spin becomes a loop that watches it, and the last publish happens
+    while the context is still up. The originals go back on the way out, since
+    a process that swallows its own termination signal is worse than one that
+    misses a payload.
+    """
     rclpy.init(args=args)
     node = None
+    stopping = []
+
+    def request_stop(signum, frame):                 # noqa: ARG001
+        stopping.append(signum)
+
+    previous = {}
+    for number in (signal.SIGINT, signal.SIGTERM):
+        try:
+            previous[number] = signal.signal(number, request_stop)
+        except (OSError, ValueError):
+            # Not the main thread, or a platform without the signal. The loop
+            # still ends when the context goes down.
+            pass
     try:
         node = MetricsCollectorNode()
-        rclpy.spin(node)
+        while rclpy.ok() and not stopping:
+            rclpy.spin_once(node, timeout_sec=0.1)
     except KeyboardInterrupt:
         pass
     finally:
@@ -174,6 +204,11 @@ def main(args=None) -> int:
             except Exception as exc:                 # noqa: BLE001
                 node.get_logger().error(f"final metrics publish failed: {exc}")
             node.destroy_node()
+        for number, handler in previous.items():
+            try:
+                signal.signal(number, handler)
+            except (OSError, ValueError):
+                pass
         if rclpy.ok():
             rclpy.shutdown()
     return 0
