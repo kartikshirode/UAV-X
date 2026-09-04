@@ -80,6 +80,27 @@
       "minimum": 1,
       "description": "Zero means nothing was ever observed, which is how 'no samples' masquerades as 'no separation violations'."
     },
+    "coverage_fraction": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Chunk 2.4. Cells of the frozen box whose centre fell inside the sensor footprint of at least one sampled pose, over the cell count. Present only on a run that surveys. Equal to coverage_cells_seen over coverage_cells_total, and the writer refuses a record where it is not."
+    },
+    "coverage_source": {
+      "type": "string",
+      "enum": ["pose_samples"],
+      "description": "Where the fraction came from. The gate asserts the literal, because a coverage figure computed off the planned path and one computed off flown poses are the same type and mean opposite things. The collector writes it and nothing else may."
+    },
+    "coverage_cells_total": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The denominator: how many cells the frozen box tiles into."
+    },
+    "coverage_cells_seen": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The numerator: cells at least one sampled pose covered."
+    },
     "app_packets_sent_by_node": {
       "type": "object",
       "additionalProperties": {

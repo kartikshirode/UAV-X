@@ -448,3 +448,75 @@ def test_the_scenario_hash_is_of_the_file_as_read(tmp_path):
     assert len(first) == 64
     scenario.write_bytes(b"name: harness_check\nseed: 17\n")
     assert run_record.sha256_of_file(scenario) != first
+
+
+# ------------------------------------------------------ chunk 2.4, coverage
+def coverage(**overrides):
+    base = {"coverage_fraction": 0.9725, "coverage_source": "pose_samples",
+            "coverage_cells_total": 400, "coverage_cells_seen": 389}
+    base.update(overrides)
+    return base
+
+
+def test_a_surveying_run_carries_its_coverage_at_the_top_level():
+    rec = record(coverage=coverage())
+    for key, value in coverage().items():
+        assert rec[key] == value
+
+
+def test_a_run_that_surveys_nothing_carries_no_coverage_fields():
+    rec = record()
+    for key in run_record.COVERAGE_FIELDS:
+        assert key not in rec
+
+
+def test_a_fraction_that_is_not_its_counts_is_refused():
+    with pytest.raises(RecordError, match="not 389 over 400"):
+        record(coverage=coverage(coverage_fraction=0.99))
+
+
+def test_a_partial_coverage_block_is_refused():
+    with pytest.raises(RecordError, match="all four"):
+        record(coverage={"coverage_fraction": 0.9725,
+                         "coverage_source": "pose_samples"})
+
+
+def test_a_fraction_outside_the_unit_interval_is_refused():
+    with pytest.raises(RecordError, match="coverage_fraction"):
+        record(coverage=coverage(coverage_fraction=1.2,
+                                 coverage_cells_seen=480))
+
+
+def test_more_cells_seen_than_exist_is_refused():
+    with pytest.raises(RecordError, match="exceeds"):
+        record(coverage=coverage(coverage_cells_seen=401,
+                                 coverage_fraction=1.0))
+
+
+def test_a_blank_coverage_label_is_refused():
+    with pytest.raises(RecordError, match="coverage_source"):
+        record(coverage=coverage(coverage_source=""))
+
+
+def test_the_real_checker_reads_coverage_with_the_w2_expressions(tmp_path):
+    """The two expressions w2_survey asserts, against the bytes on disk."""
+    path = tmp_path / f"{RUN_ID}.jsonl"
+    write_record(path, record(coverage=coverage()))
+    expressions = ("coverage_fraction>=0.95", "coverage_source==pose_samples")
+    arguments = [sys.executable, VALIDATE_RECORD, str(path)]
+    for expression in expressions:
+        arguments += ["--require", expression]
+    done = subprocess.run(arguments, capture_output=True, text=True)
+    assert done.returncode == 0, done.stdout + done.stderr
+    for expression in expressions:
+        assert f"ok    {expression}" in done.stdout
+
+
+def test_the_schema_refuses_a_coverage_label_it_does_not_know(tmp_path):
+    """enum in the schema is enforced, not decoration."""
+    rec = record(coverage=coverage(coverage_source="planned_path"))
+    path = tmp_path / f"{RUN_ID}.jsonl"
+    write_record(path, rec)
+    done = subprocess.run([sys.executable, VALIDATE_RECORD, str(path)],
+                         capture_output=True, text=True)
+    assert done.returncode != 0, done.stdout + done.stderr

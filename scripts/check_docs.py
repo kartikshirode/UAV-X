@@ -582,9 +582,9 @@ guard(before, "every package path in the gate goes through the one source root")
 # shrink. Each week deletes its own entries as it lands. A path that is
 # neither defined nor listed here fails.
 UNTYPED_GATE_PATHS = {
-    # W2, the survey and evaluator fields.
-    "coverage_fraction", "coverage_source", "vehicles_completed",
-    "delivery_ratio",
+    # W2, the survey and evaluator fields. coverage_fraction and
+    # coverage_source were typed by chunk 2.4 and left this list.
+    "vehicles_completed", "delivery_ratio",
     # W3, the communication and relay claim.
     "delivery_ratio_by_node", "relay_role_holder", "relay_role_moved",
     "time_to_reconnect_s", "observations_set_equal", "min_pairwise_separation_m",

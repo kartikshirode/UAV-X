@@ -104,6 +104,12 @@ REQUIRED_VERSION_KEYS = (
 # file it knows the next gate refuses.
 MIN_DURATION_FRACTION = 0.95
 
+# Chunk 2.4. The four coverage fields a surveying run carries, all or none.
+# scenarios/run-record.schema.json types each of them; what the schema cannot
+# say is that they agree with each other, and validate_record does.
+COVERAGE_FIELDS = ("coverage_fraction", "coverage_source",
+                   "coverage_cells_total", "coverage_cells_seen")
+
 TEMP_PREFIX = ".uavx-record-"
 TEMP_SUFFIX = ".tmp"
 
@@ -305,6 +311,48 @@ def _text_problem(record, key, pattern=None, minimum_length=0):
     return None
 
 
+def _coverage_problems(record) -> list:
+    """All four coverage fields, agreeing with each other, or none of them.
+
+    A record with a fraction and no counts cannot be checked against
+    anything, and one whose fraction is not its counts divided is a record
+    somebody edited. The gate reads only the fraction and the label, which is
+    exactly why the writer refuses the rest being wrong.
+    """
+    present = [key for key in COVERAGE_FIELDS if key in record]
+    if not present:
+        return []
+    if len(present) != len(COVERAGE_FIELDS):
+        missing = [key for key in COVERAGE_FIELDS if key not in record]
+        return [f"the record carries {', '.join(present)} without "
+                f"{', '.join(missing)}; the coverage block is all four "
+                f"fields or none"]
+    problems = []
+    fraction = record.get("coverage_fraction")
+    source = record.get("coverage_source")
+    total = record.get("coverage_cells_total")
+    seen = record.get("coverage_cells_seen")
+    if not _is_number(fraction) or not 0.0 <= fraction <= 1.0:
+        problems.append(f"coverage_fraction is {fraction!r}, not a number in "
+                        f"[0, 1]")
+    if not isinstance(source, str) or not source.strip():
+        problems.append(f"coverage_source is {source!r}; the label says "
+                        f"whether the figure came off flown poses")
+    if not _is_integer(total) or total < 1:
+        problems.append(f"coverage_cells_total is {total!r}, not a positive "
+                        f"count")
+    if not _is_integer(seen) or seen < 0:
+        problems.append(f"coverage_cells_seen is {seen!r}, not a count")
+    if not problems:
+        if seen > total:
+            problems.append(f"coverage_cells_seen {seen} exceeds the "
+                            f"{total} cells in the box")
+        elif abs(fraction - seen / total) > 1e-9:
+            problems.append(f"coverage_fraction {fraction} is not "
+                            f"{seen} over {total}")
+    return problems
+
+
 def validate_record(record) -> dict:
     """Every rule scenarios/run-record.schema.json states, plus the semantic
     ones scripts/validate_record.py adds. Raises RecordError listing all of
@@ -416,6 +464,8 @@ def validate_record(record) -> dict:
     if isinstance(started, str) and isinstance(ended, str) and ended < started:
         problems.append("ended_at is earlier than started_at")
 
+    problems += _coverage_problems(record)
+
     if problems:
         raise RecordError("; ".join(problems))
     return record
@@ -503,12 +553,17 @@ def build_record(*, run_id, scenario_path, scenario_sha256, seed, commit_sha,
                  injected_events, requested_duration_s, elapsed_sim_s,
                  clock_source, source_tree_sha256, resources,
                  injected_event_observed, injected_event_count,
-                 graph_snapshot_sha256=None):
+                 graph_snapshot_sha256=None, coverage=None):
     """Assemble one record and validate it before anybody can write it.
 
     Every argument is keyword only and every one of them is required. A
     positional slot invites passing the scenario hash where the source hash
     goes, and both are 64 hex characters, so nothing downstream would notice.
+
+    `coverage` is the one optional block with content: the four fields
+    uavx_sim.survey.coverage_from_payload returns for a run that surveyed,
+    or None for one that did not. They land at the top level of the record
+    because that is where the gate reads them.
     """
     record = {
         "run_id": run_id,
@@ -536,6 +591,17 @@ def build_record(*, run_id, scenario_path, scenario_sha256, seed, commit_sha,
     }
     if graph_snapshot_sha256 is not None:
         record["graph_snapshot_sha256"] = graph_snapshot_sha256
+    if coverage is not None:
+        if not isinstance(coverage, dict):
+            raise RecordError(f"coverage is {coverage!r}, not the four field "
+                              f"block the survey module produces")
+        # Only the keys given. Filling the missing ones with None would
+        # turn 'the collector reported three of four fields' into 'the
+        # collector reported a null cell count', and the second reads
+        # like a measurement.
+        for key in COVERAGE_FIELDS:
+            if key in coverage:
+                record[key] = coverage[key]
     return validate_record(record)
 
 
