@@ -65,11 +65,22 @@ def required_outside(manifest: dict, block: dict, name: str) -> list:
     if "required_outside" not in block:
         return list(manifest.get("required_outside", []))
     week = block.get("week")
-    if week != 1:
+    if week not in (1, 2):
         die(f"scenario {name} is week {week} and overrides required_outside. "
-            f"That allowance exists for the week 1 harness, which runs before "
-            f"any swarm node is built. A later scenario narrowing this list is "
-            f"how a run with no radio in it passes a graph check.")
+            f"That allowance exists for the scenarios that run before the "
+            f"radio is built. A week 3 or 4 scenario has one by definition, "
+            f"and narrowing this list there is how a run with no radio in it "
+            f"passes a graph check.")
+    why = block.get("required_outside_why")
+    if not isinstance(why, str) or len(why.strip()) < 40:
+        die(f"scenario {name} narrows required_outside and gives no "
+            f"required_outside_why. Dropping the process that models the "
+            f"radio is allowed here and is never allowed silently: say which "
+            f"frozen decision removed it and why the run still means "
+            f"something without it.")
+    print(f"  note       {name} runs without "
+          f"{', '.join(sorted(set(manifest.get('required_outside', [])) - set(block['required_outside'])))}: "
+          f"{why.strip()}")
     return list(block["required_outside"])
 
 

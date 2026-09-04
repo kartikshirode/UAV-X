@@ -10,7 +10,8 @@
     "/link_layer",
     "/metrics_collector",
     "/scenario_runner",
-    "/gazebo"
+    "/gazebo",
+    "/gazebo/gazebo_ros_state"
   ],
   "_outside_note": "Matched by exact name. Substring matching gave anything called /uav_2/link_layer_helper the link layer's exemption to read ground truth, which is the whole bypass.",
   "swarm_packet_type": "uavx_msgs/msg/SwarmPacket",
@@ -83,7 +84,12 @@
       "per_vehicle": [
         "mission_executor"
       ],
-      "extra": []
+      "extra": [],
+      "required_outside": [
+        "/metrics_collector",
+        "/scenario_runner"
+      ],
+      "required_outside_why": "architecture.md section 6 disables communications in survey_baseline so the scenario measures the mission and nothing else. There is no radio in this run to show, and the link layer that would model one is a week 3 deliverable. The collector stays required, because coverage is the whole point of the scenario and a graph without the process that measured it is not evidence for the number."
     },
     "harness_check": {
       "week": 1,
@@ -91,7 +97,8 @@
       "extra": [],
       "required_outside": [
         "/scenario_runner"
-      ]
+      ],
+      "required_outside_why": "harness_check runs the harness and nothing else. There are no routers, no mission executors and no GCS in week 1 because none of them are built yet, and the link layer and the metrics collector are among them, so the only process this scenario can require is the runner itself. It is never cited as evidence for a rubric row, which is why check_submission_const.HARNESS_RUNS keeps it out of the nine runs the final package requires."
     }
   },
   "required_outside": [
@@ -219,6 +226,24 @@
       ],
       "actions": []
     },
+    "/gazebo/gazebo_ros_state": {
+      "publishers": [
+        "/gazebo/model_states",
+        "/gazebo/link_states",
+        "/rosout",
+        "/parameter_events"
+      ],
+      "subscribers": [
+        "/clock",
+        "/parameter_events"
+      ],
+      "services": [
+        "/gazebo/gazebo_ros_state/*",
+        "/gazebo/get_entity_state",
+        "/gazebo/set_entity_state"
+      ],
+      "actions": []
+    },
     "/gazebo": {
       "publishers": [
         "/clock",
@@ -244,7 +269,8 @@
       "actions": []
     }
   },
-  "_survey_note": "Chunk 2.4. survey_baseline runs four mission executors and the collector and nothing else, because architecture.md section 6 disables communications in it so the scenario measures the mission alone. It does not override required_outside: that allowance is week 1 alone, and once the link layer exists in week 3 this graph has to show it like every other scenario. The runner subscribes to /uavx_eval/metrics for the collector final payload, which is how coverage reaches the record, and that subscription is listed above because everything an outside process holds is.",
+  "_survey_note": "Chunk 2.4. survey_baseline runs four mission executors and the collector and nothing else, because architecture.md section 6 disables communications in it so the scenario measures the mission alone. It was first written without a required_outside override, on the reasoning that the allowance belonged to week 1; the third survey run failed on exactly that, reporting a missing link layer in the one scenario the design says has no radio. The override is here now and it carries its reason, which is the rule seam_graph.required_outside enforces: weeks 1 and 2 may drop a required process and must say why, weeks 3 and 4 may not drop one at all. The runner subscribes to /uavx_eval/metrics for the collector final payload, which is how coverage reaches the record, and that subscription is listed above because everything an outside process holds is.",
   "_harness_note": "Chunk 1.7. gate.sh runs check_seam.sh --scenario harness_check and no such manifest existed, so that line exited 2, CANNOT CHECK, and the chunk could never have passed. harness_check runs the harness and nothing else: there are no routers, no mission executors and no GCS in week 1, because none of them are built yet. So its expected set is empty and the only process it requires is the runner. required_outside is overridden here rather than globally, so a real scenario still has to show the radio and the collector; a scenario that quietly dropped either would be claiming delivery numbers that came from somewhere else.",
+  "_state_plugin_note": "Chunk 2.4. libgazebo_ros_state is a WorldPlugin declared in worlds/uavx_empty.world, and it registers its own ROS node beside /gazebo rather than publishing through it. Nothing accounted for that, so the first run with ground truth in it reported the publisher of ground truth as an unaccounted-for member of the swarm. It is the simulator, exactly like /gazebo, and the seam rule is about who reads ground truth and not who publishes it. Its two entity-state services are how a caller could move a model, which no process in this repository does and every one of them would be caught by its own allowlist if it tried.",
   "_gazebo_note": "Chunk 1.7, the first time this checker ever ran over a graph captured from a real ROS system rather than a synthetic fixture. /gazebo is a ROS node and appears in every scenario graph, and nothing accounted for it, so a correct run failed with the simulator itself listed as an unaccounted-for member of the swarm. It is the simulator: it publishes the clock and the ground truth and it owns the world services. The seam rule was never about who publishes ground truth, it is about who reads it, and the SwarmPacket ban below still applies to it like anything else."
 }
