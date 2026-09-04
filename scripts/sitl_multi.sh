@@ -31,7 +31,9 @@ source "${HERE}/gate-env.sh"
 
 VEHICLES=4
 MODEL=iris
-WORLD=empty
+# The world this repository carries, resolved below. PX4's own empty.world
+# is still reachable by name for anyone who wants to compare against it.
+WORLD=uavx_empty
 HOLD=60
 SPACING=5
 # How far from level a vehicle may rest and still be asked to fly. Measured on
@@ -146,17 +148,13 @@ sleep 3
 kill -0 "$AGENT_PID" 2>/dev/null || gdie "the agent died on startup, see /tmp/uavx-agent.log"
 
 # /clock runs at 10 Hz and that is the ceiling on everything the runner
-# measures in simulated time. libgazebo_ros_init defaults to 10 Hz and nothing
-# here changes it yet. Every `_s` field in a run record is measured against this
-# clock, and the runner samples poses on it, so a sample can land only once per
-# tick. Across eight archived runs the ratio of pose samples to clock messages
-# is 0.402 at a 5 Hz sampling target and exactly 1.000 at 20 Hz, so the sampler
-# is already against the wall and a record could otherwise claim a resolution it
-# never had. architecture.md freezes 20 Hz for the coverage source and for the
-# separation monitor, and week 2's coverage_fraction is computed off those
-# samples, so this has to be raised before that number means anything.
+# measures in simulated time. libgazebo_ros_init defaults to 10 Hz. Every `_s`
+# field in a run record is measured against this clock, and the runner samples
+# poses on it, so a sample can land only once per tick. Across eight archived
+# runs the ratio of pose samples to clock messages is 0.402 at a 5 Hz sampling
+# target and exactly 1.000 at 20 Hz, so the sampler is against the wall.
 #
-# Two ways of raising it were tried on 3 September and neither works:
+# Three ways of raising it have been tried and none works:
 #
 #   -p publish_rate:=100     rclcpp refuses it, publish_rate is a double, and
 #                            the failure arrives as gzserver aborting with a
@@ -165,23 +163,39 @@ kill -0 "$AGENT_PID" 2>/dev/null || gdie "the agent died on startup, see /tmp/ua
 #                            and knows nothing about --ros-args, so it takes
 #                            the leftover token as a positional and dies with
 #                            "Invalid logfile [publish_rate:=100.0]".
+#   a block in the world     libgazebo_ros_init is a SystemPlugin. Only
+#                            WorldPlugins may be declared in a world file, so
+#                            there is nowhere in worlds/uavx_empty.world to put
+#                            it. That world exists for a different plugin.
 #
-# The remaining route is a plugin block in the world file, which means bringing
-# a world into this repository rather than using PX4's copy. That is a change to
-# what the simulation runs and it is not being made in passing.
+# What it costs is resolution and not coverage. architecture.md freezes 20 Hz
+# for the coverage source and the separation monitor; at 10 Hz the along-track
+# sample spacing at survey speed is about 0.61 m against a 12 m sensor
+# footprint, and every record carries the rate it achieved beside the rate it
+# asked for so no number claims otherwise.
 
-# libgazebo_ros_state is what publishes /gazebo/model_states, and until
-# chunk 2.4 it was not loaded, so the topic the metrics collector and the link
-# layer read did not exist on this stack at all. The runner recorded that as
-# a measurement on 1 September: 176 topics during a four vehicle bring-up and
-# no ground truth among them. Week 2 scores coverage off sampled ground truth
-# poses, so the plugin goes in here. It publishes at its own default rate and
-# the collector decides which frames count.
+# Ground truth. /gazebo/model_states is published by libgazebo_ros_state.so,
+# which is a WorldPlugin, and -s loads SystemPlugins. Handing it to -s produced
+# one line in the gzserver log,
+#
+#   [Err] System is attempting to load a plugin, but detected an incorrect
+#   plugin type. Plugin filename[libgazebo_ros_state.so]
+#
+# and then carried on with no ground truth topic. The first survey run flew the
+# whole 420 s and reported 0 of 400 cells, because the collector had nothing to
+# collect. A WorldPlugin is declared inside the world, so the world is
+# worlds/uavx_empty.world here: PX4's empty.world byte for byte with that one
+# plugin block added. A world named on the command line is still looked for in
+# PX4's directory first, so --world empty runs PX4's own copy unchanged.
 gsay "starting gzserver headless, no client"
 WORLD_FILE="${GZ_DIR}/sitl_gazebo-classic/worlds/${WORLD}.world"
-[ -f "$WORLD_FILE" ] || gdie "no world file at ${WORLD_FILE}"
+if [ ! -f "$WORLD_FILE" ] && [ -f "${UAVX_REPO}/worlds/${WORLD}.world" ]; then
+  WORLD_FILE="${UAVX_REPO}/worlds/${WORLD}.world"
+fi
+[ -f "$WORLD_FILE" ] || gdie "no world file for ${WORLD}: neither ${GZ_DIR}/sitl_gazebo-classic/worlds/${WORLD}.world nor ${UAVX_REPO}/worlds/${WORLD}.world"
+printf '  world              %s\n' "$WORLD_FILE"
 gzserver "$WORLD_FILE" --verbose \
-  -s libgazebo_ros_init.so -s libgazebo_ros_factory.so -s libgazebo_ros_state.so \
+  -s libgazebo_ros_init.so -s libgazebo_ros_factory.so \
   > /tmp/uavx-gzserver.log 2>&1 &
 GZ_PID=$!
 sleep 6
