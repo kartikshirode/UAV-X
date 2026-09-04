@@ -179,6 +179,15 @@ PX4_MAIN_MODE_OFFBOARD = 6
 PX4_MAIN_MODES = {1: "manual", 2: "altitude", 3: "position", 4: "auto",
                   5: "acro", 6: "offboard", 7: "stabilized", 8: "rattitude"}
 MAV_PARAM_TYPE_REAL32 = 9
+
+# PX4's simulated battery drains to SIM_BAT_MIN_PCT over SIM_BAT_DRAIN, and the
+# defaults are 50 percent over 60 seconds. Every run longer than a minute
+# therefore ends up flying on a battery warning, which is a property of the
+# simulator and not of the mission. Raising the floor to 100 stops the drain
+# without touching COM_LOW_BAT_ACT, so a real low-battery action would still
+# fire if a scenario ever wanted one.
+SIM_BATTERY_FLOOR_PARAM = "SIM_BAT_MIN_PCT"
+SIM_BATTERY_FLOOR_PCT = 100.0
 NODE_SETTLE_S = 6.0              # wall seconds for the nodes to find PX4
 PARAM_DEADLINE_S = 30.0          # wall seconds for a PARAM_SET to be echoed
 OFFBOARD_DEADLINE_S = 90.0       # wall seconds for the fleet to enter offboard
@@ -1290,6 +1299,8 @@ class Harness:
             time.sleep(0.05)
         self._check_nodes_alive()
 
+        self._set_fleet_param(flyers, started, SIM_BATTERY_FLOOR_PARAM,
+                              SIM_BATTERY_FLOOR_PCT)
         if self.spec.cruise_speed_mps is not None:
             self._set_fleet_param(flyers, started, CRUISE_SPEED_PARAM,
                                   self.spec.cruise_speed_mps)
