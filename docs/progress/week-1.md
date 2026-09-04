@@ -266,28 +266,24 @@ unaffected, which is why no gate has ever seen this. It will bite whoever runs
 the launcher by hand, and the leftover process then blocks the next gate at
 preflight.
 
-## Why this file has no done marker
+## Accepted
 
-The done marker the loop greps for goes in when `bash scripts/gate.sh 1`
-passes, and this file deliberately does not spell it out, because a sentence
-explaining a marker is indistinguishable from the marker itself to the thing
-looking for it. That very sentence used to carry it, so the supervisor would
-have read this week as accepted while the gate had never run. It cannot run:
-every chunk gate calls `gate_preflight` first, and that refuses to start
-without `submission/human-preflight.json`, which records registration, the
-eligibility declaration, the clarification channel, the organiser email, the
-delivery route and a compliance sign-off. Those are human steps.
+WEEK-1-DONE, and what makes that true is a gate rather than this sentence.
+`bash scripts/gate.sh 1` exited 0 on 4 September, the first time it had ever
+been able to run, once `submission/human-preflight.json` existed. The run
+behind it is `harness_check_20260904T011616Z`: 2056 pose samples from all four
+vehicles, the injected kill observed, a peak of 506.652 MiB resident across 60
+resource samples, and the harness graph inside the seam. Every requirement in
+`w1_runner` reported ok, and nothing was left running afterwards.
 
-One of them moved on 1 September. The competition id came through, so the
-registration block now requires `competition_id` matching `UAVX-` and 12 upper
-case hex characters, and the checker prints it. The other two fields in that
-block are a date and an address, both of which a person can type without ever
-having registered; the id cannot be guessed and the organisers can be asked to
-confirm it. Two negative fixtures hold the rule up: an id transcribed in lower
-case is rejected, and so is a registration with the id left out. The eligibility
-declaration, the clarification channel, the organiser email and the compliance
-review are all still open, and the id alone does not open the gate.
+It did not pass first time. The first full run failed on chunk 1.1 because
+`uavx_msgs` had no tests and the gate refuses a package that reports none, a
+defect the week 2 progress file records as its fifth. The message package has
+its test now, and the gate was run again from the top rather than from where
+it stopped.
 
-Everything the chunk gates would run has been run directly and passes. The
-gate becomes real acceptance the moment that file exists, and nothing here
-should be treated as accepted until it does.
+The registration id came through on 1 September and the receipt was written on
+4 September, which is what unblocked this. Both dates are in
+`submission/human-preflight.json`, and two of that file's dates go stale before
+the send, so the block this section used to describe reopens on 18 September
+unless somebody reads the channel and the inbox again.
