@@ -1,0 +1,31 @@
+{
+  "registered": {
+    "done": "2026-09-01",
+    "email": "megamindsresearch@gmail.com",
+    "competition_id": "UAVX-8C4749FDD12C"
+  },
+  "eligibility": {
+    "done": "2026-09-04",
+    "declaration": "Solo entrant. I hold no attachment of any kind to the PUSHPAK Project, the Drone Centre, or the organising and host institutions, naming IIT Bombay, IISER Bhopal and VJTI Mumbai. Not staff, not research staff, not a consultant, not an intern, and not otherwise directly engaged with any of them. VJTI Mumbai is kept in this declaration although the organisers removed it from the published collaborator list on 27 August, because declaring no attachment to an institution that turns out not to be involved costs nothing and the reverse disqualifies at any stage."
+  },
+  "clarification_channel": {
+    "done": "2026-09-04",
+    "last_checked": "2026-09-04"
+  },
+  "organiser_email": {
+    "sent": "2026-09-04",
+    "answers": "pending",
+    "fallback": "Source goes as a repository link with the archive attached when it fits the 25 MB budget, and the demo video is cut to the 180 s cap that check_submission.py enforces. Both are our own assumption rather than a published rule, so if the reply names a shorter video limit the edit changes, and if it says attachments only the route in the delivery block takes over.",
+    "last_checked": "2026-09-04"
+  },
+  "delivery": {
+    "attachment_limit_mb": 25,
+    "route": "Gmail caps a message at 25 MB. The proposal PDF and the attachment manifest go as attachments. Source archive and demo video go as a shared drive link unless the totalled manifest fits under the cap, which check_submission.py decides at 4.8 rather than anybody deciding by eye.",
+    "fallback": "If the organisers answer attachments only, the package is split into sequenced archives sent as consecutive messages, each totalled under 25 MB by the attachment manifest, with the part count and the SHA-256 of every part named in the first message."
+  },
+  "compliance_review": {
+    "done": "2026-09-04",
+    "by": "Kartik Shirode",
+    "statement": "Read the regulatory position against the challenge rules. Stage 1 and Stage 2 are simulation only, nothing leaves the ground, so no operational permission attaches and none is claimed. The instruments that would apply before any physical flight are the Drone Rules 2021 with the 2022 and 2023 amendments, administered by the DGCA and published through Digital Sky, and the obligations they carry are airspace classification for the site, drone registration, the remote pilot certificate, type certification and BVLOS permission. Those are recorded as preconditions for Stage 3 rather than as anything satisfied now. Concluded that the entry is compliant because it flies nothing, and that the proposal must say so explicitly rather than leave it implied."
+  }
+}
