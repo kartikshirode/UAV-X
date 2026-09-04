@@ -170,11 +170,18 @@ kill -0 "$AGENT_PID" 2>/dev/null || gdie "the agent died on startup, see /tmp/ua
 # a world into this repository rather than using PX4's copy. That is a change to
 # what the simulation runs and it is not being made in passing.
 
+# libgazebo_ros_state is what publishes /gazebo/model_states, and until
+# chunk 2.4 it was not loaded, so the topic the metrics collector and the link
+# layer read did not exist on this stack at all. The runner recorded that as
+# a measurement on 1 September: 176 topics during a four vehicle bring-up and
+# no ground truth among them. Week 2 scores coverage off sampled ground truth
+# poses, so the plugin goes in here. It publishes at its own default rate and
+# the collector decides which frames count.
 gsay "starting gzserver headless, no client"
 WORLD_FILE="${GZ_DIR}/sitl_gazebo-classic/worlds/${WORLD}.world"
 [ -f "$WORLD_FILE" ] || gdie "no world file at ${WORLD_FILE}"
 gzserver "$WORLD_FILE" --verbose \
-  -s libgazebo_ros_init.so -s libgazebo_ros_factory.so \
+  -s libgazebo_ros_init.so -s libgazebo_ros_factory.so -s libgazebo_ros_state.so \
   > /tmp/uavx-gzserver.log 2>&1 &
 GZ_PID=$!
 sleep 6
