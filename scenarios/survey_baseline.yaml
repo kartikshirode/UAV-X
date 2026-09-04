@@ -1,0 +1,63 @@
+# The survey scenario. Chunk 2.4.
+#
+# architecture.md section 6 freezes every number in this file, and
+# uavx_mission.survey_area carries the same box as constants the planner can
+# do arithmetic on. uavx_sim/test/test_survey.py compares the two and fails
+# when either moves, so this file is a copy with a witness rather than a
+# second opinion.
+#
+# Communications are disabled here on purpose. The scenario measures the
+# mission and nothing else, so there is no link layer, no router and no GCS
+# in this graph, only the four mission executors and the metrics collector
+# that scores what they flew.
+#
+# check_scenario.py requires this to equal the file stem.
+name: survey_baseline
+
+# No link model runs in this scenario, so nothing draws on the seed yet. It
+# is here because the contract requires it and because the record carries it.
+seed: 24
+
+# Frozen run duration.
+duration_s: 420
+
+# All four vehicles survey. The box is split into four vertical strips of
+# 50 m, one per vehicle, west to east in vehicle id order.
+vehicles:
+  - uav_1
+  - uav_2
+  - uav_3
+  - uav_4
+
+# Nothing fails in this run. relay_kill and link_loss exist for that.
+injected_events: []
+
+headless: true
+
+# The cruise altitude column of the frozen geometry table, which is also the
+# layer each vehicle surveys at. Read by the runner for the climb and handed
+# to each mission executor as survey_altitude_m.
+hover_altitudes_m:
+  uav_1: 30
+  uav_2: 40
+  uav_3: 50
+  uav_4: 60
+
+# The box, in the names uavx_eval.metrics_collector declares. 200 m by 200 m
+# with the south-west corner at (375, -100), 10 m cells so 400 of them, and a
+# 12 m sensor disc under each vehicle. cruise_speed_mps is set on each PX4 as
+# MPC_XY_VEL_MAX before the survey starts, so the vehicles honour the speed
+# the design names rather than the simulator's default.
+survey:
+  origin_x: 375.0
+  origin_y: -100.0
+  width_m: 200.0
+  height_m: 200.0
+  cell_m: 10.0
+  footprint_m: 12.0
+  cruise_speed_mps: 10.0
+
+# Recorded here so the statement in architecture.md has a home in the file
+# that is run. Nothing reads it in week 2 because nothing can: the link
+# layer that would honour it is a week 3 deliverable.
+comms_enabled: false
