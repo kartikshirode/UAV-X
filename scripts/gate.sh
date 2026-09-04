@@ -506,6 +506,14 @@ w2_survey() {
   check_run scenarios/survey_baseline.yaml \
     --require "coverage_fraction>=0.95" \
     --require "coverage_source==pose_samples"
+  # The graph the run captured, against the manifest for this scenario.
+  # Chunk 2.4 is the first survey and the first scenario carrying our own
+  # nodes, so this is the first time the seam is checked over a graph with a
+  # swarm process in it at all.
+  bash "${UAVX_REPO}/scripts/check_seam.sh" --snapshot \
+    "${UAVX_RUNS_DIR}/latest-graph.json" --scenario survey_baseline \
+    --expect-run "${UAVX_RUNS_DIR}/latest.jsonl" \
+    || gdie "the survey graph is incomplete, stale or outside the seam"
 }
 
 gate_w2() {

@@ -34,10 +34,22 @@ reasons, in order:
      PX4 estimate is explicitly allowed, because banning it would make a
      correct implementation unbuildable.
   3. Measured on this machine on 1 September 2026: the ground-truth pose topic
-     does not exist here at all. sitl_multi.sh loads the init and factory
-     plugins and neither publishes model state, so option (b) is not merely
-     forbidden, it is unavailable. `ros2 topic list` during a four vehicle
-     bring-up returns 176 topics and none of them is one.
+     did not exist here at all. sitl_multi.sh loaded the init and factory
+     plugins and neither publishes model state; `ros2 topic list` during a
+     four vehicle bring-up returned 176 topics and none of them was one.
+     Chunk 2.4 added libgazebo_ros_state to the launcher because the metrics
+     collector scores coverage off exactly that topic. The collector is one of
+     the two privileged readers; this runner still is not, and still does not.
+
+**Survey.** Chunk 2.4. When the scenario carries a `survey` block the runner
+also starts one mission executor per vehicle and the metrics collector, puts
+each vehicle into PX4's offboard mode so it flies the setpoints its executor
+publishes, and reads the collector's last payload off `/uavx_eval/metrics`
+into the record. Every decision in that sentence is made in uavx_sim.survey,
+which has no ROS in it and is tested without a simulator; this file only
+carries them out. What the runner adds is the one thing a test cannot: the
+mode change is observed in the vehicle's own HEARTBEAT before it counts, and
+the cruise speed is confirmed by PX4 echoing the parameter back.
 
 Reading them over MAVLink rather than over the uXRCE-DDS bridge is the same
 decision taken twice. Both are the vehicle's own estimate. MAVLink is the path
@@ -82,6 +94,9 @@ from uavx_sim.graph_snapshot import (CaptureFailed, IncompleteSnapshot,
 from uavx_sim.resource_sampler import ResourceSampler, ResourceSamplerError
 from uavx_sim.scenario import ScenarioError
 from uavx_sim.scenario import load as load_scenario
+from uavx_sim.survey import (CRUISE_SPEED_PARAM, SurveyError,
+                             collector_command, coverage_from_payload,
+                             mission_node_command, model_map, survey_spec)
 
 # architecture.md section 1b freezes these. Nothing here invents a code, and a
 # path that cannot say which of them it is has no business returning at all.
@@ -150,6 +165,26 @@ GRAPH_CAPTURE_FRACTION = 0.75
 # the effect observed. Telemetry arrives at 30 Hz, so this is sixty missing
 # messages and not a dropped packet.
 KILL_SILENCE_S = 2.0
+
+# Chunk 2.4. A survey needs the vehicles in PX4's offboard mode, flying the
+# setpoints their mission executors publish. MAV_CMD_DO_SET_MODE with the
+# custom mode flag and PX4's main mode 6 is how MAVLink asks for it, and the
+# HEARTBEAT's custom_mode carries the main mode in bits 16 to 23, which is how
+# the runner knows the request was granted rather than merely sent. PX4 refuses
+# the switch until OffboardControlMode has been arriving, so the executors are
+# given NODE_SETTLE_S to find their PX4 before anybody asks.
+CMD_SET_MODE = 176               # MAV_CMD_DO_SET_MODE
+CUSTOM_MODE_ENABLED = 1.0        # MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
+PX4_MAIN_MODE_OFFBOARD = 6
+PX4_MAIN_MODES = {1: "manual", 2: "altitude", 3: "position", 4: "auto",
+                  5: "acro", 6: "offboard", 7: "stabilized", 8: "rattitude"}
+MAV_PARAM_TYPE_REAL32 = 9
+NODE_SETTLE_S = 6.0              # wall seconds for the nodes to find PX4
+PARAM_DEADLINE_S = 30.0          # wall seconds for a PARAM_SET to be echoed
+OFFBOARD_DEADLINE_S = 90.0       # wall seconds for the fleet to enter offboard
+METRICS_TOPIC = "/uavx_eval/metrics"
+METRICS_FINAL_WAIT_S = 15.0      # for the collector's last payload on shutdown
+COLLECTOR_LABEL = "metrics-collector"
 
 # The simulation is lockstep, so a clock that stops advancing means a process
 # is wedged rather than that the run is slow.
@@ -303,6 +338,26 @@ def require_dependencies(repo):
 
 
 # ------------------------------------------------------------- the processes
+def frozen_min_separation(repo):
+    """MIN_SEPARATION as scripts/check_geometry.py defines it, never a copy.
+
+    The safety floor is frozen in architecture.md section 5 and has one home
+    in code. The collector needs it as a parameter, and a number typed here
+    would be the third copy of a value this repository has already found
+    drifting once.
+    """
+    import importlib.util
+
+    path = Path(repo) / "scripts" / "check_geometry.py"
+    spec = importlib.util.spec_from_file_location("uavx_check_geometry", path)
+    if spec is None or spec.loader is None:
+        raise HarnessFailure(f"cannot load {path} for the separation floor",
+                             EXIT_DEPENDENCY)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return float(module.MIN_SEPARATION)
+
+
 def _process_table():
     """Every process on this machine, as (pid, argv), read from /proc.
 
@@ -492,12 +547,14 @@ def still_running():
 
 # ------------------------------------------------------------------- clock
 class SimClock:
-    """The `/scenario_runner` node and its one subscription.
+    """The `/scenario_runner` node and its subscriptions.
 
     This is the runner's entire ROS presence, and it is deliberately small.
     scripts/seam_manifests.json says an outside process may hold only what it
     is listed for, so the runner takes no per vehicle endpoint and opens no
-    service of its own beyond the parameter services rclpy creates.
+    service of its own beyond the parameter services rclpy creates. Chunk 2.4
+    added one subscription, to the collector's metrics, and it is listed in
+    the manifest beside the clock.
     """
 
     def __init__(self):
@@ -527,6 +584,12 @@ class SimClock:
     def _on_clock(self, message):
         self._seconds = message.clock.sec + message.clock.nanosec * 1e-9
         self.messages += 1
+
+    def subscribe_metrics(self, callback):
+        """The collector's payloads, on this same node. Chunk 2.4."""
+        from uavx_msgs.msg import RunMetrics
+
+        self._node.create_subscription(RunMetrics, METRICS_TOPIC, callback, 10)
 
     def spin(self, timeout_s=0.0):
         self._rclpy.spin_once(self._node, timeout_sec=timeout_s)
@@ -611,6 +674,17 @@ class Vehicle:
         self.last_seen_sim_s = None
         self.messages = 0
 
+        # Chunk 2.4. The flight mode PX4 reports and the parameters it has
+        # echoed back, so a survey can tell "asked for offboard" from "in it"
+        # and "sent the cruise speed" from "PX4 has it".
+        self.custom_mode = 0
+        self.params = {}
+        self.offboard_requests = 0
+        self.offboard_wall = None
+        self.offboard_reason = ""
+        self.surveying = False
+        self.cruise_param_confirmed = None
+
     # ------------------------------------------------------------ telemetry
     def drain(self, sim_s):
         """Read everything waiting on the socket. Never blocks the loop."""
@@ -630,6 +704,12 @@ class Vehicle:
             if kind == "HEARTBEAT":
                 self.heartbeats += 1
                 self.armed = bool(message.base_mode & ARMED_FLAG)
+                self.custom_mode = int(message.custom_mode)
+            elif kind == "PARAM_VALUE":
+                name = message.param_id
+                if isinstance(name, bytes):
+                    name = name.decode("ascii", "ignore")
+                self.params[str(name).rstrip(chr(0))] = float(message.param_value)
             elif kind == "LOCAL_POSITION_NED":
                 self.z = message.z
                 self.fresh = True
@@ -709,6 +789,30 @@ class Vehicle:
         if self.last_seen_sim_s is None or sim_s is None:
             return None
         return sim_s - self.last_seen_sim_s
+
+    # ---------------------------------------------------------------- mode
+    @property
+    def main_mode(self):
+        return (self.custom_mode >> 16) & 0xFF
+
+    @property
+    def in_offboard(self):
+        return self.main_mode == PX4_MAIN_MODE_OFFBOARD
+
+    def mode_name(self):
+        return PX4_MAIN_MODES.get(self.main_mode, f"mode_{self.main_mode}")
+
+    def set_param(self, now_wall, name, value):
+        """PARAM_SET. PX4 answers with a PARAM_VALUE that drain records."""
+        target = self.connection.target_system or (self.index + 1)
+        self.connection.mav.param_set_send(
+            target, 1, name.encode("ascii"), float(value), MAV_PARAM_TYPE_REAL32)
+        self.sent_wall = now_wall
+
+    def request_offboard(self, now_wall):
+        self._send(now_wall, CMD_SET_MODE, CUSTOM_MODE_ENABLED,
+                   float(PX4_MAIN_MODE_OFFBOARD), 0.0)
+        self.offboard_requests += 1
 
     # -------------------------------------------------------------- control
     def _send(self, now_wall, command, *params):
@@ -847,6 +951,21 @@ class Harness:
         self.runs_dir = Path(runs_dir)
         self._spawn_cache = None
         self.run_id = run_id
+
+        # Chunk 2.4. Read and refused here, before anything is launched, so a
+        # survey block with a dimension missing costs an argument error and
+        # not a bring-up.
+        try:
+            self.spec = survey_spec(scenario.raw)
+        except SurveyError as exc:
+            raise HarnessFailure(str(exc), EXIT_ARGS) from exc
+        self.scenario_relative = None
+        self.nodes = []
+        self.metrics_payload = None
+        self.metrics_final = False
+        self.metrics_messages = 0
+        self.metrics_foreign = 0
+        self.mission_started_wall = None
 
         self.launcher = None
         self.bring_up_attempts = 0
@@ -1005,6 +1124,210 @@ class Harness:
                   f"alt={vehicle.altitude_m():6.1f} m "
                   f"target={vehicle.hover_alt_m} {vehicle.reason}", flush=True)
 
+    # -------------------------------------------------------------- survey
+    def _start_node(self, label, command):
+        log_path = Path("/tmp") / f"uavx-{label}-{self.run_id}.log"
+        try:
+            with open(log_path, "w", encoding="utf-8") as handle:
+                process = subprocess.Popen(command, stdout=handle,
+                                           stderr=subprocess.STDOUT,
+                                           start_new_session=True)
+        except OSError as exc:
+            raise HarnessFailure(f"could not start {label}: {exc}",
+                                 EXIT_DEPENDENCY) from exc
+        self.nodes.append({"label": label, "process": process, "log": log_path})
+        return process
+
+    def _node_tail(self, node, lines=15):
+        try:
+            text = node["log"].read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        return "\n".join(text.splitlines()[-lines:])
+
+    def _check_nodes_alive(self):
+        for node in self.nodes:
+            code = node["process"].poll()
+            if code is not None:
+                raise HarnessFailure(
+                    f"{node['label']} exited with {code} during the run. A "
+                    f"survey flown by three executors is not the survey the "
+                    f"scenario describes. Its log is {node['log']}:\n"
+                    f"{self._node_tail(node)}", EXIT_CHILD)
+
+    def _signal_nodes(self, sig, labels=None):
+        for node in self.nodes:
+            if labels is not None and node["label"] not in labels:
+                continue
+            process = node["process"]
+            if process.poll() is not None:
+                continue
+            try:
+                os.killpg(os.getpgid(process.pid), sig)
+            except (OSError, ProcessLookupError):
+                pass
+
+    def stop_nodes(self, collect_final):
+        """The executors first, then the collector, whose last word counts.
+
+        The collector publishes a final payload on the way down, and the
+        record is built from whichever payload arrived last. Waiting for the
+        final one is bounded, because a collector that cannot publish during
+        its own shutdown still published a partial a second earlier and that
+        partial describes the same run to within one publish period.
+        """
+        if not self.nodes:
+            return
+        executors = [n["label"] for n in self.nodes if n["label"] != COLLECTOR_LABEL]
+        self._signal_nodes(signal.SIGINT, executors)
+        self._signal_nodes(signal.SIGINT, [COLLECTOR_LABEL])
+        if collect_final and self.clock is not None:
+            deadline = time.time() + METRICS_FINAL_WAIT_S
+            while not self.metrics_final and time.time() < deadline:
+                self.clock.spin(0.1)
+        for node in self.nodes:
+            process = node["process"]
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self._signal_nodes(signal.SIGKILL, [node["label"]])
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+        self.nodes = []
+
+    def _on_metrics(self, message):
+        if message.run_id != self.run_id:
+            self.metrics_foreign += 1
+            return
+        try:
+            payload = json.loads(message.json_payload)
+        except ValueError:
+            self.metrics_foreign += 1
+            return
+        if not isinstance(payload, dict):
+            self.metrics_foreign += 1
+            return
+        self.metrics_messages += 1
+        self.metrics_payload = payload
+        if message.final:
+            self.metrics_final = True
+
+    def _set_fleet_param(self, vehicles, started, name, value):
+        """Set one PX4 parameter on every flying vehicle and wait for the echo."""
+        pending = list(vehicles)
+        last_sent = {}
+        deadline = time.time() + PARAM_DEADLINE_S
+        while pending and time.time() < deadline:
+            now_wall = time.time() - started
+            for vehicle in self.vehicles:
+                vehicle.drain(None)
+            for vehicle in list(pending):
+                got = vehicle.params.get(name)
+                if got is not None and abs(got - float(value)) < 1e-3:
+                    vehicle.cruise_param_confirmed = True
+                    pending.remove(vehicle)
+                    continue
+                if now_wall - last_sent.get(vehicle.name, -99.0) > RESEND_S:
+                    vehicle.set_param(now_wall, name, value)
+                    last_sent[vehicle.name] = now_wall
+            time.sleep(0.05)
+        for vehicle in pending:
+            vehicle.cruise_param_confirmed = False
+        if pending:
+            names = ", ".join(v.name for v in pending)
+            raise HarnessFailure(
+                f"{name}={value} was never echoed back by {names} in "
+                f"{PARAM_DEADLINE_S:.0f}s. The cruise speed is a frozen number "
+                f"and a run that did not apply it would be flying somebody "
+                f"else's.", EXIT_CHILD)
+        print(f"  {name}={value} confirmed on {len(vehicles)} vehicle(s)",
+              flush=True)
+
+    def start_mission(self):
+        """Put the executors and the collector up and the fleet in offboard.
+
+        Wall time, like the climb: this is setup for the scenario and none of
+        it reaches a `_s` field. Scenario time zero is when fly_scenario
+        starts, with every vehicle that could be put into offboard already
+        flying its first waypoint.
+        """
+        if self.spec is None:
+            return
+        manifest = self._load_spawn()
+        try:
+            entries = model_map(manifest)
+        except SurveyError as exc:
+            raise HarnessFailure(
+                f"a survey needs the launcher's spawn manifest: {exc}",
+                EXIT_CHILD) from exc
+        if not self.scenario_relative:
+            raise HarnessFailure("the runner did not record the scenario's "
+                                 "repository relative path before the survey",
+                                 EXIT_ARTIFACT)
+        floor = frozen_min_separation(self.repo)
+        started = time.time()
+
+        self._start_node(COLLECTOR_LABEL, collector_command(
+            self.run_id, self.scenario_relative, self.spec, entries, floor))
+        flyers = [v for v in self.vehicles if v.state == "hold"]
+        for vehicle in flyers:
+            try:
+                command = mission_node_command(
+                    vehicle.name, self.spawn_of(vehicle.name),
+                    vehicle.hover_alt_m, self.spec, list(self.scenario.vehicles))
+            except SurveyError as exc:
+                raise HarnessFailure(str(exc), EXIT_CHILD) from exc
+            self._start_node(f"mission-{vehicle.name}", command)
+        print(f"  started the collector and {len(flyers)} mission "
+              f"executor(s) for {self.spec.cell_count} cells", flush=True)
+
+        settle_until = time.time() + NODE_SETTLE_S
+        while time.time() < settle_until:
+            for vehicle in self.vehicles:
+                vehicle.drain(None)
+            time.sleep(0.05)
+        self._check_nodes_alive()
+
+        if self.spec.cruise_speed_mps is not None:
+            self._set_fleet_param(flyers, started, CRUISE_SPEED_PARAM,
+                                  self.spec.cruise_speed_mps)
+
+        pending = list(flyers)
+        deadline = time.time() + OFFBOARD_DEADLINE_S
+        while pending and time.time() < deadline:
+            now_wall = time.time() - started
+            for vehicle in self.vehicles:
+                vehicle.drain(None)
+            for vehicle in list(pending):
+                if vehicle.in_offboard:
+                    vehicle.offboard_wall = round(now_wall, 1)
+                    vehicle.surveying = True
+                    pending.remove(vehicle)
+                elif (vehicle.offboard_requests == 0
+                      or now_wall - vehicle.sent_wall > RESEND_S):
+                    vehicle.request_offboard(now_wall)
+            time.sleep(0.05)
+        for vehicle in pending:
+            vehicle.offboard_reason = (
+                f"still in {vehicle.mode_name()} after "
+                f"{vehicle.offboard_requests} offboard requests over "
+                f"{OFFBOARD_DEADLINE_S:.0f}s")
+        for vehicle in flyers:
+            detail = (f"offboard granted at {vehicle.offboard_wall}s"
+                      if vehicle.surveying else vehicle.offboard_reason)
+            print(f"  {vehicle.name:6s} {vehicle.mode_name():10s} {detail}",
+                  flush=True)
+        self._check_nodes_alive()
+        self.mission_started_wall = round(time.time() - started, 1)
+        if pending:
+            # Not fatal on its own. The record names which vehicles surveyed
+            # and the coverage figure says what it cost, so a scenario that
+            # needed all four fails on its numbers rather than on a guess.
+            print(f"  WARNING  {len(pending)} vehicle(s) never entered "
+                  f"offboard and will hover for the run", flush=True)
+
     # ---------------------------------------------------------------- loop
     def fly_scenario(self):
         duration = float(self.scenario.duration_s)
@@ -1015,6 +1338,9 @@ class Harness:
                 f"no /clock message in {CLOCK_WAIT_S:.0f}s. Simulated time is "
                 f"what every `_s` field in the record is measured in, so a run "
                 f"without it has nothing to write down.", EXIT_CHILD)
+
+        if self.spec is not None:
+            self.clock.subscribe_metrics(self._on_metrics)
 
         self.injector = EventInjector(
             [{"type": event.type, "target": event.target, "at_s": event.at_s}
@@ -1057,6 +1383,7 @@ class Harness:
                 next_resource = self.sim_now + RESOURCE_PERIOD_S
                 self.sampler.add_pids(self._group_pids())
                 self.sampler.sample(max(self.sim_now, 0.0))
+                self._check_nodes_alive()
 
             if self.graph_document is None and self.sim_now >= capture_at:
                 self.capture_graph()
@@ -1078,6 +1405,10 @@ class Harness:
             if self.sim_now >= duration:
                 break
 
+        # The survey's processes come down while the clock is still running,
+        # so the collector's last payload can arrive. Everything else is torn
+        # down by the caller after this returns.
+        self.stop_nodes(collect_final=True)
         self.clock_messages = self.clock.messages
         if self.graph_document is None:
             raise HarnessFailure(
@@ -1097,6 +1428,8 @@ class Harness:
                            table)
         if self.launcher is not None and self.launcher.process is not None:
             pids.append(self.launcher.process.pid)
+        for node in self.nodes:
+            pids.append(node["process"].pid)
         return pids
 
     def capture_graph(self):
@@ -1139,6 +1472,12 @@ class Harness:
         leaves no manifest, and a silently missing offset is how a later week
         ends up converting poses against an origin it guessed.
         """
+        for row in self._load_spawn().get("vehicles", []):
+            if row.get("vehicle_id") == name:
+                return row
+        return None
+
+    def _load_spawn(self):
         if self._spawn_cache is None:
             try:
                 self._spawn_cache = json.loads(
@@ -1146,10 +1485,9 @@ class Harness:
                     .read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 self._spawn_cache = {}
-        for row in self._spawn_cache.get("vehicles", []):
-            if row.get("vehicle_id") == name:
-                return row
-        return None
+            if not isinstance(self._spawn_cache, dict):
+                self._spawn_cache = {}
+        return self._spawn_cache
 
     @staticmethod
     def _vehicle_metrics(vehicle, spawn):
@@ -1187,6 +1525,16 @@ class Harness:
             "preparation_state": vehicle.state,
             "takeoff_cycles": vehicle.cycles + 1,
             "preparation_reason": vehicle.reason,
+            # Chunk 2.4. Whether this vehicle flew the survey, decided by
+            # its own HEARTBEAT reporting offboard, and what PX4 said about
+            # the cruise speed. The mode at the end is recorded separately
+            # because PX4 leaves offboard the moment the setpoints stop.
+            "surveying": vehicle.surveying,
+            "offboard_granted_wall_s": vehicle.offboard_wall,
+            "offboard_requests": vehicle.offboard_requests,
+            "offboard_reason": vehicle.offboard_reason,
+            "cruise_param_confirmed": vehicle.cruise_param_confirmed,
+            "main_mode_at_end": vehicle.mode_name(),
         }
 
     def metrics(self):
@@ -1206,13 +1554,31 @@ class Harness:
             "by_vehicle": {v.name: self._vehicle_metrics(v, self.spawn_of(v.name))
                            for v in self.vehicles},
             "app_packets_note": (
-                "empty on purpose. There is no swarm node in week 1, so there "
-                "is no node to attribute a packet count to, and a row of zeros "
-                "would claim four senders that were never started."),
+                "empty on purpose. Nothing counts application packets until "
+                "the link layer exists in week 3. A surveying run's mission "
+                "executors publish observations on their own tx endpoints and "
+                "no process carries them anywhere, so a row of zeros would "
+                "claim four senders whose packets were never delivered by "
+                "anything."),
             "resource_probe": getattr(self.sampler, "probe_source", None),
+            "survey": self.spec.as_record() if self.spec is not None else None,
+            "mission_started_wall_s": self.mission_started_wall,
+            "metrics_topic": METRICS_TOPIC if self.spec is not None else None,
+            "metrics_messages": self.metrics_messages,
+            "metrics_final_received": self.metrics_final,
+            "metrics_foreign_messages": self.metrics_foreign,
+            "ground_truth": self.metrics_payload,
         }
 
     def close(self):
+        # The survey's processes first, in case the run died before the loop
+        # brought them down. A mission executor left streaming setpoints at a
+        # PX4 that is about to be killed is harmless; one left after the next
+        # gate's preflight is not.
+        try:
+            self.stop_nodes(collect_final=False)
+        except Exception:
+            pass
         for vehicle in self.vehicles:
             try:
                 vehicle.connection.close()
@@ -1300,11 +1666,13 @@ def run(options):
           flush=True)
 
     harness = Harness(repo, scenario, options, runs_dir, run_id)
+    harness.scenario_relative = relative
     started_at = run_record.utc_stamp()
     try:
         harness.bring_up(launcher_script)
         harness.connect()
         harness.prepare_fleet()
+        harness.start_mission()
         harness.fly_scenario()
     finally:
         # Before the verdict and before any file is written. A machine left
@@ -1339,6 +1707,22 @@ def run(options):
         raise HarnessFailure(f"the resource sampler cannot answer: {exc}",
                              EXIT_ARTIFACT) from exc
 
+    # Chunk 2.4. Coverage comes off the collector's payload and nowhere else,
+    # and a surveying run without one has no coverage to record rather than
+    # a coverage of zero.
+    coverage = None
+    if harness.spec is not None:
+        if harness.metrics_payload is None:
+            raise HarnessFailure(
+                f"the scenario surveys and the collector never published a "
+                f"payload for run {run_id} on {METRICS_TOPIC}, so there is no "
+                f"coverage figure to record.", EXIT_ARTIFACT)
+        try:
+            coverage = coverage_from_payload(harness.metrics_payload)
+        except SurveyError as exc:
+            raise HarnessFailure(f"the collector's payload does not hold up: "
+                                 f"{exc}", EXIT_ARTIFACT) from exc
+
     try:
         record = run_record.build_record(
             run_id=run_id,
@@ -1369,6 +1753,7 @@ def run(options):
             injected_event_observed=harness.injector.all_observed(),
             injected_event_count=harness.injector.count_observed(),
             graph_snapshot_sha256=graph_sha,
+            coverage=coverage,
         )
     except run_record.RecordError as exc:
         raise HarnessFailure(f"the run record does not hold up: {exc}",
@@ -1394,6 +1779,11 @@ def run(options):
           f"{record['injected_event_count']} injected event(s) observed, "
           f"peak {resources['peak_rss_mib']} MiB, "
           f"{resources['samples']} resource samples", flush=True)
+    if coverage is not None:
+        print(f"  ok    coverage {coverage['coverage_fraction']:.4f} from "
+              f"{coverage['coverage_source']}, "
+              f"{coverage['coverage_cells_seen']} of "
+              f"{coverage['coverage_cells_total']} cells", flush=True)
     return EXIT_OK
 
 
