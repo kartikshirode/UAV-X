@@ -79,8 +79,23 @@ def test_a_message_shorter_than_it_promised_is_refused():
 
 
 # --------------------------------------------------------------- the rate
-def test_the_rate_is_frames_over_simulated_seconds():
-    assert capture_rate(420, 60.0) == pytest.approx(7.0)
+def test_the_rate_is_the_intervals_and_not_the_frames():
+    """N frames have N-1 gaps between the first and the last."""
+    assert capture_rate(420, 60.0) == pytest.approx(419 / 60.0)
+
+
+def test_the_clip_is_never_shorter_than_the_window_it_covered():
+    """The defect this formula fixes, stated as the property that failed.
+
+    418 frames across exactly 60.0 s of simulated time encoded at frames over
+    span produced a 59.96 s clip, and the rehearsal refused it because a clip
+    shorter than the window does not prove a longer capture holds up. The
+    duration ffmpeg produces for N frames at rate R is N over R, so R has to
+    be small enough that it lands at or above the span.
+    """
+    for frames, span in ((418, 60.0), (3, 1.0), (1200, 240.0), (37, 7.5)):
+        rate = capture_rate(frames, span)
+        assert frames / rate >= span
 
 
 def test_a_capture_of_one_frame_has_no_rate():
@@ -100,7 +115,7 @@ def test_a_slideshow_is_refused_rather_than_encoded():
 
 
 def test_the_floor_is_where_it_says_it_is():
-    assert capture_rate(int(MIN_CAPTURE_HZ * 60) + 1, 60.0) > MIN_CAPTURE_HZ
+    assert capture_rate(int(MIN_CAPTURE_HZ * 60) + 2, 60.0) > MIN_CAPTURE_HZ
 
 
 # ------------------------------------------------------------- the overlay

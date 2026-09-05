@@ -126,9 +126,21 @@ def as_rgb(encoding: str, data: Sequence[int], width: int, height: int,
 def capture_rate(frames: int, span_s: float) -> float:
     """Frames per simulated second, which is what the clip is encoded at.
 
-    The span is between the first frame and the last, so a capture of one
-    frame has no span and no rate. Refused rather than defaulted: a rate
-    invented here decides how fast the finished video appears to run.
+    Divided by the intervals and not by the frames. `span_s` is measured
+    between the first frame and the last, and N frames have N-1 intervals
+    between them, so `frames / span` overstates the rate by N over N-1 and the
+    finished clip comes out a fraction shorter than the window it covered.
+
+    That fraction is small and it is not harmless. The first recording
+    rehearsal to reach the encoder asked for 60 s, captured 418 frames across
+    exactly 60.0 s of simulated time, and produced a clip of 59.96 s, which
+    the rehearsal refused because a clip shorter than the window does not
+    prove a longer capture holds up. With the intervals in the denominator
+    the duration is span plus one interval, which clears the quantisation
+    ffmpeg's output rate introduces for any capture slower than that rate.
+
+    A capture of one frame has no span and no rate. Refused rather than
+    defaulted: a rate invented here decides how fast the video appears to run.
     """
     if frames < 2:
         raise RecorderError(
@@ -139,7 +151,7 @@ def capture_rate(frames: int, span_s: float) -> float:
         raise RecorderError(
             f"{frames} frames arrived across {span_s!r} seconds of simulated "
             f"time. Without a span there is no rate that is not invented")
-    rate = frames / span_s
+    rate = (frames - 1) / span_s
     if rate < MIN_CAPTURE_HZ:
         raise RecorderError(
             f"the camera managed {rate:.2f} frames per simulated second over "
