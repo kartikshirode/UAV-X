@@ -352,15 +352,44 @@ done
   || gdie "resting above ${MAX_TILT_DEG} deg of tilt, so not fit to take off:${tilted}. The formation has reached the edge of the asphalt_plane, whose lip is at y = +/-10 m. Lower --spacing or --vehicles until it fits."
 
 # Every vehicle must be individually visible to ROS 2, not just present in sum.
-missing=""
+#
+# Waited for rather than sampled once. Two things made the old one-shot check a
+# race rather than a measurement, and it failed a healthy stack twice on
+# 5 September with all four PX4 processes alive, the agent up and every model
+# level. The uXRCE-DDS agent registers its clients asynchronously and DDS
+# discovery takes as long as it takes, so a single look 15 s after the last
+# spawn is a guess about how long that is. And `ros2 topic list` goes through
+# the ros2 daemon, which caches: the rebuild rehearsal runs a whole `colcon
+# test` immediately before this, starting and stopping dozens of nodes, and
+# uavx_sim.scenario_runner already restarts the daemon before every bring-up
+# for the same reason. `--no-daemon` asks DDS itself.
+#
+# The rule is unchanged. Every namespace has to appear or the launcher dies.
+DISCOVERY_DEADLINE_S=90
+discovery_started="$(date +%s)"
+missing="pending"
+while [ -n "$missing" ]; do
+  missing=""
+  topics="$(timeout 30 ros2 topic list --no-daemon 2>/dev/null || true)"
+  i=1
+  while [ "$i" -le "$VEHICLES" ]; do
+    n="$(printf '%s\n' "$topics" | grep -c "^/uav_${i}/" || true)"
+    [ "${n:-0}" -gt 0 ] || missing="${missing} uav_${i}"
+    i=$((i + 1))
+  done
+  [ -n "$missing" ] || break
+  waited=$(( $(date +%s) - discovery_started ))
+  [ "$waited" -lt "$DISCOVERY_DEADLINE_S" ] \
+    || gdie "no ROS 2 topics under namespace(s):${missing} after ${waited}s of DDS discovery. Check PX4_UXRCE_DDS_NS and the agent log."
+  sleep 3
+done
 i=1
 while [ "$i" -le "$VEHICLES" ]; do
-  n="$(ros2 topic list 2>/dev/null | grep -c "^/uav_${i}/" || true)"
+  n="$(printf '%s\n' "$topics" | grep -c "^/uav_${i}/" || true)"
   printf '  uav_%d topics       %s\n' "$i" "${n:-0}"
-  [ "${n:-0}" -gt 0 ] || missing="${missing} uav_${i}"
   i=$((i + 1))
 done
-[ -z "$missing" ] || gdie "no ROS 2 topics under namespace(s):${missing}. Check PX4_UXRCE_DDS_NS and the agent log."
+printf '  discovery took     %ss\n' "$(( $(date +%s) - discovery_started ))"
 
 # Codex round 2, finding 11: nothing measured peak memory, and this box has
 # about 11.5 GiB with Docker Desktop competing for it.

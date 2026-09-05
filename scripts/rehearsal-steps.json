@@ -3,7 +3,7 @@
   "install": [
     "verify.sh, stack matches versions.lock",
     "colcon build into a fresh prefix",
-    "the built overlay sources",
+    "the built overlay sources and every executable is where ros2 run looks",
     "colcon test in the fresh prefix",
     "smoke run, four vehicles airborne"
   ],

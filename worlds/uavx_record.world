@@ -18,9 +18,17 @@
 
   Where it stands and why. The swarm occupies x 0 to 475 and y -75 to +75 at
   30 to 60 m, per the common geometry table in architecture.md section 6. From
-  (-120, 0, 55) looking along +x the near vehicles sit about 0.2 rad below the
-  axis and the far pair about level, which the 0.675 rad vertical field covers
-  with the pitch below. The whole chain is in frame from takeoff to station.
+  (-120, 0, 50) the axis is aimed just above level so the chain sits across the
+  middle of the frame rather than above it: the anchor is 285 m ahead and 20 m
+  below the axis, and the far pair are 595 m ahead, level, and 0.13 rad either
+  side of it. All four are inside the 0.7 by 0.39 rad field.
+
+  The first attempt used a 1.2 rad field and 0.10 rad of down pitch, which put
+  the whole chain in the sky above the horizon and every vehicle at about one
+  pixel. The clip proved the capture path and showed nothing else, which is
+  recorded in docs/progress/week-3.md: one static camera cannot make a 480 m
+  formation of half metre vehicles look like anything, and the demo shot has to
+  follow the action rather than watch the corridor.
 
   The camera is not a sensor any process may reason about. It publishes an
   image and nothing else reads it but the harness, and scripts/check_seam.sh
@@ -71,13 +79,13 @@
 
     <model name="uavx_record_camera">
       <static>true</static>
-      <pose>-120 0 55 0 0.10 0</pose>
+      <pose>-120 0 50 0 0.02 0</pose>
       <link name="link">
         <sensor name="view" type="camera">
           <update_rate>10.0</update_rate>
           <always_on>1</always_on>
           <camera>
-            <horizontal_fov>1.2</horizontal_fov>
+            <horizontal_fov>0.7</horizontal_fov>
             <image>
               <width>960</width>
               <height>540</height>
