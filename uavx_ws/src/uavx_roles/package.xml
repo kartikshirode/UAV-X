@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>uavx_roles</name>
+  <version>0.1.0</version>
+  <description>
+    The half of the role protocol that moves an aircraft.
+
+    The election lives in uavx_comms and every router carries one, so nothing
+    here opens an epoch, ranks a bid or computes a slot. What was missing was
+    the other half: a grant is a message, and flying because of one is a
+    decision about an aircraft. This package keeps the grants addressed to one
+    vehicle, refuses the stale and the misaddressed, decides where that leaves
+    the aircraft, and writes what its role did so the run record reads the
+    answer off the vehicle rather than off the process that ran the election.
+
+    The lease is why a dead epoch owner is recoverable. Renewals stop, the
+    grant expires on its own, and the vehicle goes back to what it was doing
+    with nothing to detect and no message to wait for.
+  </description>
+  <maintainer email="megamindsresearch@gmail.com">kartikshirode</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>px4_msgs</exec_depend>
+  <exec_depend>uavx_msgs</exec_depend>
+  <exec_depend>uavx_comms</exec_depend>
+  <exec_depend>uavx_mission</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
