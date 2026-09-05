@@ -222,13 +222,25 @@ def backlog_custodian(router_ledgers: Sequence[Mapping],
 
 def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
                  outage_start_s: float, outage_end_s: float,
-                 drain_start_s: Optional[float] = None) -> dict:
+                 drain_start_s: Optional[float] = None,
+                 epoch_s: float = 0.0,
+                 destroyed: Sequence[str] = ()) -> dict:
     """The whole observations block, from the ledgers and the outage window.
 
     The window comes from the run rather than from the files: the moment a
     vehicle was killed or gated is the runner's knowledge, and a block that
     inferred it from a gap in the deliveries would be deciding when the
     failure happened from the evidence that the failure happened.
+
+    `epoch_s` is the simulated time the scenario started at. Every node stamps
+    its file in simulated seconds since the simulator came up, which is a
+    couple of minutes of bring-up before the run, and every window here
+    arrives in seconds since the run began. Without the offset the two are
+    off by the bring-up and every observation lands outside every window.
+
+    `destroyed` is the vehicles this run killed. See `_lost_with`: what those
+    aircraft were still holding alone went down with them, and the delivered
+    set cannot contain data that stopped existing.
     """
     router_ledgers = list(router_ledgers)
     start, end = _number(outage_start_s), _number(outage_end_s)
@@ -241,8 +253,20 @@ def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
             f"the outage ends at {end} and starts at {start}. A window that "
             f"runs backwards puts every observation outside it")
 
-    minted = generated_rows(router_ledgers)
-    arrived = delivered_rows(gcs_ledger)
+    offset = _number(epoch_s)
+    if offset is None:
+        raise LedgerError(
+            f"epoch_s is {epoch_s!r}, not the simulated time the scenario "
+            f"started at")
+    minted = {i: when - offset for i, when in
+              generated_rows(router_ledgers).items()}
+    arrived = {i: when - offset for i, when in
+               delivered_rows(gcs_ledger).items()}
+
+    lost = _lost_with(router_ledgers, destroyed, set(arrived))
+    for ids in lost.values():
+        for identity in ids:
+            minted.pop(identity, None)
 
     generated_ids = sorted(minted)
     delivered_ids = sorted(arrived)
@@ -262,7 +286,8 @@ def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
     # emptyings at or after the route returned count: every node's store runs
     # empty constantly in a healthy run.
     ends = [_number(entry.get("drain_end_at")) for entry in router_ledgers]
-    ends = [when for when in ends if when is not None and when >= drain_start]
+    ends = [when - offset for when in ends if when is not None]
+    ends = [when for when in ends if when >= drain_start]
     drain_end = max(ends) if ends else drain_start
 
     custodian = backlog_custodian(router_ledgers, during)
@@ -308,14 +333,61 @@ def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
         # is not a threshold.
         "missing_count": len(missing),
         "unexpected_count": len(unexpected),
-        "ledger": [{"id": i, "created_at_s": minted[i],
-                    "delivered_at_s": arrived.get(i)}
+        "ledger": [{"id": i, "created_at_s": round(minted[i], 3),
+                    "delivered_at_s": (None if i not in arrived
+                                       else round(arrived[i], 3))}
                    for i in generated_ids],
     }
     if custodian is not None:
         out["backlog_custodian"] = custodian
         out["custodied_ids"] = held_by_custodian
         out["custodied"] = len(held_by_custodian)
+    if lost:
+        out["lost_with_vehicle"] = {node: list(ids)
+                                    for node, ids in sorted(lost.items())}
+        out["lost_with_vehicle_count"] = sum(len(v) for v in lost.values())
+    return out
+
+
+def _lost_with(router_ledgers: Sequence[Mapping], destroyed: Sequence[str],
+               arrived: set) -> Dict[str, List[str]]:
+    """What each destroyed vehicle took with it, from its own file.
+
+    An observation this design loses for good is one that was still only on
+    the aircraft that minted it. Everything else survives the airframe: a
+    packet handed to a neighbour is still retained by its origin until the
+    destination acknowledges it, and the origin re-sends it the moment a
+    route exists again, so a relay dying with a full queue costs nothing but
+    the time to repair the path.
+
+    Three things keep this from being a way to make a bad run look clean. The
+    ids come from the dead vehicle's own ledger and nowhere else, so the
+    runner cannot widen the set. Anything the ground station received is
+    excluded, because an observation that arrived was not lost. And only a
+    vehicle this run actually destroyed can be named, which the runner takes
+    from the injected events it watched land.
+    """
+    if not destroyed:
+        return {}
+    by_node = {_node_of(entry): entry for entry in router_ledgers}
+    out: Dict[str, List[str]] = {}
+    for node in destroyed:
+        entry = by_node.get(node)
+        if entry is None:
+            raise LedgerError(
+                f"{node} was destroyed in this run and wrote no ledger, so "
+                f"nothing says what it had minted. Every observation the "
+                f"ground station accepted from it would then be an identity "
+                f"nobody generated")
+        held = entry.get("unacknowledged_ids")
+        if not isinstance(held, (list, tuple)):
+            raise LedgerError(
+                f"{node} was destroyed and its ledger does not say what it "
+                f"was still holding. Without that list its undelivered "
+                f"observations cannot be told from the swarm losing them")
+        ids = sorted(str(i) for i in held if str(i) not in arrived)
+        if ids:
+            out[node] = ids
     return out
 
 

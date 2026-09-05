@@ -21,6 +21,13 @@ one thing that is not: when a vehicle was killed is the runner's knowledge,
 and a block that inferred it from a gap in the deliveries would be deciding
 that the failure happened from the evidence that it happened.
 
+Two of those come from the runner. The scenario's clock, because the nodes
+count from the moment the simulator came up and the record counts from the
+moment the run began. And which vehicles were destroyed, because an
+observation still held only by the aircraft that minted it stops existing
+when the aircraft does, and that is a different thing from the swarm
+dropping it.
+
     python3 -m pytest -q uavx_ws/src/uavx_gcs/test/test_observations.py
 
 Runs on a clean checkout with nothing built.
@@ -322,3 +329,115 @@ def test_an_undelivered_observation_keeps_its_row_with_no_arrival():
                        OUT_START, OUT_END)
     rows = {r["id"]: r["delivered_at_s"] for r in got["ledger"]}
     assert rows[ident(NEAR, 2)] is None
+
+
+# ------------------------------------------------------- the scenario's clock
+def test_the_offset_moves_every_time_the_nodes_wrote():
+    """The nodes count from simulator bring-up and the record from t=0."""
+    minted = {ident(NEAR, 1): 1160.0, ident(NEAR, 2): 1160.4}
+    routers = [router(NEAR, minted, drain_end_at=1166.0)]
+    delivered = {i: 1165.5 for i in minted}
+    got = observations(routers, gcs(delivered), 60.0, 65.0,
+                       epoch_s=1100.0)
+    assert got["ledger"][0]["created_at_s"] == 60.0
+    assert got["ledger"][0]["delivered_at_s"] == 65.5
+    assert got["generated_during_outage"] == 2
+    assert got["drain_end_s"] == 66.0
+    assert got["backlog_drain_s"] == 1.0
+
+
+def test_without_the_offset_nothing_falls_inside_the_window():
+    # The failure this exists to stop, written down: 1160 is outside every
+    # window a 300 s scenario has, so the block would report a clean run in
+    # which nothing was generated during the outage at all.
+    minted = {ident(NEAR, 1): 1160.0}
+    got = observations([router(NEAR, minted)], gcs({ident(NEAR, 1): 1165.5}),
+                       60.0, 105.0)
+    assert got["generated_during_outage"] == 0
+
+
+def test_an_offset_that_is_not_a_time_is_refused():
+    with pytest.raises(LedgerError) as caught:
+        a_run(epoch_s="the beginning")
+    assert "the simulated time the scenario started at" in str(caught.value)
+
+
+# -------------------------------------------------- what went down with it
+def lost_run(**kwargs):
+    """uav_2 is killed holding one of its own, and one of uav_4's."""
+    relay = {ident(RELAY, 1): 118.0, ident(RELAY, 2): 119.8}
+    far = {ident(FAR, n): 118.0 + n for n in range(1, 3)}
+    delivered = {ident(RELAY, 1): 118.4}
+    delivered.update({i: 150.0 for i in far})
+    routers = [
+        router(RELAY, relay, custodied=sorted(list(relay) + [ident(FAR, 1)]),
+               unacknowledged_ids=[ident(RELAY, 2)]),
+        router(FAR, far, unacknowledged_ids=[]),
+    ]
+    body = {"router_ledgers": routers, "gcs_ledger": gcs(delivered),
+            "outage_start_s": 120.0, "outage_end_s": 152.0,
+            "destroyed": [RELAY]}
+    body.update(kwargs)
+    return observations(**body)
+
+
+def test_what_the_aircraft_was_still_holding_alone_is_named():
+    got = lost_run()
+    assert got["lost_with_vehicle"] == {RELAY: [ident(RELAY, 2)]}
+    assert got["lost_with_vehicle_count"] == 1
+
+
+def test_it_leaves_the_generated_set_rather_than_the_missing_one():
+    # The claim the gate reads is that the swarm delivered what it was
+    # carrying. An observation that stopped existing is not carried, and
+    # leaving it in missing_ids would make the claim unsatisfiable by any
+    # implementation rather than false for this one.
+    got = lost_run()
+    assert ident(RELAY, 2) not in got["generated_ids"]
+    assert got["missing_ids"] == []
+    assert observations_set_equal(got) is True
+
+
+def test_the_data_the_dead_vehicle_carried_for_others_is_not_lost():
+    # Retained by its origin until acknowledged, so it comes back on the
+    # first retry over the repaired path. It is delivered here at 150 s.
+    got = lost_run()
+    assert ident(FAR, 1) in got["delivered_ids"]
+    assert ident(FAR, 1) not in got.get("lost_with_vehicle", {}).get(RELAY, [])
+
+
+def test_an_observation_that_arrived_was_not_lost():
+    # The dead vehicle's ledger lists it as unacknowledged because the ack
+    # never got home, and the ground station has it. Delivery wins.
+    got = lost_run(gcs_ledger=gcs({ident(RELAY, 1): 118.4,
+                                   ident(RELAY, 2): 119.9,
+                                   ident(FAR, 1): 150.0,
+                                   ident(FAR, 2): 150.0}))
+    assert "lost_with_vehicle" not in got
+    assert ident(RELAY, 2) in got["generated_ids"]
+
+
+def test_a_run_that_destroyed_nothing_reports_no_losses():
+    assert "lost_with_vehicle" not in a_run()
+
+
+def test_only_a_vehicle_the_run_destroyed_can_lose_anything():
+    # uav_4 is alive and its unacknowledged observation is still deliverable,
+    # so nothing about it is excused.
+    got = lost_run(destroyed=[])
+    assert "lost_with_vehicle" not in got
+    assert ident(RELAY, 2) in got["missing_ids"]
+
+
+def test_a_destroyed_vehicle_with_no_ledger_is_refused():
+    with pytest.raises(LedgerError) as caught:
+        lost_run(destroyed=[ANCHOR])
+    assert "wrote no ledger" in str(caught.value)
+
+
+def test_a_destroyed_vehicle_that_did_not_say_what_it_held_is_refused():
+    relay = {ident(RELAY, 1): 118.0}
+    with pytest.raises(LedgerError) as caught:
+        observations([router(RELAY, relay)], gcs({ident(RELAY, 1): 118.4}),
+                     120.0, 152.0, destroyed=[RELAY])
+    assert "still holding" in str(caught.value)
