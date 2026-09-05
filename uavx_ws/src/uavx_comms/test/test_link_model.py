@@ -13,6 +13,8 @@ The interesting failures here are not "the formula is wrong". They are:
 
 import math
 
+import pytest
+
 from uavx_comms import link, params
 
 import check_geometry as oracle
@@ -163,3 +165,68 @@ def test_the_placement_rule_rejects_the_gap_between_the_two_limits():
     assert not link.placement_holds(middle)
     assert link.placement_holds(params.USED_LINK_MAX_M)
     assert link.placement_holds(params.UNUSED_LINK_MIN_M)
+
+
+# --------------------------------------------------------------- the blackout
+def test_a_gate_that_nothing_lifts_is_a_hold_of_zero():
+    """A scenario that starts in a blackout, rather than injecting one."""
+    gate = link.Blackout()
+    assert gate.start(["uav_2"], 10.0) == ("uav_2",)
+    assert gate.restore_due(1e6) == ()
+    assert gate.live is True
+
+
+def test_the_radio_comes_back_on_its_own_timetable():
+    gate = link.Blackout(120.0)
+    gate.start(["uav_2"], 500.0)
+    assert gate.restore_due(619.9) == ()
+    assert gate.restore_due(620.0) == ("uav_2",)
+    assert gate.live is False
+
+
+def test_it_comes_back_once():
+    gate = link.Blackout(120.0)
+    gate.start(["uav_2"], 500.0)
+    gate.restore_due(620.0)
+    assert gate.restore_due(700.0) == ()
+    assert gate.restored_at == 620.0
+
+
+def test_gating_the_same_vehicle_twice_does_not_restart_the_clock():
+    # The run describes one outage. A second request that moved the start
+    # would shorten it, and the reconnect time is measured from that start.
+    gate = link.Blackout(120.0)
+    gate.start(["uav_2"], 500.0)
+    assert gate.start(["uav_2"], 560.0) == ()
+    assert gate.started_at == 500.0
+    assert gate.restore_due(620.0) == ("uav_2",)
+
+
+def test_the_record_says_when_it_went_and_when_it_came_back():
+    gate = link.Blackout(120.0)
+    row = gate.as_record()
+    assert row["blackout_started_at"] is None
+    assert row["blackout_restored_at"] is None
+    gate.start(["uav_2"], 500.0)
+    gate.restore_due(620.0)
+    row = gate.as_record()
+    assert row["blackout_started_at"] == 500.0
+    assert row["blackout_restored_at"] == 620.0
+    assert row["blackout_nodes"] == []
+
+
+@pytest.mark.parametrize("bad", [-1.0, float("nan"), None, True, "later"])
+def test_a_hold_that_is_not_a_length_of_time_is_refused(bad):
+    with pytest.raises(ValueError):
+        link.Blackout(bad)
+
+
+def test_a_gated_radio_is_not_an_absent_one():
+    # The two faults the organisers name, and they are not the same. A gated
+    # vehicle is still flying and still occupies airspace.
+    model = link.LinkModel(seed=7)
+    model.gate_radio("uav_2")
+    assert model.is_live("uav_2") is False
+    assert "uav_2" not in model.absent
+    model.restore_radio("uav_2")
+    assert model.is_live("uav_2") is True

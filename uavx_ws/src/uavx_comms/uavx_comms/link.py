@@ -26,7 +26,7 @@ looks anything up for itself.
 
 import math
 import random
-from typing import Iterable, Sequence
+from typing import Iterable, Optional, Sequence, Set, Tuple
 
 from . import params
 
@@ -85,6 +85,80 @@ def placement_holds(distance_m: float) -> bool:
     this is the same predicate available at runtime.
     """
     return is_usable(distance_m) or is_absent(distance_m)
+
+
+class Blackout:
+    """One radio gate with an end time, kept apart from the radio itself.
+
+    The scenario names the moment the gate goes on and the moment it comes
+    off. The first is injected by the runner, because a fault has to land at a
+    time the record can attribute to a request. The second is not: the radio
+    restores itself after a frozen hold, so nothing in the recovery depends on
+    the harness noticing that the vehicle is back. A swarm that only recovers
+    when a test tells it to has not recovered.
+
+    The hold is a duration and not a moment, which is what makes it usable.
+    The nodes count in simulated seconds since the simulator came up and the
+    scenario counts from its own zero, and a duration means the same thing in
+    both.
+    """
+
+    def __init__(self, hold_s: float = 0.0) -> None:
+        if isinstance(hold_s, bool) or not isinstance(hold_s, (int, float)):
+            raise ValueError(f"hold_s is {hold_s!r}, not a number of seconds")
+        if not math.isfinite(float(hold_s)) or hold_s < 0:
+            raise ValueError(
+                f"hold_s is {hold_s!r}; a blackout lasts a length of time or "
+                f"lasts until something lifts it, and a negative one is "
+                f"neither")
+        self.hold_s = float(hold_s)
+        self.nodes: Set[str] = set()
+        self.started_at: Optional[float] = None
+        self.restored_at: Optional[float] = None
+
+    @property
+    def live(self) -> bool:
+        return bool(self.nodes)
+
+    def start(self, nodes: Iterable[str], now: float) -> Tuple[str, ...]:
+        """Gate these radios. Returns the ones this call actually gated.
+
+        The first start is the one the record reports. A second naming the
+        same vehicle changes nothing, because the run is describing one
+        outage and a restarted clock would shorten it.
+        """
+        wanted = {str(n) for n in nodes if str(n).strip()}
+        fresh = tuple(sorted(wanted - self.nodes))
+        if not fresh:
+            return ()
+        self.nodes |= wanted
+        if self.started_at is None:
+            self.started_at = float(now)
+            self.restored_at = None
+        return fresh
+
+    def restore_due(self, now: float) -> Tuple[str, ...]:
+        """The radios whose hold has run out. Answered once.
+
+        A hold of zero is a gate nothing lifts, which is what a scenario that
+        starts in a blackout wants.
+        """
+        if not self.nodes or self.hold_s <= 0 or self.started_at is None:
+            return ()
+        if float(now) - self.started_at < self.hold_s:
+            return ()
+        out = tuple(sorted(self.nodes))
+        self.nodes = set()
+        self.restored_at = float(now)
+        return out
+
+    def as_record(self) -> dict:
+        return {
+            "blackout_hold_s": self.hold_s,
+            "blackout_started_at": self.started_at,
+            "blackout_restored_at": self.restored_at,
+            "blackout_nodes": sorted(self.nodes),
+        }
 
 
 class LinkModel:

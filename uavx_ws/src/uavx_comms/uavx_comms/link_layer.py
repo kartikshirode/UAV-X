@@ -45,6 +45,8 @@ from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from uavx_msgs.msg import SwarmPacket
 
+from rcl_interfaces.msg import SetParametersResult
+
 from . import codec, link, params
 from .router_node import spin
 from .simclock import Drain
@@ -82,8 +84,17 @@ class LinkLayerNode(Node):
             "the scenario's seed. The fade band is random and a run nobody "
             "can replay is not evidence."))
         self.declare_parameter("radio_off", [""], _described(
-            "vehicles whose radio starts gated, for a scenario that begins "
-            "in a blackout rather than injecting one."))
+            "vehicles whose radio is gated. Set at startup for a scenario "
+            "that begins in a blackout, and set again during a run to inject "
+            "one. The parameter service is the only interface this node has "
+            "that is not the seam, and seam_manifests.json allows it on every "
+            "node because rclpy gives every node one."))
+        self.declare_parameter("blackout_hold_s", 0.0, _described(
+            "how long a gate injected during the run lasts before the radio "
+            "lifts it by itself. Zero is a gate nothing lifts. The scenario "
+            "names the moment the radio comes back and this is that moment "
+            "minus the moment it went: a duration, because the nodes count "
+            "from bring-up and the scenario counts from its own zero."))
         self.declare_parameter("ledger_path", "", _described(
             "where to write what this radio did. Empty writes nothing."))
 
@@ -110,11 +121,19 @@ class LinkLayerNode(Node):
                 f"radio cannot tell where they are and every link involving "
                 f"them would be scored at an invented distance")
 
+        started_gated = [str(v) for v
+                         in self.get_parameter("radio_off").value
+                         if str(v).strip()]
         self.model = link.LinkModel(
             seed=int(self.get_parameter("seed").value),
-            radio_off=[str(v) for v
-                       in self.get_parameter("radio_off").value
-                       if str(v).strip()])
+            radio_off=started_gated)
+        # The gate the run injects, and the hold after which this node lifts
+        # it. Nothing in the swarm is told either way: a vehicle that has lost
+        # its radio does not know, and neither do its neighbours until their
+        # HELLOs stop arriving. That is the whole fault.
+        self.blackout = link.Blackout(
+            float(self.get_parameter("blackout_hold_s").value))
+        self.add_on_set_parameters_callback(self._on_parameters)
         self.ledger_path = str(self.get_parameter("ledger_path").value)
 
         self.positions: Dict[str, Tuple[float, float, float]] = {
@@ -237,8 +256,47 @@ class LinkLayerNode(Node):
             self.by_pair[pair] = self.by_pair.get(pair, 0) + 1
             self._pending.append((due, receiver, message))
 
+    def _on_parameters(self, parameters) -> SetParametersResult:
+        """Gate or lift a radio while the run is going on.
+
+        Applied here rather than read on the next tick, because the moment the
+        parameter is accepted is the moment the injector records, and a gate
+        that took effect a tick later would put the fault at a time nothing
+        observed.
+        """
+        for parameter in parameters:
+            if parameter.name != "radio_off":
+                continue
+            wanted = {str(v) for v in (parameter.value or []) if str(v).strip()}
+            unknown = sorted(wanted - set(self.nodes))
+            if unknown:
+                return SetParametersResult(
+                    successful=False,
+                    reason=f"this radio carries {', '.join(self.nodes)} and "
+                           f"was asked to gate {', '.join(unknown)}")
+            now = self.now_s()
+            for node_id in self.blackout.start(wanted, now):
+                self.model.gate_radio(node_id)
+                self.get_logger().warning(
+                    f"{node_id} radio gated at {now:.1f}, "
+                    f"hold {self.blackout.hold_s:.0f}s")
+            for node_id in sorted(self.model.radio_off - wanted
+                                  - self.blackout.nodes):
+                self.model.restore_radio(node_id)
+                self.get_logger().info(f"{node_id} radio restored at {now:.1f}")
+        return SetParametersResult(successful=True)
+
+    def _lift_when_due(self, now: float) -> None:
+        """The radio comes back on its own timetable and tells nobody."""
+        for node_id in self.blackout.restore_due(now):
+            self.model.restore_radio(node_id)
+            self.get_logger().warning(
+                f"{node_id} radio back at {now:.1f}, after "
+                f"{self.blackout.hold_s:.0f}s")
+
     def drain(self) -> None:
         """Release every delivery whose hop latency has elapsed."""
+        self._lift_when_due(self.now_s())
         if not self._pending:
             return
         now = self.now_s()
@@ -274,6 +332,7 @@ class LinkLayerNode(Node):
             "deliveries_by_pair": dict(sorted(self.by_pair.items())),
             "still_pending": len(self._pending),
             **self.shutdown_drain.as_record(),
+            **self.blackout.as_record(),
         }
 
     def write_ledger(self) -> None:
