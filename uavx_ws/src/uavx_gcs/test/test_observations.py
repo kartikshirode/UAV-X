@@ -301,8 +301,30 @@ def test_the_anchor_that_forwarded_everything_is_not_the_custodian():
     both = sorted(list(near) + list(far))
     holders = [
         router(ANCHOR, {}, custodied=both),
-        router(NEAR, near, custodied=both, custodian_named=NEAR),
-        router(FAR, far, custodian_named=NEAR),
+        router(NEAR, near, custodied=both, custodian_named=NEAR,
+               custodian_named_s=43.0),
+        router(FAR, far, custodian_named=NEAR, custodian_named_s=40.9),
+    ]
+    assert backlog_custodian(holders, both) == NEAR
+
+
+def test_the_naming_is_weighed_in_seconds_and_not_counted():
+    """The first queue_drain, where the anchor won on a lowest id tie.
+
+    Every node is without a route for the first seconds of a run while the
+    link state travels, and uav_1 declared itself cut off for 2.1 s of that
+    and named the only member of its component, which was itself. Against
+    83.9 vehicle-seconds of two cut off surveyors naming uav_3.
+    """
+    near = {ident(NEAR, 1): 61.0}
+    far = {ident(FAR, 1): 61.1}
+    both = sorted(list(near) + list(far))
+    holders = [
+        router(ANCHOR, {}, custodied=both, custodian_named=ANCHOR,
+               custodian_named_s=2.1),
+        router(NEAR, near, custodied=both, custodian_named=NEAR,
+               custodian_named_s=43.0),
+        router(FAR, far, custodian_named=NEAR, custodian_named_s=40.9),
     ]
     assert backlog_custodian(holders, both) == NEAR
 
@@ -318,10 +340,10 @@ def test_a_component_of_one_names_itself_and_custodies_nothing():
     far = {ident(FAR, 1): 61.1}
     wanted = sorted(list(relay) + list(near) + list(far))
     holders = [
-        router(RELAY, relay, custodian_named=RELAY),
+        router(RELAY, relay, custodian_named=RELAY, custodian_named_s=42.1),
         router(NEAR, near, custodied=sorted(list(near) + list(far)),
-               custodian_named=NEAR),
-        router(FAR, far, custodian_named=NEAR),
+               custodian_named=NEAR, custodian_named_s=43.0),
+        router(FAR, far, custodian_named=NEAR, custodian_named_s=40.9),
     ]
     assert backlog_custodian(holders, wanted) == NEAR
 

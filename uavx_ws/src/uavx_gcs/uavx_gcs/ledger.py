@@ -245,6 +245,13 @@ def backlog_custodian(router_ledgers: Sequence[Mapping],
     Being named alone is no better, since a component of one names itself and
     holds nothing but its own.
 
+    Naming is weighed in vehicle-seconds rather than counted. Every node is
+    without a route for the first seconds of a run while the link state
+    travels, and the first queue_drain has uav_1 naming itself for 2.1 s of
+    bring-up against uav_3 named for 83.9 by the two vehicles that were
+    actually cut off. A rule that took the lowest id of everyone ever named
+    reports the anchor again.
+
     A ledger written before chunk 4.4 carries no name, and for those the
     custody half stands alone, which is what the earlier records were read by.
     """
@@ -252,7 +259,7 @@ def backlog_custodian(router_ledgers: Sequence[Mapping],
     if not wanted:
         return None
     holders = []
-    named = set()
+    named: Dict[str, float] = {}
     for entry in router_ledgers:
         node = _node_of(entry)
         held = set(str(i) for i in (entry.get("custodied_ids") or []))
@@ -261,11 +268,14 @@ def backlog_custodian(router_ledgers: Sequence[Mapping],
             holders.append(node)
         who = entry.get("custodian_named")
         if isinstance(who, str) and who:
-            named.add(who)
+            seconds = _number(entry.get("custodian_named_s"))
+            named[who] = named.get(who, 0.0) + (seconds or 0.0)
     if not holders:
         return None
-    claimed = sorted(set(holders) & named)
-    return claimed[0] if claimed else min(holders)
+    claimed = sorted(set(holders) & set(named))
+    if not claimed:
+        return min(holders)
+    return min(claimed, key=lambda node: (-named[node], node))
 
 
 def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
