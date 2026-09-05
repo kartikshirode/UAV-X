@@ -87,9 +87,11 @@ import time
 from pathlib import Path
 
 from uavx_sim import run_record
-from uavx_sim.comms import (CommsError, collector_command_no_survey,
-                            comms_spec, delivery_from_ledgers, gcs_command,
-                            link_layer_command, read_ledger,
+from uavx_sim.comms import (COMMS_BLACKOUT, KILL, CommsError,
+                            blackout_hold_s, collector_command_no_survey,
+                            comms_spec, delivery_from_ledgers,
+                            gate_radio_command, gated_radios_command,
+                            gcs_command, link_layer_command, read_ledger,
                             role_manager_command, role_managers_of,
                             router_command, station_gap, station_node_command,
                             GCS_LEDGER_KEYS, ROLE_LEDGER_KEYS,
@@ -227,6 +229,12 @@ COMMS_SETTLE_S = 8.0
 
 LINK_LABEL = "link-layer"
 GCS_LABEL = "gcs"
+
+# Chunk 4.3. How long a ros2 command line tool gets. Injecting a blackout is
+# a parameter set on the radio and observing one is a parameter get, and both
+# discover the node over DDS before they do anything. Ten seconds is far more
+# than either has ever needed and far less than the stall watchdog allows.
+TOOL_TIMEOUT_S = 10.0
 
 # Chunk 4.2. How long before an injected event the ROS graph is captured.
 # The snapshot is the evidence that the system is wired the way the seam
@@ -1124,13 +1132,16 @@ class Harness:
 
     # ----------------------------------------------------------- injection
     def _apply_effect(self, kind, target):
-        if kind != "kill":
+        if kind == COMMS_BLACKOUT:
+            self._gate_radio(target)
+            return
+        if kind != KILL:
             raise HarnessFailure(
-                f"scenario asks for a {kind!r} event on {target}, and chunk 1.7 "
-                f"implements only 'kill'. The comms blackout belongs to the "
-                f"link layer and the GPS degrade to the vehicle bring-up, and "
-                f"neither exists yet. A runner that logged an intention here "
-                f"would produce a record of things it did not do.", EXIT_CHILD)
+                f"scenario asks for a {kind!r} event on {target}, and this "
+                f"runner carries out {KILL} and {COMMS_BLACKOUT}. The GPS "
+                f"degrade belongs to the vehicle bring-up and does not exist "
+                f"yet. A runner that logged an intention here would produce a "
+                f"record of things it did not do.", EXIT_CHILD)
         vehicle = self._vehicle(target)
         pids = px4_instances().get(vehicle.index, [])
         if not pids:
@@ -1187,13 +1198,66 @@ class Harness:
         a dead process could still have a socket buffer draining, and a silent
         link could be one dropped datagram.
         """
-        if kind != "kill":
+        if kind == COMMS_BLACKOUT:
+            return self._radio_silence_visible(target)
+        if kind != KILL:
             return False
         vehicle = self._vehicle(target)
         if px4_instances().get(vehicle.index):
             return False
         silence = vehicle.silent_for(self.sim_now)
         return silence is not None and silence >= KILL_SILENCE_S
+
+    def _radio_silence_visible(self, target):
+        """A gated radio, on a vehicle that is still flying.
+
+        Two witnesses again, and the second is what tells this fault from the
+        other one. A killed vehicle also stops being heard on the radio; this
+        one is still reporting its position over its own telemetry link, which
+        is not the swarm radio and is not gated. Without that half, a blackout
+        that happened to kill the aircraft would read as a blackout.
+        """
+        vehicle = self._vehicle(target)
+        silence = vehicle.silent_for(self.sim_now)
+        if silence is None or silence >= KILL_SILENCE_S:
+            return False
+        done = self._run_tool(gated_radios_command())
+        if done is None or done.returncode != 0:
+            return False
+        return f"'{target}'" in done.stdout or f'"{target}"' in done.stdout
+
+    def _gate_radio(self, target):
+        """Cut this vehicle's radio, both ways, and leave it flying.
+
+        Set on the radio and never on the vehicle. The swarm is told nothing:
+        the gated node does not know its own radio is off, its neighbours find
+        out when the HELLOs stop, and the record's reconnect time is measured
+        from the moment this landed rather than from the moment it was asked
+        for.
+        """
+        if self.comms is None:
+            raise HarnessFailure(
+                f"the scenario gates {target}'s radio and this run has none. "
+                f"A blackout in a scenario with communications disabled is a "
+                f"fault with nothing to fail.", EXIT_CHILD)
+        self._vehicle(target)
+        done = self._run_tool(gate_radio_command([target]))
+        if done is None or done.returncode != 0:
+            detail = "" if done is None else (done.stdout + done.stderr).strip()
+            # Built outside the message. A multi-line expression inside an
+            # f-string is a syntax error on the 3.10 this stack runs, and
+            # nothing here would have found that before the run.
+            why = detail or "the parameter set did not finish"
+            raise HarnessFailure(
+                f"could not gate {target}'s radio: {why}", EXIT_CHILD)
+
+    def _run_tool(self, command):
+        """One short ros2 command line call, or None if it could not run."""
+        try:
+            return subprocess.run(command, capture_output=True, text=True,
+                                  timeout=TOOL_TIMEOUT_S)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
 
     def _vehicle(self, name):
         for vehicle in self.vehicles:
@@ -1631,7 +1695,8 @@ class Harness:
         self.ledger_paths[LINK_LABEL] = self.ledger_dir / "link_layer.json"
         self._start_node(LINK_LABEL, link_layer_command(
             vehicles, self.model_entries, int(self.scenario.seed),
-            self.ledger_paths[LINK_LABEL]))
+            self.ledger_paths[LINK_LABEL],
+            hold_s=blackout_hold_s(self.scenario.raw)))
 
         for vehicle in self.vehicles:
             label = f"router-{vehicle.name}"
