@@ -100,6 +100,47 @@
         "/scenario_runner"
       ],
       "required_outside_why": "harness_check runs the harness and nothing else. There are no routers, no mission executors and no GCS in week 1 because none of them are built yet, and the link layer and the metrics collector are among them, so the only process this scenario can require is the runner itself. It is never cited as evidence for a rubric row, which is why check_submission_const.HARNESS_RUNS keeps it out of the nine runs the final package requires."
+    },
+    "queue_drain": {
+      "week": 4,
+      "per_vehicle": [
+        "router",
+        "mission_executor"
+      ],
+      "extra": [
+        "/gcs/gcs_node"
+      ],
+      "why": "queue_drain forbids the election on purpose, so no role is ever granted and no role manager has anything to do. A graph carrying one would mean the scenario that holds the outage open for the full 45 seconds had a replacement relay in it."
+    },
+    "encounter": {
+      "week": 4,
+      "vehicles": [
+        "uav_3",
+        "uav_4"
+      ],
+      "per_vehicle": [
+        "router",
+        "mission_executor"
+      ],
+      "extra": [
+        "/gcs/gcs_node"
+      ],
+      "why": "Two vehicles, both surveying, elections off. The radio runs because the yield rule is fed by it: relative position and velocity come out of HELLO, which is why safety degrades when the link does."
+    },
+    "encounter_noyield": {
+      "week": 4,
+      "vehicles": [
+        "uav_3",
+        "uav_4"
+      ],
+      "per_vehicle": [
+        "router",
+        "mission_executor"
+      ],
+      "extra": [
+        "/gcs/gcs_node"
+      ],
+      "why": "Two vehicles, both surveying, elections off. The radio runs because the yield rule is fed by it: relative position and velocity come out of HELLO, which is why safety degrades when the link does."
     }
   },
   "required_outside": [

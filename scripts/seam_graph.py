@@ -92,14 +92,25 @@ def load_manifest(scenario: str) -> dict:
         die(f"no seam manifest for scenario {scenario!r}. "
             f"Known: {', '.join(sorted(m['scenarios']))}")
     s = m["scenarios"][scenario]
-    expected = [f"/{v}/{p}" for v in m["vehicles"] for p in s["per_vehicle"]]
+    # Chunk 4.1. A scenario may fly fewer vehicles than the swarm has. The
+    # encounter pair flies two, and expanding the global list for it would
+    # demand a router and a mission executor for two aircraft nobody
+    # launched, then report a clean run as missing four processes. Absent
+    # means all of them, which is what every earlier scenario says by saying
+    # nothing.
+    vehicles = list(s.get("vehicles") or m["vehicles"])
+    unknown = sorted(set(vehicles) - set(m["vehicles"]))
+    if unknown:
+        die(f"scenario {scenario!r} names {', '.join(unknown)}, which is not "
+            f"in the swarm's vehicle list")
+    expected = [f"/{v}/{p}" for v in vehicles for p in s["per_vehicle"]]
     expected += s["extra"]
     outside_allow = m.get("outside_allowlist", {})
     missing_allow = sorted(set(m["outside_processes"]) - set(outside_allow))
     if missing_allow:
         die(f"outside_allowlist has no rows for {', '.join(missing_allow)}")
     return {
-        "vehicles": m["vehicles"],
+        "vehicles": vehicles,
         "outside": set(m["outside_processes"]),
         # Round 7 finding 6: what each outside process is allowed to hold.
         "outside_allow": outside_allow,
