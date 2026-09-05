@@ -123,6 +123,21 @@ COVERAGE_FIELDS = ("coverage_fraction", "coverage_source",
 DELIVERY_FIELDS = ("delivery_ratio", "delivery_ratio_by_node",
                    "delivered_hops_by_node", "delivered_edges_by_node")
 
+# Chunk 4.2. What a flying run says about keeping vehicles apart. All four or
+# none, and the sample count is the reason the other three can be believed:
+# zero violations on a monitor that never ran is the same shape as a package
+# check passing on a machine with no simulator, which is round 3 finding 8.
+SAFETY_FIELDS = ("min_pairwise_separation_m", "separation_violations",
+                 "collision_contacts", "contact_monitor_samples")
+
+# What a run that lost a vehicle says about getting back. relay_slot and the
+# observations block are objects the schema types; these are the flat fields
+# the gate reads beside them.
+RECOVERY_FIELDS = ("time_to_reconnect_s", "relay_role_moved",
+                   "relay_role_holder", "relay_role_released",
+                   "mover_returned_to_station",
+                   "delivery_ratio_after_recovery")
+
 TEMP_PREFIX = ".uavx-record-"
 TEMP_SUFFIX = ".tmp"
 
@@ -479,11 +494,203 @@ def validate_record(record) -> dict:
 
     problems += _coverage_problems(record)
     problems += _delivery_problems(record)
+    problems += _safety_problems(record)
+    problems += _observation_problems(record)
+    problems += _recovery_problems(record)
 
     if problems:
         raise RecordError("; ".join(problems))
     return record
 
+
+def _safety_problems(record) -> list:
+    """The separation fields, all four or none, and the zero that means something."""
+    present = [key for key in SAFETY_FIELDS if key in record]
+    if not present:
+        return []
+    problems = []
+    if len(present) != len(SAFETY_FIELDS):
+        missing = [key for key in SAFETY_FIELDS if key not in record]
+        problems.append(
+            f"the record carries {', '.join(present)} and not "
+            f"{', '.join(missing)}. A separation claim with no sample count "
+            f"behind it cannot be told from a monitor that never ran")
+        return problems
+
+    samples = record.get("contact_monitor_samples")
+    violations = record.get("separation_violations")
+    contacts = record.get("collision_contacts")
+    for name, value in (("contact_monitor_samples", samples),
+                        ("separation_violations", violations),
+                        ("collision_contacts", contacts)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            problems.append(f"{name} is {value!r}, not a count")
+    closest = record.get("min_pairwise_separation_m")
+    if not _is_number(closest) or closest < 0:
+        problems.append(
+            f"min_pairwise_separation_m is "
+            f"{record.get('min_pairwise_separation_m')!r}, not a distance")
+    if isinstance(samples, int) and samples == 0 and not problems:
+        problems.append(
+            "the contact monitor watched no frames, so its zero violations "
+            "and zero contacts are statements about nothing")
+    if (isinstance(violations, int) and isinstance(contacts, int)
+            and not isinstance(violations, bool)
+            and not isinstance(contacts, bool) and contacts > violations):
+        problems.append(
+            f"{contacts} contacts against {violations} separation violations. "
+            f"Two airframes inside a metre are inside the ten metre floor, so "
+            f"every contact is also a violation and the two counts have "
+            f"drifted apart")
+    return problems
+
+
+def _observation_problems(record) -> list:
+    """The outage block, against itself.
+
+    The schema types every field. What it cannot say is that the counts match
+    the lists they were counted from, that the drain arithmetic closes, and
+    that the windows are in the order a run happens in.
+    """
+    block = record.get("observations")
+    if block is None:
+        return []
+    if not isinstance(block, dict):
+        return [f"observations is {block!r}, not the block uavx_gcs.ledger "
+                f"produces"]
+
+    problems = []
+    generated = block.get("generated_ids")
+    delivered = block.get("delivered_ids")
+    if not isinstance(generated, list) or not isinstance(delivered, list):
+        return ["observations carries no generated_ids and delivered_ids, "
+                "which are the two sets every number in it compares"]
+
+    if block.get("generated") != len(generated):
+        problems.append(
+            f"observations.generated is {block.get('generated')!r} and "
+            f"generated_ids holds {len(generated)}. The count and the list "
+            f"are the same claim written twice")
+    if block.get("unique_delivered") != len(set(delivered)):
+        problems.append(
+            f"observations.unique_delivered is "
+            f"{block.get('unique_delivered')!r} and delivered_ids holds "
+            f"{len(set(delivered))} distinct ids")
+
+    rows = block.get("ledger")
+    if not isinstance(rows, list) or len(rows) != len(generated):
+        problems.append(
+            f"observations.ledger has {len(rows) if isinstance(rows, list) else 0} "
+            f"rows against {len(generated)} generated observations. The rows "
+            f"are what says which ids fell inside the outage, so a run that "
+            f"is missing some of them cannot answer that")
+
+    missing = block.get("missing_ids")
+    unexpected = block.get("unexpected_ids")
+    if isinstance(missing, list) and isinstance(unexpected, list):
+        equal = record.get("observations_set_equal")
+        if isinstance(equal, bool):
+            if equal != (not missing and not unexpected):
+                problems.append(
+                    f"observations_set_equal is {equal!r} against "
+                    f"{len(missing)} missing and {len(unexpected)} unexpected "
+                    f"ids. The flag is the two lists being empty and nothing "
+                    f"else")
+        elif equal is not None:
+            problems.append(
+                f"observations_set_equal is {equal!r}, not a flag")
+
+    times = [block.get(key) for key in
+             ("outage_start_s", "outage_end_s", "drain_start_s",
+              "drain_end_s", "backlog_drain_s")]
+    if not all(_is_number(value) for value in times):
+        problems.append(
+            "observations is missing one of the four times the drain is "
+            "measured between, so the bound the gate reads was computed from "
+            "something that is not in the record")
+        return problems
+    start, end, drain_start, drain_end, drained = (float(v) for v in times)
+
+    if end < start:
+        problems.append(
+            f"the outage ends at {end} and starts at {start}")
+    if drain_start < end:
+        problems.append(
+            f"the drain starts at {drain_start} and the route came back at "
+            f"{end}. A queue cannot begin draining before it has somewhere "
+            f"to drain to")
+    if drain_end < drain_start:
+        problems.append(
+            f"the queue emptied at {drain_end}, before the drain started at "
+            f"{drain_start}")
+    if abs(drained - (drain_end - drain_start)) > 1e-6:
+        problems.append(
+            f"backlog_drain_s is {drained} and drain_end_s minus "
+            f"drain_start_s is {drain_end - drain_start}. One of the two was "
+            f"measured and the other was typed")
+
+    during = block.get("generated_during_outage")
+    after = block.get("delivered_after_restore")
+    if isinstance(during, int) and during > len(generated):
+        problems.append(
+            f"{during} observations were generated during the outage and "
+            f"{len(generated)} in the whole run")
+    if (isinstance(during, int) and isinstance(after, int)
+            and after > during):
+        problems.append(
+            f"{after} observations were delivered after the restore and only "
+            f"{during} were generated during the outage. The second set "
+            f"contains the first")
+    return problems
+
+
+def _recovery_problems(record) -> list:
+    """The role transfer, all six fields or none, and the holder that flew."""
+    present = [key for key in RECOVERY_FIELDS if key in record]
+    if not present:
+        return []
+    problems = []
+    if len(present) != len(RECOVERY_FIELDS):
+        missing = [key for key in RECOVERY_FIELDS if key not in record]
+        problems.append(
+            f"the record carries {', '.join(present)} and not "
+            f"{', '.join(missing)}. A recovery is a vehicle moving, a role "
+            f"changing hands and a route coming back, and a record with some "
+            f"of those is a record of something else")
+        return problems
+
+    moved = record.get("relay_role_moved")
+    holder = record.get("relay_role_holder")
+    if not isinstance(moved, bool):
+        problems.append(f"relay_role_moved is {moved!r}, not a flag")
+    for name in ("relay_role_released", "mover_returned_to_station"):
+        if not isinstance(record.get(name), bool):
+            problems.append(f"{name} is {record.get(name)!r}, not a flag")
+    if moved is True and not holder:
+        problems.append(
+            "the relay role moved and no vehicle is named as holding it")
+    if moved is False and holder:
+        problems.append(
+            f"{holder} is named as the relay and relay_role_moved is false")
+    if (record.get("mover_returned_to_station") is True
+            and record.get("relay_role_released") is not True):
+        problems.append(
+            "the mover returned to its station and the role was never "
+            "released. A vehicle that flew home while still holding the "
+            "relay has abandoned the link rather than handed it back")
+
+    reconnect = record.get("time_to_reconnect_s")
+    if not _is_number(reconnect) or reconnect < 0:
+        problems.append(
+            f"time_to_reconnect_s is {record.get('time_to_reconnect_s')!r}, "
+            f"not a duration")
+    ratio = record.get("delivery_ratio_after_recovery")
+    if not _is_number(ratio) or not 0.0 <= float(ratio) <= 1.0:
+        problems.append(
+            f"delivery_ratio_after_recovery is "
+            f"{record.get('delivery_ratio_after_recovery')!r}, not a ratio "
+            f"in [0, 1]")
+    return problems
 
 def _delivery_problems(record) -> list:
     """The delivery block, agreeing with itself and with the packet counts.
@@ -663,7 +870,8 @@ def build_record(*, run_id, scenario_path, scenario_sha256, seed, commit_sha,
                  injected_events, requested_duration_s, elapsed_sim_s,
                  clock_source, source_tree_sha256, resources,
                  injected_event_observed, injected_event_count,
-                 graph_snapshot_sha256=None, coverage=None, delivery=None):
+                 graph_snapshot_sha256=None, coverage=None, delivery=None,
+                 safety=None, observations=None, recovery=None):
     """Assemble one record and validate it before anybody can write it.
 
     Every argument is keyword only and every one of them is required. A
@@ -747,6 +955,32 @@ def build_record(*, run_id, scenario_path, scenario_sha256, seed, commit_sha,
         for key in COVERAGE_FIELDS:
             if key in coverage:
                 record[key] = coverage[key]
+    if safety is not None:
+        if not isinstance(safety, dict):
+            raise RecordError(f"safety is {safety!r}, not the block the "
+                              f"separation monitor reports")
+        for key in SAFETY_FIELDS:
+            if key in safety:
+                record[key] = safety[key]
+    if observations is not None:
+        if not isinstance(observations, dict):
+            raise RecordError(f"observations is {observations!r}, not the "
+                              f"block uavx_gcs.ledger produces")
+        record["observations"] = observations
+        record["observations_set_equal"] = (
+            not observations.get("missing_ids")
+            and not observations.get("unexpected_ids"))
+    if recovery is not None:
+        if not isinstance(recovery, dict):
+            raise RecordError(f"recovery is {recovery!r}, not a block of "
+                              f"role and route fields")
+        for key in RECOVERY_FIELDS:
+            if key in recovery:
+                record[key] = recovery[key]
+        if "relay_slot" in recovery:
+            record["relay_slot"] = recovery["relay_slot"]
+        if "handback" in recovery:
+            record["handback"] = recovery["handback"]
     return validate_record(record)
 
 
