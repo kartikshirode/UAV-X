@@ -258,3 +258,75 @@ def test_a_clearance_measured_against_nothing_is_not_a_number():
     decision = slots.solve((165.0, 0.0, 30.0), [(475.0, -75.0, 60.0)])
     assert decision.clearance_m == float("inf")
     assert decision.as_record()["clearance_m"] is None
+
+
+# --------------------------------------------------- retry, and not resend
+def sent_once(node, identity, at):
+    """Pretend the node forwarded that observation at that moment."""
+    node.store.pop()
+    node._sent_at[identity] = at
+
+
+def test_an_observation_still_in_flight_is_not_sent_again():
+    """The first queue_drain, where the drain kept refilling.
+
+    uav_3 was two seconds from empty when the route computation put 153
+    packets it had already sent back into the queue, and then again two
+    seconds later. None of them was lost; none of them had had time to be
+    acknowledged either.
+    """
+    node = router()
+    node.observe(10.0)
+    sent_once(node, (NEAR, 1), 10.1)
+    assert node.retry_pending(10.1 + params.RETRY_AFTER_S / 2) == 0
+    assert len(node.store) == 0
+
+
+def test_an_acknowledgement_that_is_overdue_gets_the_observation_sent_again():
+    # The case the retry exists for: a link that came up inside the fade band
+    # dropped it, and nothing but the origin has it.
+    node = router()
+    node.observe(10.0)
+    sent_once(node, (NEAR, 1), 10.1)
+    assert node.retry_pending(10.1 + params.RETRY_AFTER_S + 0.01) == 1
+    assert len(node.store) == 1
+
+
+def test_the_handover_to_a_custodian_takes_what_is_still_in_flight_too():
+    """Waiting proves nothing when the next hop has gone.
+
+    Everything sent toward a neighbour that is no longer reachable is lost for
+    certain rather than in flight, and it belongs with the member that is
+    holding the component's backlog.
+    """
+    node = router()
+    node.observe(10.0)
+    sent_once(node, (NEAR, 1), 10.1)
+    assert node.retry_pending(10.2, only_overdue=False) == 1
+    assert len(node.store) == 1
+
+
+def test_an_acknowledged_observation_is_never_sent_again():
+    node = router()
+    node.observe(10.0)
+    sent_once(node, (NEAR, 1), 10.1)
+    node._on_ack(pk.control(
+        params.GCS_ID, pk.KIND_ACK, 10.4,
+        {"id": f"{NEAR}:1", "origin_id": NEAR, "sequence": 1,
+         "path": [NEAR, ANCHOR, params.GCS_ID]},
+        dest_id=NEAR, sequence=1), 10.4)
+    assert node.retry_pending(10.1 + params.RETRY_AFTER_S + 1.0) == 0
+    assert node._sent_at == {}
+
+
+def test_the_retry_interval_is_derived_from_the_frozen_numbers():
+    # A full queue ahead of it, and the observation and its acknowledgement
+    # each crossing the mesh. Restating the answer here would make this a
+    # second place the number lives.
+    assert params.RETRY_AFTER_S == (
+        params.QUEUE_CAPACITY / params.FORWARD_RATE_PPS
+        + 2 * params.LSA_TTL * params.HOP_LATENCY_S)
+    assert params.RETRY_AFTER_S > params.LSA_PERIOD_S, (
+        "the retry fires inside one route computation of the send, so every "
+        "computation resends everything outstanding")
+

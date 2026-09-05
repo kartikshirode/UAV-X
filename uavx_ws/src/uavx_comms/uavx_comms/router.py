@@ -174,6 +174,9 @@ class Router:
         # observation. That guarantees duplicates at the destination, which is
         # why deduplication there is a set comparison and not a count.
         self.pending_ack: Dict[Tuple[str, int], pk.Packet] = {}
+        # When each of those was last sent, so the retry can tell a packet
+        # that is overdue from one that is still in flight.
+        self._sent_at: Dict[Tuple[str, int], float] = {}
         self.generated_ids: List[str] = []
         self.generated_at: Dict[str, float] = {}
 
@@ -400,6 +403,7 @@ class Router:
             return
         key = (body["origin_id"], int(body["sequence"]))
         self.pending_ack.pop(key, None)
+        self._sent_at.pop(key, None)
         self.store.drop(key)
         for message in self.roles.confirm(body["id"], body["path"], now):
             self._send_role(message, now)
@@ -627,7 +631,7 @@ class Router:
             # outage does not turn into a retransmission storm, and the queue is
             # keyed by identity so re-queueing cannot inflate the depth the gate
             # reads.
-            self.retry_pending()
+            self.retry_pending(now)
             self._handed_to = None
         else:
             # No route, so the backlog belongs with the component's custodian
@@ -647,7 +651,7 @@ class Router:
             holder = self.custodian()
             if holder is not None and holder != self._handed_to:
                 self._handed_to = holder
-                self.retry_pending()
+                self.retry_pending(now, only_overdue=False)
         self._offer_handback(topo, relays, now)
 
     def _with_slot(self, message: dict, now: float) -> Optional[dict]:
@@ -913,17 +917,33 @@ class Router:
         self.store.push(obs, self.pending_ack)
         return obs
 
-    def retry_pending(self) -> int:
-        """Re-queue everything still unacknowledged, oldest first.
+    def retry_pending(self, now: float, only_overdue: bool = True) -> int:
+        """Re-queue everything overdue, oldest first.
 
-        Called when a route returns. The store may already hold some of them,
-        and the queue is keyed by identity, so re-queueing is idempotent and
-        cannot inflate the depth the gate reads.
+        Overdue and not merely unacknowledged. An observation sent a moment ago
+        has not had time to reach the ground station and be answered, and
+        putting a second copy of it into the queue is what turns a recovery
+        into a retransmission storm. The first queue_drain measured it: 153
+        packets back into a queue that was two seconds from empty, every route
+        computation, for as long as anything was outstanding.
+
+        `only_overdue` is false for the one case where waiting proves nothing.
+        When the component reorganises, everything this node sent toward a next
+        hop it can no longer reach is gone for certain rather than in flight,
+        and it belongs with the custodian now.
+
+        The store may already hold some of them, and the queue is keyed by
+        identity, so re-queueing is idempotent and cannot inflate the depth the
+        gate reads.
         """
         requeued = 0
         for key in sorted(self.pending_ack,
                           key=lambda k: self.pending_ack[k].created_at):
             if key in self.store:
+                continue
+            sent = self._sent_at.get(key)
+            if (only_overdue and sent is not None
+                    and now - sent < params.RETRY_AFTER_S):
                 continue
             self.store.push(self.pending_ack[key], self.pending_ack)
             requeued += 1
@@ -968,6 +988,8 @@ class Router:
             out = held.copy(hop_count=hop_count)
             out.path = list(held.path) + [next_hop]
             self._emit(out)
+            if held.identity() in self.pending_ack:
+                self._sent_at[held.identity()] = now
         self._note_drain(now)
 
     def _note_drain(self, now: float) -> None:

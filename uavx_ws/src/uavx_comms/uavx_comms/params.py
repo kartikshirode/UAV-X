@@ -43,6 +43,17 @@ ROUTE_HYSTERESIS_WINS = 2
 APP_PACKET_RATE_HZ = 5.0
 QUEUE_CAPACITY = 512
 FORWARD_RATE_PPS = 200.0
+
+# How long an unacknowledged observation waits before its origin sends it
+# again. Derived, not chosen: a full queue ahead of it clears in
+# QUEUE_CAPACITY / FORWARD_RATE_PPS, and the observation and its
+# acknowledgement each cross at most LSA_TTL hops at HOP_LATENCY_S.
+#
+# The retry exists for the fade band, where a link comes up and drops real
+# packets that are then held only by their origin. A retry that fires sooner
+# than this is not resending a lost packet, it is putting a second copy of a
+# packet that is still in flight into the queue that is trying to empty.
+RETRY_AFTER_S = QUEUE_CAPACITY / FORWARD_RATE_PPS + 2 * LSA_TTL * HOP_LATENCY_S
 OBSERVATION_BYTES = 256
 OBSERVATION_LIFETIME_S = 300.0
 
