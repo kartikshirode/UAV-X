@@ -362,6 +362,11 @@ def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
         "duplicated": int(gcs_ledger.get("duplicated") or 0),
         "expired": sum(int(e.get("expired") or 0) for e in router_ledgers),
         "evicted": sum(int(e.get("evicted") or 0) for e in router_ledgers),
+        # Pushed out of a queue and not lost, because the node that minted it
+        # still held it. Reported beside evicted rather than folded into it:
+        # a queue too small for a two minute outage and a design that loses
+        # data produce the same number otherwise.
+        "deferred": sum(int(e.get("deferred") or 0) for e in router_ledgers),
         "peak_queue_depth": max(
             [int(e.get("peak_queue_depth") or 0) for e in router_ledgers]
             or [0]),

@@ -319,7 +319,7 @@ class Router:
         if now > incoming.expires_at:
             self._drop(DROP_EXPIRED)
             return
-        self.store.push(incoming)
+        self.store.push(incoming, self.pending_ack)
 
     def _accept(self, incoming: pk.Packet, now: float) -> None:
         """Deduplication at the destination, by (origin_id, sequence) alone.
@@ -829,7 +829,7 @@ class Router:
         self.generated_ids.append(obs.identity_str())
         self.generated_at[obs.identity_str()] = now
         self.pending_ack[obs.identity()] = obs
-        self.store.push(obs)
+        self.store.push(obs, self.pending_ack)
         return obs
 
     def retry_pending(self) -> int:
@@ -844,7 +844,7 @@ class Router:
                           key=lambda k: self.pending_ack[k].created_at):
             if key in self.store:
                 continue
-            self.store.push(self.pending_ack[key])
+            self.store.push(self.pending_ack[key], self.pending_ack)
             requeued += 1
         return requeued
 
@@ -914,6 +914,9 @@ class Router:
             "duplicated": self.duplicated,
             "expired": self.store.expired,
             "evicted": self.store.evicted,
+            # Pushed out of the queue and not lost: this node minted it
+            # and still holds it until the destination acknowledges it.
+            "deferred": self.store.deferred,
             "peak_queue_depth": self.store.peak,
             "control_queue_max_delay_s": self.control_max_delay_s,
             "control_served": self.control_served,

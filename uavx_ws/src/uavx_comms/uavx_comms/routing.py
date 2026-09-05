@@ -192,6 +192,13 @@ class PacketQueue:
         self.capacity = capacity
         self._items = OrderedDict()
         self.evicted = 0
+        # Chunk 4.3. What was pushed out to make room and is not lost:
+        # everything this node minted and has not had acknowledged, which it
+        # re-queues the moment a route exists again. Counted apart from
+        # evicted rather than folded into it, because a record that reported
+        # them together could not tell a queue that was too small from a
+        # design that lost data.
+        self.deferred = 0
         self.expired = 0
         self.duplicates = 0
         self.peak = 0
@@ -214,17 +221,29 @@ class PacketQueue:
     def identities(self) -> List[Tuple[str, int]]:
         return list(self._items)
 
-    def push(self, packet: Packet) -> str:
-        """Queue one packet. Returns what happened, which is never nothing."""
+    def push(self, packet: Packet, retained=()) -> str:
+        """Queue one packet. Returns what happened, which is never nothing.
+
+        `retained` is the identities the caller still holds a durable copy of.
+        For a router that is everything it minted and has not had
+        acknowledged, and pushing one of those out to make room costs the run
+        nothing: the origin re-queues it as soon as it has somewhere to send
+        it. Pushing out anybody else's is the failure the bound exists to
+        catch, so the two are counted apart.
+        """
         key = packet.identity()
         if key in self._items:
             self.duplicates += 1
             return "duplicate"
         outcome = "queued"
         if len(self._items) >= self.capacity:
-            self._items.popitem(last=False)
-            self.evicted += 1
-            outcome = "evicted_oldest"
+            oldest, _ = self._items.popitem(last=False)
+            if oldest in retained:
+                self.deferred += 1
+                outcome = "deferred_oldest"
+            else:
+                self.evicted += 1
+                outcome = "evicted_oldest"
         self._items[key] = packet
         self.held_ids.add(packet.identity_str())
         self.peak = max(self.peak, len(self._items))

@@ -239,6 +239,64 @@ def test_a_full_custodian_queue_evicts_loudly_and_still_loses_no_observation():
     assert obs["unexpected_count"] == 0
 
 
+def test_a_gated_node_defers_its_own_backlog_rather_than_evicting_it():
+    """The link_loss arithmetic, in miniature.
+
+    uav_2 loses its radio for two minutes and goes on minting at the frozen
+    rate. It cannot send and it cannot be sent to, so its queue fills with its
+    own observations, and it holds a durable copy of every one of them until
+    the destination acknowledges it. Pushing the oldest out to make room costs
+    the run nothing and the record has to say so: the queue was too small for
+    the outage, and no observation was lost.
+    """
+    capacity = 40
+    net = frozen_net(queue_capacity=capacity, elections_enabled=False)
+    net.run_for(CONVERGENCE_S)
+    net.start_observing("uav_2", at=net.now)
+    net.run_for(2.0)
+
+    net.blackout("uav_2")
+    net.run_for(120.0)
+    gated = net.router("uav_2")
+    assert gated.store.deferred > 0, (
+        "the queue never filled, so this says nothing about what happens "
+        "when it does")
+    assert gated.store.evicted == 0, (
+        "its own retained observations were counted as lost")
+
+    net.restore("uav_2")
+    net.run_for(30.0)
+    net.stop_observing("uav_2")
+    net.run_for(60.0)
+
+    obs = net.observations()
+    assert obs["set_equal"], (
+        "the deferred observations never came back. Missing: "
+        + repr(sorted(set(obs["generated_ids"])
+                      - set(obs["delivered_ids"]))[:5]))
+
+
+def test_somebody_elses_packet_pushed_out_of_a_full_queue_is_evicted():
+    # Nothing else holds a copy of it, so this one is the loss the bound
+    # exists to catch.
+    queue = routing.PacketQueue(capacity=2)
+    retained = {}
+    for n in range(1, 4):
+        queue.push(pk.observation("uav_4", n, 0.0), retained)
+    assert queue.evicted == 1
+    assert queue.deferred == 0
+
+
+def test_a_retained_packet_pushed_out_of_a_full_queue_is_deferred():
+    queue = routing.PacketQueue(capacity=2)
+    packets = [pk.observation("uav_3", n, 0.0) for n in range(1, 4)]
+    retained = {p.identity(): p for p in packets}
+    for packet in packets:
+        queue.push(packet, retained)
+    assert queue.deferred == 1
+    assert queue.evicted == 0
+
+
 def test_an_expired_observation_is_counted_rather_than_forgotten():
     queue = routing.PacketQueue(capacity=8)
     fresh = pk.observation("uav_4", 1, 0.0)

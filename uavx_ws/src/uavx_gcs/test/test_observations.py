@@ -487,3 +487,18 @@ def test_an_id_nobody_minted_is_still_unexpected():
                                 ident(ANCHOR, 9): 106.0}))
     assert got["unexpected_ids"] == [ident(ANCHOR, 9)]
     assert observations_set_equal(got) is False
+
+
+def test_what_was_deferred_is_reported_beside_what_was_evicted():
+    """A queue too small for a long outage is not a design that loses data.
+
+    uav_2 goes quiet for two minutes and mints six hundred observations into
+    a queue that holds five hundred and twelve. It holds a durable copy of
+    every one of them, so the oldest being pushed out to make room costs the
+    run nothing, and the record has to be able to say that.
+    """
+    routers = [router(NEAR, {ident(NEAR, 1): 61.0}, deferred=88, evicted=0)]
+    got = observations(routers, gcs({ident(NEAR, 1): 106.0}),
+                       OUT_START, OUT_END)
+    assert got["deferred"] == 88
+    assert got["evicted"] == 0
