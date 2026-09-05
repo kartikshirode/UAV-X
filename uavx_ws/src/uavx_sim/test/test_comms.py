@@ -30,6 +30,7 @@ import pytest
 
 from uavx_sim.comms import (CommsError, comms_spec, delivery_from_ledgers,
                             gcs_command, link_layer_command, read_ledger,
+                            role_manager_command, role_managers_of,
                             router_command, station_node_command)
 from uavx_sim.work import WorkError
 
@@ -353,3 +354,52 @@ def test_a_good_ledger_comes_back_whole(tmp_path):
     path = tmp_path / "router.json"
     path.write_text(json.dumps(router_ledger(FAR, 3)), encoding="utf-8")
     assert read_ledger(path, ("node", "generated_ids"))["generated"] == 3
+
+
+# ----------------------------------------------------------- the role manager
+def test_a_run_with_an_election_gives_every_vehicle_a_role_manager():
+    assert role_managers_of(spec(), VEHICLES) == VEHICLES
+
+
+def test_a_run_that_forbids_the_election_starts_none():
+    """queue_drain and the encounter pair keep the radio and forbid the vote.
+
+    A role manager there would hold a tx endpoint it never sends on, and
+    scripts/seam_manifests.json names the same three scenarios that have one.
+    """
+    quiet = comms_spec(block(elections_enabled=False), VEHICLES, ALTITUDES)
+    assert role_managers_of(quiet, VEHICLES) == ()
+
+
+def test_a_run_with_no_radio_starts_none():
+    assert role_managers_of(None, VEHICLES) == ()
+
+
+def test_the_role_manager_is_namespaced_where_the_manifest_expects_it():
+    command = role_manager_command(FAR, SPAWN, spec(), "/tmp/role.json")
+    assert "__ns:=/" + FAR in command
+    assert "use_sim_time:=true" in command
+    assert "role:=survey" in command
+
+
+def test_it_is_told_the_point_it_goes_back_to():
+    command = role_manager_command(FAR, SPAWN, spec(), "/tmp/role.json",
+                                   station=STATIONS[FAR])
+    assert "station_enu:=[475.000000, -75.000000, 60.000000]" in command
+
+
+def test_a_vehicle_flying_a_strip_is_given_no_station_at_all():
+    """Rather than three NaNs.
+
+    `ros2 run -p` parses its values as YAML and `nan` there is the string,
+    which rclpy refuses against a declared double array after the simulator
+    is already up. The node declares the unset default itself.
+    """
+    command = role_manager_command(FAR, SPAWN, spec(), "/tmp/role.json")
+    assert "station_enu" not in " ".join(command)
+
+
+@pytest.mark.parametrize("bad", [[1.0, 2.0], [1.0, 2.0, float("nan")]])
+def test_a_station_that_is_not_a_point_is_refused(bad):
+    with pytest.raises(CommsError, match="three finite numbers"):
+        role_manager_command(FAR, SPAWN, spec(), "/tmp/role.json", station=bad)

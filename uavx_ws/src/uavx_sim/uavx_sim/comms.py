@@ -14,6 +14,8 @@ What is decided here:
                          claims
     station_node_command one vehicle's mission executor, holding a point
     router_command       one vehicle's router
+    role_manager_command one vehicle's role executive, for a run with an
+                         election in it
     link_layer_command   the radio, with the model map the launcher wrote
     gcs_command          the ground station
     delivery_from_ledgers the five delivery fields, from the files the nodes
@@ -61,6 +63,11 @@ ROUTER_LEDGER_KEYS = ("node", "generated", "generated_ids")
 # And the ground station's.
 GCS_LEDGER_KEYS = ("node", "delivered_ids", "delivered_hops_by_node",
                    "delivered_edges_by_node")
+
+# What a role manager has to have written before the record will say a role
+# moved. Chunk 4.2: the three flags are the recovery, and a file without them
+# is a vehicle that started and never answered.
+ROLE_LEDGER_KEYS = ("node", "moved", "released", "returned_to_station")
 
 # The five fields the gate reads off the top of the record.
 DELIVERY_KEYS = ("delivery_ratio", "delivery_ratio_by_node",
@@ -310,6 +317,49 @@ def router_command(vehicle_id: str, spawn_row, station, spec: CommsSpec,
         "ledger_path": str(ledger_path),
     }
     return (["ros2", "run", "uavx_comms", "router"]
+            + ros_args(parameters, namespace=vehicle_id))
+
+
+def role_managers_of(spec: Optional["CommsSpec"],
+                     vehicles: Sequence[str]) -> Tuple[str, ...]:
+    """The vehicles that run a role executive in this scenario.
+
+    Exactly the runs with an election in them. `queue_drain` and the
+    encounter pair keep the radio and forbid the election on purpose, so no
+    role is ever granted and a role manager there would be a node holding a
+    tx endpoint it never uses. scripts/seam_manifests.json names the same
+    three scenarios, and this is the condition that has to agree with it.
+    """
+    if spec is None or not spec.elections_enabled:
+        return ()
+    return tuple(vehicles)
+
+
+def role_manager_command(vehicle_id: str, spawn_row, spec: CommsSpec,
+                         ledger_path, station=None) -> list:
+    """`ros2 run uavx_roles role_manager` for one vehicle.
+
+    The station is omitted rather than passed as three NaNs for a vehicle
+    whose work is a survey strip. `ros2 run -p` parses its values as YAML and
+    `nan` there is the string, which rclpy refuses against a declared double
+    array after the simulator is already up. The node declares the unset
+    default itself, so leaving the parameter out says the same thing in a
+    spelling the launcher can express.
+    """
+    parameters = {
+        "use_sim_time": True,
+        "vehicle_id": vehicle_id,
+        "home_enu": list(home_of(spawn_row)),
+        "role": spec.role_of(vehicle_id),
+        "ledger_path": str(ledger_path),
+    }
+    if station is not None:
+        if len(station) != 3 or not all(_finite(v) for v in station):
+            raise CommsError(
+                f"{vehicle_id} was given the station {station!r}, which is "
+                f"not three finite numbers of metres")
+        parameters["station_enu"] = [float(v) for v in station]
+    return (["ros2", "run", "uavx_roles", "role_manager"]
             + ros_args(parameters, namespace=vehicle_id))
 
 
