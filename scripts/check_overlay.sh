@@ -39,6 +39,7 @@ uavx_eval:metrics_collector
 uavx_comms:router
 uavx_comms:link_layer
 uavx_gcs:gcs_node
+uavx_roles:role_manager
 "
 
 uavx_load_env
@@ -48,12 +49,14 @@ uavx_source "${PREFIX}/setup.bash" \
 uavx_require_ros
 
 MISSING=0
+FOUND=0
 for entry in $EXECUTABLES; do
   package="${entry%%:*}"
   executable="${entry##*:}"
   path="${PREFIX}/${package}/lib/${package}/${executable}"
   if [ -x "$path" ]; then
     printf '  ok    %s %s\n' "$package" "$executable"
+    FOUND=$((FOUND + 1))
     continue
   fi
   # Say where it went instead, because "not found" and "installed to the
@@ -73,4 +76,8 @@ done
 [ "$MISSING" -eq 0 ] \
   || gdie "${MISSING} executable(s) the frozen scenarios invoke are not where ros2 run looks"
 
-printf '  ok    the overlay sources and all 6 executables are installed\n'
+# Counted rather than written out. Chunk 4.1 added a seventh executable
+# and this line still said six, which is the drift the memory ceiling and
+# the frozen stations were both caught in: a number with two homes
+# reports the older one and nothing fails.
+printf '  ok    the overlay sources and all %d executables are installed\n' "$FOUND"

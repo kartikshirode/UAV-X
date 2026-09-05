@@ -615,7 +615,13 @@ w4_tests() {
   uavx_require_overlay
   gsay "W4: frozen topology"
   python3 "${UAVX_REPO}/scripts/check_geometry.py" || gdie "frozen geometry does not hold"
-  gate_test uavx_roles uavx_sim
+  # Week 2's second defect and week 3's third, both of which were a gate
+  # naming fewer packages than the week changed. Week 4 adds uavx_roles and
+  # the work assignment in uavx_sim, and it also reaches into uavx_comms for
+  # the acceptance and the queue, uavx_mission for the yield rule and the
+  # slot command, uavx_gcs for the observation arithmetic and uavx_eval for
+  # separation. A gate that skips them is a gate measuring last week.
+  gate_test uavx_roles uavx_sim uavx_comms uavx_msgs uavx_gcs uavx_mission uavx_eval
 }
 
 w4_relay_kill() {
