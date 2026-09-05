@@ -11,6 +11,11 @@ packet that arrives before there is a time is held rather than dropped: a
 dropped observation is a delivery ratio wrong in the flattering direction,
 and this project has spent three weeks removing those.
 
+The drain at the bottom of the file is the same clock at the other end of the
+run. relay_required generated 4955 observations and delivered 4942, and all
+13 of the missing were minted in the last fraction of a second and were still
+moving when every process took its signal at once.
+
     python3 -m pytest -q uavx_ws/src/uavx_comms/test/test_simclock.py
 
 Runs on a clean checkout with nothing built.
@@ -20,7 +25,9 @@ import math
 
 import pytest
 
-from uavx_comms.simclock import (DROPPED_FULL, HELD, HOLD_CAPACITY, ClockGate)
+from uavx_comms.simclock import (DRAIN_NO_CLOCK, DRAIN_WALL_CAP, DRAIN_WINDOW,
+                                 DROPPED_FULL, HELD, HOLD_CAPACITY,
+                                 SHUTDOWN_DRAIN_S, ClockGate, Drain)
 
 
 def test_a_zero_reading_is_not_a_clock():
@@ -125,3 +132,91 @@ def test_the_record_carries_when_the_clock_arrived():
     assert row["clock_live_at_s"] == 113.3
     assert row["held_before_clock"] == 1
     assert not math.isnan(gate.live_at)
+
+
+# ---------------------------------------------------------------- the drain
+def test_the_window_is_derived_from_the_backlog_and_the_path():
+    """450 packets at 200 a second is 2.25 s, and the ack walks back."""
+    assert SHUTDOWN_DRAIN_S >= 2.25 + 8 * 0.020
+
+
+def test_a_node_keeps_working_inside_the_window():
+    drain = Drain(window_s=3.0)
+    assert drain.start(100.0, 5.0) is True
+    assert drain.carrying(101.0, 6.0) is True
+    assert drain.carrying(102.9, 7.9) is True
+
+
+def test_it_stops_when_the_simulated_window_is_spent():
+    drain = Drain(window_s=3.0)
+    drain.start(100.0, 5.0)
+    assert drain.carrying(103.0, 6.0) is False
+    assert drain.reason == DRAIN_WINDOW
+    assert drain.drained_s == pytest.approx(3.0)
+
+
+def test_the_wall_clock_is_the_backstop_when_time_stops():
+    """A wedged simulator holds the reading still, and the node still exits."""
+    drain = Drain(window_s=3.0, wall_cap_s=8.0)
+    drain.start(100.0, 5.0)
+    assert drain.carrying(100.0, 13.0) is False
+    assert drain.reason == DRAIN_WALL_CAP
+
+
+def test_a_node_whose_clock_never_went_live_does_not_drain():
+    # Every packet it holds is still in the gate, unstamped. There is nothing
+    # to carry and nobody to carry it to.
+    drain = Drain()
+    assert drain.start(0.0, 5.0) is False
+    assert drain.reason == DRAIN_NO_CLOCK
+    assert drain.carrying(1.0, 6.0) is False
+
+
+def test_once_it_has_stopped_it_stays_stopped():
+    drain = Drain(window_s=3.0)
+    drain.start(100.0, 5.0)
+    drain.carrying(104.0, 6.0)
+    assert drain.carrying(104.1, 6.1) is False
+
+
+def test_starting_twice_does_not_move_the_window():
+    drain = Drain(window_s=3.0)
+    drain.start(100.0, 5.0)
+    drain.start(200.0, 9.0)
+    assert drain.carrying(102.0, 6.0) is True
+    assert drain.sim_start == pytest.approx(100.0)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), None, "later", True])
+def test_a_reading_that_is_not_a_time_does_not_end_the_window(bad):
+    # One unusable reading in the middle of a drain is a clock that has not
+    # published yet, not a node that has finished.
+    drain = Drain(window_s=3.0)
+    drain.start(100.0, 5.0)
+    assert drain.carrying(bad, 6.0) is True
+
+
+def test_a_drain_that_never_started_reports_nothing():
+    row = Drain().as_record()
+    assert row["drained_sim_s"] == 0.0
+    assert row["drained_wall_s"] == 0.0
+    assert row["drain_stopped_by"] is None
+
+
+def test_the_record_says_how_long_it_carried_and_why_it_stopped():
+    drain = Drain(window_s=3.0)
+    drain.start(100.0, 5.0)
+    drain.carrying(101.5, 6.5)
+    drain.carrying(103.2, 8.0)
+    row = drain.as_record()
+    assert row["drain_window_s"] == 3.0
+    assert row["drained_sim_s"] == 3.2
+    assert row["drained_wall_s"] == 3.0
+    assert row["drain_stopped_by"] == DRAIN_WINDOW
+
+
+@pytest.mark.parametrize("window,cap", [(-1.0, 8.0), (3.0, 0.0), (3.0, -1.0),
+                                        (None, 8.0), (3.0, "soon")])
+def test_a_window_that_is_not_a_window_is_refused(window, cap):
+    with pytest.raises(ValueError):
+        Drain(window_s=window, wall_cap_s=cap)

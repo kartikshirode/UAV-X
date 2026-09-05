@@ -23,7 +23,14 @@ observation is a delivery ratio that is wrong in the direction of looking
 worse, and a dropped HELLO is a neighbour that appears late for no reason
 anybody could find later.
 
+The same module carries the other end of a node's life on this clock. A run
+ends when the runner signals every process at once, and a node that exits on
+the signal leaves whatever it was carrying in flight. So the last thing a
+node does is stop producing new work and keep carrying what it already has,
+for a window measured on the same simulated clock.
+
     ClockGate   the question, the holding pen and the count of both
+    Drain       how long a node keeps working after it is asked to stop
 """
 
 from __future__ import annotations
@@ -46,6 +53,113 @@ HOLD_CAPACITY = 512
 
 HELD = "held"
 DROPPED_FULL = "dropped_full"
+
+# How long a node keeps carrying after it has been asked to stop.
+#
+# Derived rather than chosen. The deepest backlog the design is sized for is
+# 450 observations at a forward rate of 200 a second, which is 2.25 s, and an
+# observation is not finished until its acknowledgement has walked back down
+# the path: four hops out and four back at 20 ms each is another 0.16 s. 2.41
+# rounded up to 3.0 leaves the tick the node was in the middle of.
+SHUTDOWN_DRAIN_S = 3.0
+
+# The wall clock backstop. The window is measured in simulated seconds because
+# that is what the packets move on, and a stack whose /clock has already
+# stopped would otherwise wait for a reading that will never change. The
+# runner allows each node 10 s to exit before it kills it, so this sits
+# safely inside that.
+DRAIN_WALL_CAP_S = 8.0
+
+# Why a drain ended, in the ledger the node writes afterwards.
+DRAIN_WINDOW = "window"
+DRAIN_WALL_CAP = "wall_cap"
+DRAIN_NO_CLOCK = "no_clock"
+
+
+class Drain:
+    """The window one node stays up for after it is asked to stop.
+
+    The policy lives here rather than in the spin loop so it can be tested
+    without ROS. The loop asks `carrying` and does nothing else.
+    """
+
+    def __init__(self, window_s: float = SHUTDOWN_DRAIN_S,
+                 wall_cap_s: float = DRAIN_WALL_CAP_S) -> None:
+        if not isinstance(window_s, (int, float)) or window_s < 0:
+            raise ValueError(
+                f"window_s is {window_s!r}; a negative drain is a node that "
+                f"stops before it was asked to")
+        if not isinstance(wall_cap_s, (int, float)) or wall_cap_s <= 0:
+            raise ValueError(
+                f"wall_cap_s is {wall_cap_s!r}; without a backstop a node "
+                f"whose clock has stopped never exits")
+        self.window_s = float(window_s)
+        self.wall_cap_s = float(wall_cap_s)
+        self.started = False
+        self.sim_start: float = float("nan")
+        self.wall_start: float = float("nan")
+        self.sim_now: float = float("nan")
+        self.wall_now: float = float("nan")
+        self.reason = ""
+
+    @staticmethod
+    def _usable(value) -> bool:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        return math.isfinite(float(value))
+
+    def start(self, sim_now: float, wall_now: float) -> bool:
+        """Open the window. False when there is no clock to measure it on.
+
+        A node whose simulated clock never went live has nothing to carry:
+        every packet it holds is still in the gate, unstamped. It exits.
+        """
+        if self.started:
+            return self.reason == ""
+        self.started = True
+        if not self._usable(sim_now) or float(sim_now) <= LIVE_ABOVE_S:
+            self.reason = DRAIN_NO_CLOCK
+            return False
+        if not self._usable(wall_now):
+            self.reason = DRAIN_NO_CLOCK
+            return False
+        self.sim_start = float(sim_now)
+        self.wall_start = float(wall_now)
+        self.sim_now = self.sim_start
+        self.wall_now = self.wall_start
+        return self.window_s > 0.0
+
+    def carrying(self, sim_now: float, wall_now: float) -> bool:
+        """Whether the node should keep working, and why it stopped."""
+        if not self.started or self.reason:
+            return False
+        if self._usable(sim_now):
+            self.sim_now = float(sim_now)
+        if self._usable(wall_now):
+            self.wall_now = float(wall_now)
+        if self.wall_now - self.wall_start >= self.wall_cap_s:
+            self.reason = DRAIN_WALL_CAP
+            return False
+        if self.sim_now - self.sim_start >= self.window_s:
+            self.reason = DRAIN_WINDOW
+            return False
+        return True
+
+    @property
+    def drained_s(self) -> float:
+        if not self.started or math.isnan(self.sim_start):
+            return 0.0
+        return max(0.0, self.sim_now - self.sim_start)
+
+    def as_record(self) -> dict:
+        wall = (0.0 if math.isnan(self.wall_start)
+                else max(0.0, self.wall_now - self.wall_start))
+        return {
+            "drain_window_s": self.window_s,
+            "drained_sim_s": round(self.drained_s, 3),
+            "drained_wall_s": round(wall, 3),
+            "drain_stopped_by": self.reason or None,
+        }
 
 
 class ClockGate:

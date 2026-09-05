@@ -46,7 +46,7 @@ from uavx_msgs.msg import RoleAssignment, SwarmPacket
 from uavx_comms import codec, election
 from uavx_comms import packet as pk
 from uavx_comms.router_node import spin
-from uavx_comms.simclock import ClockGate
+from uavx_comms.simclock import ClockGate, Drain
 from uavx_mission import frames, station as station_mod
 
 from . import grant as gr
@@ -147,6 +147,7 @@ class RoleManager(Node):
         # vehicle would be granted the role and drop it in the same
         # instant. See uavx_comms.simclock.
         self.gate = ClockGate()
+        self.drain = Drain()
         self.position: Optional[tuple] = None
         self.positions_seen = 0
         self.decode_failures = 0
@@ -293,6 +294,7 @@ class RoleManager(Node):
             "arrival_radius_m": ARRIVAL_M,
         })
         out.update(self.gate.as_record())
+        out.update(self.drain.as_record())
         out["grants_seen"] = self.tracker.as_record()
         return out
 

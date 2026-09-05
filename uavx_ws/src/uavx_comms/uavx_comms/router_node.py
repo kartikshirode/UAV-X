@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import time
 from typing import Optional
 
 import rclpy
@@ -46,7 +47,7 @@ from uavx_mission import frames
 
 from . import codec, election, params
 from .router import Router
-from .simclock import ClockGate
+from .simclock import ClockGate, Drain
 
 NODE_NAME = "router"
 
@@ -147,6 +148,11 @@ class RouterNode(Node):
         # it, and the ground station reported a 113.3 s control
         # queue delay in a run with no outage because of it.
         self.gate = ClockGate()
+        # And the other end. See simclock.Drain: the run ends when every
+        # process is signalled at once, and a router that exits on the signal
+        # abandons whatever it minted in the last fraction of a second.
+        self.drain = Drain()
+        self.stopped_generating_at = None
         self.encode_failures = 0
         self.decode_failures = 0
         self.positions_seen = 0
@@ -228,8 +234,25 @@ class RouterNode(Node):
         now = self.now_s()
         if not self.gate.sample(now):
             return
+        if not self.generates:
+            return
         self.router.observe(now)
         self.publish()
+
+    def stop_generating(self) -> None:
+        """Mint nothing more. Everything already minted is still carried.
+
+        Called once, when the node is asked to stop. The timer keeps firing
+        and does nothing, which is cheaper than tearing it down and leaves the
+        node in one state rather than two.
+        """
+        if not self.generates:
+            return
+        self.generates = False
+        self.stopped_generating_at = round(self.now_s(), 3)
+        self.get_logger().info(
+            f"{self.vehicle_id} stopped generating at "
+            f"{self.stopped_generating_at}, carrying what it holds")
 
     # ---------------------------------------------------------- the ledger
     def ledger(self) -> dict:
@@ -244,6 +267,8 @@ class RouterNode(Node):
             "encode_failures": self.encode_failures,
         }
         out.update(self.gate.as_record())
+        out.update(self.drain.as_record())
+        out["stopped_generating_at"] = self.stopped_generating_at
         out.update(self.router.observation_summary())
         return out
 
@@ -257,6 +282,27 @@ class RouterNode(Node):
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, self.ledger_path)
+
+
+def _drain(node) -> None:
+    """Stop making new work, and keep carrying what is already in hand.
+
+    Every node in the swarm runs this, not only the ones that generate. A
+    router that kept forwarding while the radio had already exited would be
+    forwarding into nothing, and the ground station has to stay up to accept
+    what arrives. So they all stay for the same window and then all write
+    their files.
+    """
+    window = getattr(node, "drain", None)
+    if window is None:
+        return
+    quiet = getattr(node, "stop_generating", None)
+    if quiet is not None:
+        quiet()
+    if not window.start(node.now_s(), time.monotonic()):
+        return
+    while rclpy.ok() and window.carrying(node.now_s(), time.monotonic()):
+        rclpy.spin_once(node, timeout_sec=0.05)
 
 
 def spin(node_factory, args=None) -> int:
@@ -285,6 +331,7 @@ def spin(node_factory, args=None) -> int:
         node = node_factory()
         while rclpy.ok() and not stopping:
             rclpy.spin_once(node, timeout_sec=0.05)
+        _drain(node)
     except KeyboardInterrupt:
         pass
     finally:

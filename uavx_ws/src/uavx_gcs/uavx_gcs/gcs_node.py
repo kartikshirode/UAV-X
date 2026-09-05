@@ -39,7 +39,7 @@ from uavx_msgs.msg import SwarmPacket
 from uavx_comms import codec, election, params
 from uavx_comms.router import Router
 from uavx_comms.router_node import spin
-from uavx_comms.simclock import ClockGate
+from uavx_comms.simclock import ClockGate, Drain
 
 from . import ledger as led
 
@@ -94,6 +94,11 @@ class GcsNode(Node):
         # in a run with nothing queued: its first packet arrived
         # before the first /clock message and was stamped 0.
         self.gate = ClockGate()
+        # And it is the last node that may stop. Everything the swarm drains
+        # after the run ends is addressed here, so a ground station that
+        # exited on the signal would turn a delivered observation into a
+        # missing one. See simclock.Drain.
+        self.drain = Drain()
         self.decode_failures = 0
         self.encode_failures = 0
 
@@ -154,6 +159,7 @@ class GcsNode(Node):
                 led.delivered_edges_by_node(self.router.accepted_path),
         }
         out.update(self.gate.as_record())
+        out.update(self.drain.as_record())
         out.update(self.router.observation_summary())
         return out
 

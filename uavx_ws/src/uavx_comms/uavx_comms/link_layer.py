@@ -38,16 +38,16 @@ from __future__ import annotations
 import json
 import math
 import os
-import signal
 from typing import Dict, List, Optional, Tuple
 
-import rclpy
 from gazebo_msgs.msg import ModelStates
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from uavx_msgs.msg import SwarmPacket
 
 from . import codec, link, params
+from .router_node import spin
+from .simclock import Drain
 
 NODE_NAME = "link_layer"
 GROUND_TRUTH_TOPIC = "/gazebo/model_states"
@@ -121,6 +121,11 @@ class LinkLayerNode(Node):
             params.GCS_ID: GCS_POSITION}
         # Deliveries waiting out the hop latency, as (due_s, receiver, message).
         self._pending: List[Tuple[float, str, SwarmPacket]] = []
+        # The radio outlives the signal by the same window every other node
+        # does. See simclock.Drain: a packet handed to this node 19 ms before
+        # the run ended is delivered 1 ms after it, and a radio that exited on
+        # the signal would report it transmitted and never delivered.
+        self.drain = Drain()
 
         self.transmissions = 0
         self.undecodable = 0
@@ -263,6 +268,7 @@ class LinkLayerNode(Node):
             "absent": sorted(self.model.absent),
             "deliveries_by_pair": dict(sorted(self.by_pair.items())),
             "still_pending": len(self._pending),
+            **self.drain.as_record(),
         }
 
     def write_ledger(self) -> None:
@@ -278,48 +284,15 @@ class LinkLayerNode(Node):
 
 
 def main(args=None) -> int:
-    """Sample until asked to stop, then write the ledger that counts.
+    """Sample until asked to stop, carry what is left, write the ledger.
 
-    The signal handling is the same fix chunk 2.4 made in the metrics
-    collector. `rclpy.init` installs handlers that shut the context down before
-    the exception reaches any `finally`, so anything written there runs against
-    a dead context. Here the ledger is a file rather than a publish, so it would
-    survive, but the node still has to stop cleanly rather than by exception.
+    The loop is `router_node.spin`, which this file used to hold a second copy
+    of. The two drifted the moment one of them learned to drain: a radio that
+    exits on the signal takes down the link every other node is still trying
+    to deliver over, and the drain would have been three seconds of nodes
+    talking to nothing.
     """
-    rclpy.init(args=args)
-    node = None
-    stopping = []
-
-    def request_stop(signum, frame):                 # noqa: ARG001
-        stopping.append(signum)
-
-    previous = {}
-    for number in (signal.SIGINT, signal.SIGTERM):
-        try:
-            previous[number] = signal.signal(number, request_stop)
-        except (OSError, ValueError):
-            pass
-    try:
-        node = LinkLayerNode()
-        while rclpy.ok() and not stopping:
-            rclpy.spin_once(node, timeout_sec=0.05)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        if node is not None:
-            try:
-                node.write_ledger()
-            except OSError as exc:
-                node.get_logger().error(f"the radio ledger did not write: {exc}")
-            node.destroy_node()
-        for number, handler in previous.items():
-            try:
-                signal.signal(number, handler)
-            except (OSError, ValueError):
-                pass
-        if rclpy.ok():
-            rclpy.shutdown()
-    return 0
+    return spin(LinkLayerNode, args)
 
 
 if __name__ == "__main__":
