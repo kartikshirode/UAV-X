@@ -1,10 +1,20 @@
 """The mission executor as a ROS node, and the only file here that knows ROS.
 
 Everything this node decides is decided in `executor`, `boustrophedon`,
-`partition` and `frames`, all of which are plain arithmetic over tuples and
-are proved by chunk 2.1's tests with no simulator running. What is left here
-is wiring, and wiring is the part a unit test cannot honestly cover, so there
-is as little of it as the job allows.
+`partition`, `station` and `frames`, all of which are plain arithmetic over
+tuples and are proved with no simulator running. What is left here is wiring,
+and wiring is the part a unit test cannot honestly cover, so there is as
+little of it as the job allows.
+
+It flies one of two things, and which one is decided by the `station_enu`
+parameter alone. Unset, the default, and it partitions the survey box, plans
+a boustrophedon path over its own strip and works through it. Set, and it
+holds that one point, which is what architecture.md section 6 asks of
+`relay_required` and `direct_only`: common geometry, station-keeping, no
+survey motion. A station is not a one waypoint survey. `MissionExecutor`
+refuses an empty plan and checks that every waypoint lies inside the strip it
+was handed, and both of those rules are worth more than the code they would
+save here.
 
 The endpoint allowlist in architecture.md section 1 gives this process four
 topics and no others:
@@ -34,7 +44,7 @@ from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile,
                        QoSReliabilityPolicy)
 from uavx_msgs.msg import SwarmPacket
 
-from uavx_mission import frames
+from uavx_mission import frames, station
 from uavx_mission.boustrophedon import plan_path
 from uavx_mission.executor import MissionExecutor
 from uavx_mission.partition import partition, strip_of
@@ -99,6 +109,18 @@ class MissionNode(Node):
         self.declare_parameter("area_height_m", BASELINE_SIDE_M)
         self.declare_parameter("cell_m", BASELINE_CELL_M)
         self.declare_parameter("sensor_radius_m", BASELINE_SENSOR_RADIUS_M)
+        # Chunk 3.4. Where this vehicle holds, in the frozen frame, for a
+        # scenario that station-keeps rather than surveys. Three NaNs mean
+        # nobody asked, which is what survey_baseline passes. See station.py
+        # for why the unset value is not an empty list and not the origin.
+        self.declare_parameter("station_enu", list(station.unset()))
+        # Whether this process mints observations. False from chunk 3.4
+        # onward for any vehicle that also runs a router, because identity is
+        # (origin_id, sequence) and two processes on one vehicle minting
+        # sequences from zero produce colliding ids. Delivered-once is a
+        # comparison of those ids, so the collision would not look like a
+        # fault; it would look like a delivery.
+        self.declare_parameter("observations", True)
 
         vehicle_id = self.get_parameter("vehicle_id").value
         if not vehicle_id:
@@ -109,6 +131,14 @@ class MissionNode(Node):
         self.vehicle_id = str(vehicle_id)
         self.home = tuple(float(v) for v in self.get_parameter("home_enu").value)
 
+        altitude_m = float(self.get_parameter("survey_altitude_m").value)
+        try:
+            self.station = station.station_of(
+                self.get_parameter("station_enu").value, altitude_m)
+        except station.StationError as exc:
+            raise ValueError(f"{self.vehicle_id}: {exc}") from exc
+        self.generates = bool(self.get_parameter("observations").value)
+
         sw = [float(v) for v in self.get_parameter("area_sw_m").value]
         area = SurveyArea.from_corner(
             (sw[0], sw[1]),
@@ -116,14 +146,23 @@ class MissionNode(Node):
             float(self.get_parameter("area_height_m").value),
             float(self.get_parameter("cell_m").value),
             float(self.get_parameter("sensor_radius_m").value))
-        strips = partition(area, list(self.get_parameter("swarm_vehicles").value))
-        strip = strip_of(strips, self.vehicle_id)
-        path = plan_path(
-            strip,
-            area.sensor_radius_m,
-            float(self.get_parameter("survey_altitude_m").value),
-            start_north=bool(self.get_parameter("start_north").value),
-        )
+        if self.station is None:
+            strips = partition(
+                area, list(self.get_parameter("swarm_vehicles").value))
+            strip = strip_of(strips, self.vehicle_id)
+            path = plan_path(
+                strip,
+                area.sensor_radius_m,
+                altitude_m,
+                start_north=bool(self.get_parameter("start_north").value),
+            )
+        else:
+            # No partition and no plan. MissionExecutor refuses an empty plan
+            # and checks every waypoint lies inside the strip it was handed,
+            # and both of those are rules worth keeping, so a station is held
+            # beside the executor rather than smuggled through it as a one
+            # waypoint survey of a lane nobody assigned.
+            strip = path = None
         # Not self.executor. rclpy.node.Node defines `executor` as a
         # property with a setter, and assigning to it calls
         # new_executor.add_node(self) on whatever was assigned. Every
@@ -133,9 +172,11 @@ class MissionNode(Node):
         # been started. `executor` and `handle` are the only two settable
         # properties Node has, and test_node_attributes.py now refuses
         # either name on any node in this workspace.
-        self.mission = MissionExecutor(
-            self.vehicle_id, strip, path,
-            float(self.get_parameter("acceptance_radius_m").value))
+        self.mission = None
+        if self.station is None:
+            self.mission = MissionExecutor(
+                self.vehicle_id, strip, path,
+                float(self.get_parameter("acceptance_radius_m").value))
 
         swarm = f"/uavx/{self.vehicle_id}"
         px4 = f"/{self.vehicle_id}/fmu"
@@ -150,15 +191,30 @@ class MissionNode(Node):
             self.on_position, PX4_QOS)
 
         self.sequence = 0
+        self.positions_seen = 0
         # The last setpoint sent, so the heartbeat timer can keep holding it
-        # after the plan is finished. None until the first position arrives.
+        # after the plan is finished. None until the first position arrives,
+        # except in station mode, where the destination is known before the
+        # vehicle has said anything and the heartbeat can start flying it
+        # there the moment PX4 grants offboard.
         self.last_setpoint = None
-        self.create_timer(1.0 / OBSERVATION_HZ, self.publish_observation)
+        if self.station is not None:
+            self.last_setpoint = [float(v) for v in
+                                  frames.frozen_to_px4(self.station, self.home)]
+        if self.generates:
+            self.create_timer(1.0 / OBSERVATION_HZ, self.publish_observation)
         self.create_timer(1.0 / CONTROL_MODE_HZ, self.publish_control_mode)
-        self.get_logger().info(
-            f"{self.vehicle_id} surveying strip {strip.index}, "
-            f"x {strip.x_min:.3f} to {strip.x_max:.3f}, "
-            f"{len(path)} waypoints")
+        if self.station is None:
+            self.get_logger().info(
+                f"{self.vehicle_id} surveying strip {strip.index}, "
+                f"x {strip.x_min:.3f} to {strip.x_max:.3f}, "
+                f"{len(path)} waypoints, observations {self.generates}")
+        else:
+            self.get_logger().info(
+                f"{self.vehicle_id} holding station "
+                f"{self.station[0]:.1f}, {self.station[1]:.1f}, "
+                f"{self.station[2]:.1f} in the frozen frame, "
+                f"observations {self.generates}")
 
     def stamp(self) -> int:
         """Microseconds, the way every PX4 message here is timestamped."""
@@ -190,8 +246,16 @@ class MissionNode(Node):
 
         This decides where to go. Publishing is the timer's job, so a gap in
         this topic slows the plan down and never drops the vehicle out of
-        offboard.
+        offboard. A station-keeping vehicle has nowhere to advance to and
+        only counts what arrived, so the subscription still proves the link
+        is live.
         """
+        self.positions_seen += 1
+        if self.mission is None:
+            # Station-keeping. The setpoint was decided before the vehicle
+            # reported anything and does not depend on where it is now, so
+            # there is nothing here to advance.
+            return
         here = frames.px4_to_frozen((msg.x, msg.y, msg.z), self.home)
         target = self.mission.update(here)
         if target is None:
