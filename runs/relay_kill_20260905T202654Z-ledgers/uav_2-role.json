@@ -1,0 +1,57 @@
+{
+ "acked_epoch": null,
+ "arrival_radius_m": 5.0,
+ "arrived_at": null,
+ "clock_live": true,
+ "clock_live_at_s": 112.1,
+ "commands_sent": 261,
+ "decode_failures": 0,
+ "drain_stopped_by": null,
+ "drain_window_s": 3.0,
+ "drained_sim_s": 0.0,
+ "drained_wall_s": 0.0,
+ "dropped_waiting_for_clock": 0,
+ "encode_failures": 0,
+ "epoch": null,
+ "granted_at": null,
+ "grants": 0,
+ "grants_seen": {
+  "epoch_seen": 0,
+  "grant": null,
+  "message_outcomes": {
+   "accepted": 0,
+   "malformed": 0,
+   "not_mine": 0,
+   "released": 0,
+   "renewed": 0,
+   "stale_epoch": 0,
+   "unknown_kind": 0
+  },
+  "node": "uav_2",
+  "released_epochs": []
+ },
+ "held_before_clock": 0,
+ "home_role": "relay",
+ "lapsed_at": null,
+ "moved": false,
+ "node": "uav_2",
+ "positions_seen": 13006,
+ "readings_before_clock": 0,
+ "released": false,
+ "released_at": null,
+ "renewals": 0,
+ "returned_at": null,
+ "returned_to_station": false,
+ "slot_commanded": null,
+ "station": [
+  330.0,
+  0.0,
+  40.0
+ ],
+ "target": [
+  330.0,
+  0.0,
+  40.0
+ ],
+ "target_gap_m": 0.35
+}
