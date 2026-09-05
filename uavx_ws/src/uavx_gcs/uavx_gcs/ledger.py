@@ -230,25 +230,42 @@ def created_rows(gcs_ledger: Mapping) -> Dict[str, float]:
 
 def backlog_custodian(router_ledgers: Sequence[Mapping],
                       outage_ids: Iterable[str]) -> Optional[str]:
-    """The lowest id member that held observations it did not mint.
+    """The member a cut off component named, and that then held somebody else's traffic.
 
     architecture.md section 3: a disconnected component funnels its backlog to
     one member so the depth the store and forward design is sized for is
-    actually reached. Read back rather than assumed, and read from custody
-    rather than from the component, because whether the rule fired is the
-    question and the component is what the rule was computed from.
+    actually reached. Two things are asked of the answer and neither is enough
+    on its own. The node has to have been named by a router that had no route,
+    which is the rule firing, and it has to have ended up holding observations
+    it did not mint, which is the rule having an effect.
+
+    Custody alone named uav_1 in the accepted relay_kill record: the anchor
+    holds ids it did not mint on every run there is, because forwarding is
+    what an anchor does, and it wins a lowest id tie against every vehicle.
+    Being named alone is no better, since a component of one names itself and
+    holds nothing but its own.
+
+    A ledger written before chunk 4.4 carries no name, and for those the
+    custody half stands alone, which is what the earlier records were read by.
     """
     wanted = set(outage_ids)
     if not wanted:
         return None
     holders = []
+    named = set()
     for entry in router_ledgers:
         node = _node_of(entry)
         held = set(str(i) for i in (entry.get("custodied_ids") or []))
         minted = set(str(i) for i in (entry.get("generated_ids") or []))
-        if held & wanted & (wanted - minted):
+        if held & (wanted - minted):
             holders.append(node)
-    return min(holders) if holders else None
+        who = entry.get("custodian_named")
+        if isinstance(who, str) and who:
+            named.add(who)
+    if not holders:
+        return None
+    claimed = sorted(set(holders) & named)
+    return claimed[0] if claimed else min(holders)
 
 
 def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
@@ -350,15 +367,19 @@ def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
         when = _number(entry.get("drain_end_at"))
         if when is not None:
             by_node[_node_of(entry)] = round(when - offset, 3)
+    counted = []
     if isinstance(drain_by_node, Mapping):
-        by_node = {str(node): round(float(when), 3)
-                   for node, when in drain_by_node.items()
-                   if _number(when) is not None}
+        for node, when in drain_by_node.items():
+            if _number(when) is None:
+                continue
+            by_node[str(node)] = round(float(when), 3)
+            counted.append(str(node))
     given = _number(drain_end_s)
     if given is not None:
         drain_end = given
     else:
-        ends = [when for when in by_node.values() if when >= drain_start]
+        ends = [when for node, when in by_node.items()
+                if when >= drain_start and (not counted or node in counted)]
         drain_end = max(ends) if ends else drain_start
 
     custodian = backlog_custodian(router_ledgers, during)
@@ -414,9 +435,12 @@ def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
         # project has spent four weeks refusing.
         "generated_before_run": len(before_run),
         # When each node's store first ran empty after its own route came
-        # back. The bound is read off the members the outage cut off; the
-        # rest are here so nothing is hidden by that choice.
+        # back, and which of those the bound was taken over. Everything is
+        # here, including the gated vehicle whose own store empties two
+        # minutes later, because a number left out of the record is a number
+        # nobody can argue with.
         "drain_by_node": dict(sorted(by_node.items())),
+        "drain_counted_for": sorted(counted),
         "ledger": [{"id": i, "created_at_s": round(minted[i], 3),
                     "delivered_at_s": (None if i not in arrived
                                        else round(arrived[i], 3))}

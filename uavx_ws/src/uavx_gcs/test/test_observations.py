@@ -287,6 +287,55 @@ def test_the_lowest_id_wins_when_two_nodes_held_the_backlog():
     assert backlog_custodian(holders, both) == NEAR
 
 
+def test_the_anchor_that_forwarded_everything_is_not_the_custodian():
+    """The defect the accepted relay_kill record carries.
+
+    uav_1 is the ground station anchor. It was never cut off from anything,
+    and it holds ids it did not mint on every run there is, because that is
+    what forwarding is. Custody alone names it, and it beats every vehicle on
+    a lowest id tie. The custodian is the member a component named while it
+    had no route, which uav_1 never was.
+    """
+    near = {ident(NEAR, 1): 61.0}
+    far = {ident(FAR, 1): 61.1}
+    both = sorted(list(near) + list(far))
+    holders = [
+        router(ANCHOR, {}, custodied=both),
+        router(NEAR, near, custodied=both, custodian_named=NEAR),
+        router(FAR, far, custodian_named=NEAR),
+    ]
+    assert backlog_custodian(holders, both) == NEAR
+
+
+def test_a_component_of_one_names_itself_and_custodies_nothing():
+    """queue_drain gates uav_2, which is then alone and holds only its own.
+
+    It names itself, correctly, and it is not the custodian of anybody's
+    backlog. Being named is not enough on its own any more than holding is.
+    """
+    relay = {ident(RELAY, 1): 61.0}
+    near = {ident(NEAR, 1): 61.0}
+    far = {ident(FAR, 1): 61.1}
+    wanted = sorted(list(relay) + list(near) + list(far))
+    holders = [
+        router(RELAY, relay, custodian_named=RELAY),
+        router(NEAR, near, custodied=sorted(list(near) + list(far)),
+               custodian_named=NEAR),
+        router(FAR, far, custodian_named=NEAR),
+    ]
+    assert backlog_custodian(holders, wanted) == NEAR
+
+
+def test_a_ledger_from_before_the_name_is_still_read_by_custody():
+    # Every record written before chunk 4.4 carries no name, and the
+    # arithmetic still has to read them.
+    near = {ident(NEAR, 1): 61.0}
+    far = {ident(FAR, 1): 61.1}
+    both = sorted(list(near) + list(far))
+    holders = [router(NEAR, near, custodied=both), router(FAR, far)]
+    assert backlog_custodian(holders, both) == NEAR
+
+
 def test_a_run_with_nothing_minted_in_the_window_names_no_custodian():
     near = {ident(NEAR, 1): 1.0}
     got = observations([router(NEAR, near)], gcs({ident(NEAR, 1): 2.0}),
@@ -502,3 +551,31 @@ def test_what_was_deferred_is_reported_beside_what_was_evicted():
                        OUT_START, OUT_END)
     assert got["deferred"] == 88
     assert got["evicted"] == 0
+
+
+# ------------------------------------------------------------- the drains
+def test_every_node_reports_its_drain_and_the_bound_names_its_own():
+    """Both, because either alone loses something.
+
+    The bound is about the queues this outage filled, so the gated vehicle's
+    own store emptying two minutes later cannot be folded into it. It is
+    still a fact about the run, and a record that dropped it would be hiding
+    a number rather than scoping one.
+    """
+    near = {ident(NEAR, 1): 61.0}
+    far = {ident(FAR, 1): 61.1}
+    routers = [
+        router(NEAR, near, custodied=sorted(list(near) + list(far)),
+               drain_end_at=106.4),
+        router(FAR, far, drain_end_at=106.2),
+        router(RELAY, {ident(RELAY, 1): 61.2}, drain_end_at=248.0),
+    ]
+    delivered = {i: 106.5 for i in list(near) + list(far)}
+    delivered[ident(RELAY, 1)] = 248.5
+    got = observations(routers, gcs(delivered), OUT_START, OUT_END,
+                       drain_start_s=106.0, drain_end_s=106.4,
+                       drain_by_node={NEAR: 106.4, FAR: 106.2})
+    assert got["drain_counted_for"] == sorted([NEAR, FAR])
+    assert got["drain_by_node"][RELAY] == pytest.approx(248.0)
+    assert got["backlog_drain_s"] == pytest.approx(0.4)
+
