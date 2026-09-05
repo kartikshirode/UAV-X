@@ -20,7 +20,12 @@
 
   <!-- The tests read the frozen pose rate out of the runner that samples at
        it, rather than writing 20 Hz down a third time. -->
-  <test_depend>uavx_sim</test_depend>
+  <!-- The collector, for the one frozen number these tests borrow: the rate
+       coverage is scored at. This was uavx_sim until chunk 3.4, and uavx_sim
+       now depends on this package for the frame conversion, so the pair were
+       a cycle colcon refused to order. The rate belongs to the process that
+       scores coverage either way. -->
+  <test_depend>uavx_eval</test_depend>
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>

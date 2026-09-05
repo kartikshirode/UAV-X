@@ -41,7 +41,15 @@ import pytest
 # beside them. Week 1 audit finding 2 was a threshold with three hand-written
 # copies and no comparison, so these are imported rather than typed again.
 import check_geometry
-from uavx_sim.scenario_runner import POSE_HZ
+# The rate coverage is scored at, from the process that scores it. This read
+# the harness's POSE_HZ until chunk 3.4, which is a different measurement
+# through a different channel: the runner samples MAVLink telemetry for
+# pose_sample_count, and coverage is computed from ground truth the collector
+# sampled. Both are 20 Hz, so nothing showed, and citing the wrong one in a
+# test whose own docstring says "scores coverage from vehicle poses sampled at
+# a frozen rate" would have gone on being wrong in the direction that matters
+# the moment the two ever differed.
+from uavx_eval.collector import POSE_SAMPLE_HZ
 
 from uavx_mission.boustrophedon import (PlanError, lane_count, lane_positions,
                                         lane_spacing, minimum_sweep_length,
@@ -341,7 +349,7 @@ def test_coverage_survives_being_reduced_to_pose_samples():
     rate is a plan that reports a different figure on a slower machine.
     """
     area, plans = baseline_plans()
-    fine = check_geometry.SURVEY_SPEED / POSE_HZ
+    fine = check_geometry.SURVEY_SPEED / POSE_SAMPLE_HZ
     for step in (fine, fine * 10.0):
         covered = set()
         for _strip, path in plans.values():
