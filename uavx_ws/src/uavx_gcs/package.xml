@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>uavx_gcs</name>
+  <version>0.1.0</version>
+  <description>
+    The ground station, as a node in the graph like any other.
+
+    Round 2 found that leaving it out of the topology invited an implementer to
+    wire it straight to every router, which would make every delivery ratio in
+    this repository a measurement of nothing. It sits at the origin of the
+    frozen frame, it holds one tx endpoint and one rx endpoint, and it reaches
+    the swarm only through the radio. Deduplication of delivered observations
+    happens here and on the pair (origin_id, sequence), which is what makes
+    delivered once a set comparison rather than a count.
+  </description>
+  <maintainer email="megamindsresearch@gmail.com">kartikshirode</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>uavx_msgs</exec_depend>
+  <exec_depend>uavx_comms</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
