@@ -122,6 +122,38 @@ class SlotDecision:
     def feasible(self) -> bool:
         return self.status == RELAY_FEASIBLE
 
+    def as_record(self) -> dict:
+        """The decision as the run record's relay_slot object.
+
+        Round 5 finding 4 asked for the commanded slot and the clearance it
+        was checked against, and this is the one place both are known
+        together. An infeasible decision has no commanded point, so it is not
+        a relay_slot and this refuses to produce one.
+
+        `clearance_m` is None when nothing else was flying. That is not the
+        same as a large clearance and it is not a number the gate may read:
+        the distance to the nearest other aircraft does not exist when there
+        is no other aircraft.
+        """
+        if self.slot is None:
+            raise ValueError(
+                f"this decision is {self.status} and has no slot: "
+                f"{self.reason or 'no reason given'}")
+        clearance = self.clearance_m
+        finite = (clearance is not None and math.isfinite(float(clearance)))
+        return {
+            "commanded": [float(v) for v in self.slot],
+            "clearance_m": float(clearance) if finite else None,
+            "band_reserved": bool(self.band_reserved),
+            "status": self.status,
+            "anchor_hop_m": (None if self.anchor_hop_m is None
+                             else float(self.anchor_hop_m)),
+            "work_hop_m": (None if self.work_hop_m is None
+                           else float(self.work_hop_m)),
+            "band_altitude_m": params.RELAY_BAND_M,
+            "reason": self.reason,
+        }
+
 
 def solve(anchor: Point, work: Sequence[Point],
           live: Sequence[Point] = ()) -> SlotDecision:

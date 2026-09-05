@@ -885,12 +885,36 @@ class Router:
             # it held for others.
             "custodied_ids": sorted(self.store.held_ids),
             "custodied": len(self.store.held_ids),
+            # What this node has minted and not yet had acknowledged. In a
+            # healthy run this is the last packet or two and it empties on the
+            # next ack. It is in the file because of what it means when the
+            # vehicle does not come back: these are the observations that were
+            # still only on that aircraft, so they went down with it. A record
+            # that cannot name them cannot tell an observation the swarm
+            # dropped from one that stopped existing, and the first is a
+            # routing failure while the second is arithmetic.
+            "unacknowledged_ids": sorted(
+                packet.identity_str() for packet in self.pending_ack.values()),
+            "unacknowledged": len(self.pending_ack),
+            # When this node last had a route it had held for the stability
+            # window. Cleared the moment the route goes, so a value later than
+            # an injected event is this node saying it lost the route and got
+            # it back.
+            "recovered_at": (None if self.recovered_at is None
+                             else round(self.recovered_at, 3)),
             # When the route last came back and when this node's queue first
             # ran empty afterwards. The drain bound is measured between them.
             "route_returned_at": (None if self.route_returned_at is None
                                   else round(self.route_returned_at, 3)),
             "drain_end_at": (None if self.drain_end_at is None
                              else round(self.drain_end_at, 3)),
+            # The slot this node last computed for a relay, or None if it
+            # never ran an election. Carried out of the component that decided
+            # it rather than recomputed by the runner, which would be a second
+            # answer to the question the gate reads.
+            "relay_slot": (self.last_slot.as_record()
+                           if self.last_slot is not None
+                           and self.last_slot.slot is not None else None),
             # One row per accepted observation, non-empty only at the
             # destination. The destination has built these since chunk 3.1 and
             # nothing has ever read them: they are the per delivery times and
