@@ -21,9 +21,14 @@ would otherwise report the long way round as though it were the route.
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
+import math
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 Identity = Tuple[str, int]
+
+
+class LedgerError(ValueError):
+    """Ledgers that contradict each other, or one that contradicts itself."""
 
 
 def _minimum_by_origin(values: Iterable[Tuple[Identity, int]]) -> Dict[str, int]:
@@ -88,6 +93,240 @@ def ratio_by_node(generated_by_node: Mapping[str, Sequence[str]],
     arrived = set(delivered_ids)
     return {node: delivery_ratio(ids, arrived)
             for node, ids in sorted(generated_by_node.items())}
+
+
+# --------------------------------------------------------- the outage block
+#
+# Chunk 4.2. Every field here is read off the files the nodes wrote as they
+# shut down, and none of it is asked of the process that would benefit from
+# the answer. The shape of the question is the same one week 3 settled for
+# the delivery ratio: the origins own the denominator, the destination owns
+# the numerator, and the comparison is of identity sets rather than of counts.
+#
+# What week 4 adds is time. "450 observations were generated" can be satisfied
+# by producing them before the route went down, which tests nothing about a
+# queue holding data through an outage, so the block carries a row per
+# generated observation with the moment it was minted and the moment it
+# arrived. Round 7 finding 8 is that aggregate counts could not prove which
+# ids fell inside the claimed windows.
+
+
+def _number(value) -> Optional[float]:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if math.isfinite(out) else None
+
+
+def _node_of(entry: Mapping) -> str:
+    node = entry.get("node")
+    if not isinstance(node, str) or not node:
+        raise LedgerError(
+            "a ledger with no node name cannot be attributed to a vehicle, "
+            "and every number in this block is per vehicle before it is "
+            "summed")
+    return node
+
+
+def generated_rows(router_ledgers: Iterable[Mapping]) -> Dict[str, float]:
+    """Every observation id in the run, against the time it was minted.
+
+    Refuses two nodes claiming one id. Identity is (origin, sequence) and the
+    origin is in the id, so a collision means two processes minting from one
+    counter, which is what happens when a vehicle runs a router and a survey
+    executor that both generate.
+    """
+    out: Dict[str, float] = {}
+    for entry in router_ledgers:
+        node = _node_of(entry)
+        minted = entry.get("generated_at")
+        ids = entry.get("generated_ids") or []
+        if not isinstance(minted, Mapping):
+            minted = {}
+        for identity in ids:
+            identity = str(identity)
+            if identity in out:
+                raise LedgerError(
+                    f"{identity} is claimed by two nodes, the second being "
+                    f"{node}. An observation id carries its origin, so a "
+                    f"collision means two processes minting from one counter")
+            when = _number(minted.get(identity))
+            if when is None:
+                raise LedgerError(
+                    f"{node} says it generated {identity} and gives no time "
+                    f"for it. Every window in this block is decided by when "
+                    f"an observation was minted, and a missing time would be "
+                    f"counted as outside every one of them")
+            out[identity] = when
+    return out
+
+
+def delivered_rows(gcs_ledger: Mapping) -> Dict[str, float]:
+    """Every accepted observation, against the time it arrived.
+
+    Built from the destination's own per delivery rows. A duplicate arrival
+    keeps the first time: the ground station accepted the identity once, and
+    that is the moment it was delivered.
+    """
+    rows = gcs_ledger.get("ledger")
+    if not isinstance(rows, (list, tuple)):
+        raise LedgerError(
+            "the ground station ledger carries no per delivery rows. Every "
+            "time in this block comes from them, and aggregate counts cannot "
+            "say which ids arrived inside a window")
+    out: Dict[str, float] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise LedgerError(f"a delivery row is {row!r} and must be a mapping")
+        identity = row.get("id")
+        when = _number(row.get("delivered_at"))
+        if not isinstance(identity, str) or not identity:
+            raise LedgerError(f"a delivery row has no id: {row!r}")
+        if when is None:
+            raise LedgerError(
+                f"the row for {identity} has no delivery time. It is the row "
+                f"that says the observation arrived, so a row without one is "
+                f"a delivery nobody can place in the run")
+        if identity in out:
+            out[identity] = min(out[identity], when)
+        else:
+            out[identity] = when
+    return out
+
+
+def backlog_custodian(router_ledgers: Sequence[Mapping],
+                      outage_ids: Iterable[str]) -> Optional[str]:
+    """The lowest id member that held observations it did not mint.
+
+    architecture.md section 3: a disconnected component funnels its backlog to
+    one member so the depth the store and forward design is sized for is
+    actually reached. Read back rather than assumed, and read from custody
+    rather than from the component, because whether the rule fired is the
+    question and the component is what the rule was computed from.
+    """
+    wanted = set(outage_ids)
+    if not wanted:
+        return None
+    holders = []
+    for entry in router_ledgers:
+        node = _node_of(entry)
+        held = set(str(i) for i in (entry.get("custodied_ids") or []))
+        minted = set(str(i) for i in (entry.get("generated_ids") or []))
+        if held & wanted & (wanted - minted):
+            holders.append(node)
+    return min(holders) if holders else None
+
+
+def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
+                 outage_start_s: float, outage_end_s: float,
+                 drain_start_s: Optional[float] = None) -> dict:
+    """The whole observations block, from the ledgers and the outage window.
+
+    The window comes from the run rather than from the files: the moment a
+    vehicle was killed or gated is the runner's knowledge, and a block that
+    inferred it from a gap in the deliveries would be deciding when the
+    failure happened from the evidence that the failure happened.
+    """
+    router_ledgers = list(router_ledgers)
+    start, end = _number(outage_start_s), _number(outage_end_s)
+    if start is None or end is None:
+        raise LedgerError(
+            f"the outage window is ({outage_start_s!r}, {outage_end_s!r}) and "
+            f"both ends have to be times")
+    if end < start:
+        raise LedgerError(
+            f"the outage ends at {end} and starts at {start}. A window that "
+            f"runs backwards puts every observation outside it")
+
+    minted = generated_rows(router_ledgers)
+    arrived = delivered_rows(gcs_ledger)
+
+    generated_ids = sorted(minted)
+    delivered_ids = sorted(arrived)
+    missing = sorted(set(generated_ids) - set(delivered_ids))
+    unexpected = sorted(set(delivered_ids) - set(generated_ids))
+
+    during = sorted(i for i, when in minted.items() if start <= when < end)
+    drain_start = _number(drain_start_s) if drain_start_s is not None else end
+    if drain_start is None:
+        raise LedgerError(f"drain_start_s is {drain_start_s!r}, not a time")
+    if drain_start < end:
+        raise LedgerError(
+            f"the drain starts at {drain_start} and the outage ends at {end}. "
+            f"A queue cannot begin draining before its route comes back")
+
+    # The drain is a claim about a queue, so it is measured at the queue. Only
+    # emptyings at or after the route returned count: every node's store runs
+    # empty constantly in a healthy run.
+    ends = [_number(entry.get("drain_end_at")) for entry in router_ledgers]
+    ends = [when for when in ends if when is not None and when >= drain_start]
+    drain_end = max(ends) if ends else drain_start
+
+    custodian = backlog_custodian(router_ledgers, during)
+    held_by_custodian = []
+    if custodian is not None:
+        for entry in router_ledgers:
+            if _node_of(entry) != custodian:
+                continue
+            held = set(str(i) for i in (entry.get("custodied_ids") or []))
+            held_by_custodian = sorted(held & set(during))
+
+    after_restore = [i for i in during
+                     if i in arrived and arrived[i] >= drain_start]
+    complete = max((arrived[i] for i in during if i in arrived),
+                   default=drain_end)
+
+    out = {
+        "generated_ids": generated_ids,
+        "delivered_ids": delivered_ids,
+        "generated": len(generated_ids),
+        "unique_delivered": len(delivered_ids),
+        "duplicated": int(gcs_ledger.get("duplicated") or 0),
+        "expired": sum(int(e.get("expired") or 0) for e in router_ledgers),
+        "evicted": sum(int(e.get("evicted") or 0) for e in router_ledgers),
+        "peak_queue_depth": max(
+            [int(e.get("peak_queue_depth") or 0) for e in router_ledgers]
+            or [0]),
+        "control_queue_max_delay_s": max(
+            [_number(e.get("control_queue_max_delay_s")) or 0.0
+             for e in list(router_ledgers) + [gcs_ledger]] or [0.0]),
+        "outage_start_s": start,
+        "outage_end_s": end,
+        "generated_during_outage": len(during),
+        "delivered_after_restore": len(after_restore),
+        "drain_start_s": drain_start,
+        "drain_end_s": drain_end,
+        "backlog_drain_s": drain_end - drain_start,
+        "delivery_complete_s": complete,
+        "missing_ids": missing,
+        "unexpected_ids": unexpected,
+        # The gate reads counts and the schema keeps the lists. Both, because
+        # a count with no list cannot be argued with and a list nobody counted
+        # is not a threshold.
+        "missing_count": len(missing),
+        "unexpected_count": len(unexpected),
+        "ledger": [{"id": i, "created_at_s": minted[i],
+                    "delivered_at_s": arrived.get(i)}
+                   for i in generated_ids],
+    }
+    if custodian is not None:
+        out["backlog_custodian"] = custodian
+        out["custodied_ids"] = held_by_custodian
+        out["custodied"] = len(held_by_custodian)
+    return out
+
+
+def observations_set_equal(block: Mapping) -> bool:
+    """Whether every observation generated was delivered, and only those.
+
+    The gate asserts this on its own because it is the claim the whole
+    delivered-once design is for, and because a ratio of 1.0 can be reached
+    with an id nobody generated making up for one that went missing.
+    """
+    return (not block.get("missing_ids")) and (not block.get("unexpected_ids"))
 
 
 def generated_by_node(ledgers: Iterable[Mapping]) -> Dict[str, List[str]]:

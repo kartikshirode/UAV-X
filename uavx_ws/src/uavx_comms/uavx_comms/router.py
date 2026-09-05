@@ -121,6 +121,14 @@ class Router:
         self._route_present_since: Optional[float] = None
         self.disconnected = False
         self.recovered_at: Optional[float] = None
+
+        # Chunk 4.2. When a route last reappeared, and when the store first
+        # ran empty afterwards. The drain bound is a claim about this node's
+        # queue, and the only other place to measure it from is the arrival
+        # times at the ground station, which is a different quantity: link
+        # latency does not disappear when a queue does.
+        self.route_returned_at: Optional[float] = None
+        self.drain_end_at: Optional[float] = None
         self.last_gcs_route: Optional[List[str]] = None
         # Set when a component has work but nowhere feasible to park a relay.
         # It suppresses further elections until the component changes, so the
@@ -607,6 +615,10 @@ class Router:
             self._route_absent_since = None
             if self._route_present_since is None:
                 self._route_present_since = now
+                # The drain clock starts when the route comes back, not when
+                # the recovery is confirmed three seconds later.
+                self.route_returned_at = now
+                self.drain_end_at = None
             elif (self.recovered_at is None
                   and now - self._route_present_since >= params.STABILITY_WINDOW_S):
                 self.recovered_at = now
@@ -815,6 +827,7 @@ class Router:
         next_hop = self._observation_next_hop()
         if next_hop is None:
             return
+        self._note_drain(now)
         while allowance > 0:
             held = self.store.pop()
             if held is None:
@@ -829,6 +842,19 @@ class Router:
             out = held.copy(hop_count=hop_count)
             out.path = list(held.path) + [next_hop]
             self._emit(out)
+        self._note_drain(now)
+
+    def _note_drain(self, now: float) -> None:
+        """The first moment the store was empty after the route returned.
+
+        Called on both sides of the drain loop, so a queue that was already
+        empty when the route came back reports the moment it came back rather
+        than waiting for a packet that never arrives to prove it.
+        """
+        if self.drain_end_at is not None or self.route_returned_at is None:
+            return
+        if len(self.store) == 0 and now >= self.route_returned_at:
+            self.drain_end_at = now
 
     # -- what the run record wants -----------------------------------------
 
@@ -859,6 +885,12 @@ class Router:
             # it held for others.
             "custodied_ids": sorted(self.store.held_ids),
             "custodied": len(self.store.held_ids),
+            # When the route last came back and when this node's queue first
+            # ran empty afterwards. The drain bound is measured between them.
+            "route_returned_at": (None if self.route_returned_at is None
+                                  else round(self.route_returned_at, 3)),
+            "drain_end_at": (None if self.drain_end_at is None
+                             else round(self.drain_end_at, 3)),
             # One row per accepted observation, non-empty only at the
             # destination. The destination has built these since chunk 3.1 and
             # nothing has ever read them: they are the per delivery times and
