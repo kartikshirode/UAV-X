@@ -164,7 +164,7 @@ class RouterNode(Node):
         # And the other end. See simclock.Drain: the run ends when every
         # process is signalled at once, and a router that exits on the signal
         # abandons whatever it minted in the last fraction of a second.
-        self.drain = Drain()
+        self.shutdown_drain = Drain()
         self.stopped_generating_at = None
         self.encode_failures = 0
         self.decode_failures = 0
@@ -280,7 +280,7 @@ class RouterNode(Node):
             "encode_failures": self.encode_failures,
         }
         out.update(self.gate.as_record())
-        out.update(self.drain.as_record())
+        out.update(self.shutdown_drain.as_record())
         out["stopped_generating_at"] = self.stopped_generating_at
         out.update(self.router.observation_summary())
         return out
@@ -306,7 +306,7 @@ def _drain(node) -> None:
     what arrives. So they all stay for the same window and then all write
     their files.
     """
-    window = getattr(node, "drain", None)
+    window = getattr(node, "shutdown_drain", None)
     if window is None:
         return
     quiet = getattr(node, "stop_generating", None)

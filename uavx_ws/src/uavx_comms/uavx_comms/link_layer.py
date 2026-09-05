@@ -125,7 +125,12 @@ class LinkLayerNode(Node):
         # does. See simclock.Drain: a packet handed to this node 19 ms before
         # the run ended is delivered 1 ms after it, and a radio that exited on
         # the signal would report it transmitted and never delivered.
-        self.drain = Drain()
+        #
+        # Not `self.drain`, which is this node's own timer callback and means
+        # the other thing: releasing the deliveries whose hop latency has
+        # elapsed. Binding the window over it replaced the callback with an
+        # object and the radio died on its first tick.
+        self.shutdown_drain = Drain()
 
         self.transmissions = 0
         self.undecodable = 0
@@ -268,7 +273,7 @@ class LinkLayerNode(Node):
             "absent": sorted(self.model.absent),
             "deliveries_by_pair": dict(sorted(self.by_pair.items())),
             "still_pending": len(self._pending),
-            **self.drain.as_record(),
+            **self.shutdown_drain.as_record(),
         }
 
     def write_ledger(self) -> None:

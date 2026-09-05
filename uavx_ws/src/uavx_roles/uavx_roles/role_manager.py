@@ -147,7 +147,7 @@ class RoleManager(Node):
         # vehicle would be granted the role and drop it in the same
         # instant. See uavx_comms.simclock.
         self.gate = ClockGate()
-        self.drain = Drain()
+        self.shutdown_drain = Drain()
         self.position: Optional[tuple] = None
         self.positions_seen = 0
         self.decode_failures = 0
@@ -294,7 +294,7 @@ class RoleManager(Node):
             "arrival_radius_m": ARRIVAL_M,
         })
         out.update(self.gate.as_record())
-        out.update(self.drain.as_record())
+        out.update(self.shutdown_drain.as_record())
         out["grants_seen"] = self.tracker.as_record()
         return out
 

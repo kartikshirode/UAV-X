@@ -98,7 +98,7 @@ class GcsNode(Node):
         # after the run ends is addressed here, so a ground station that
         # exited on the signal would turn a delivered observation into a
         # missing one. See simclock.Drain.
-        self.drain = Drain()
+        self.shutdown_drain = Drain()
         self.decode_failures = 0
         self.encode_failures = 0
 
@@ -159,7 +159,7 @@ class GcsNode(Node):
                 led.delivered_edges_by_node(self.router.accepted_path),
         }
         out.update(self.gate.as_record())
-        out.update(self.drain.as_record())
+        out.update(self.shutdown_drain.as_record())
         out.update(self.router.observation_summary())
         return out
 
