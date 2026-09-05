@@ -200,6 +200,29 @@ def check_recording_run(r: dict) -> bool:
     return True
 
 
+def step_sections(body: str, steps) -> dict:
+    """Each step's slice of a transcript, bounded by the next step.
+
+    Returns a mapping of label to the text between that step's header and the
+    header of whichever step comes next in the file. A label the transcript
+    does not carry is absent from the mapping rather than empty, so a caller
+    can tell "the step is not there" from "the step is there and said
+    nothing".
+    """
+    found = []
+    for label in steps:
+        head = "=== " + label
+        at = body.find(head)
+        if at >= 0:
+            found.append((at, label, at + len(head)))
+    found.sort()
+    out = {}
+    for index, (start, label, after) in enumerate(found):
+        end = found[index + 1][0] if index + 1 < len(found) else len(body)
+        out[label] = body[after:end]
+    return out
+
+
 def main() -> int:
     current = digest(from_worktree())
     print(f"  source tree {current[:12]}")
@@ -250,18 +273,23 @@ def main() -> int:
                 bad = [ln for ln in body.splitlines()
                        if ln.startswith("[exit ") and ln.strip() != "[exit 0]"]
                 # Each label has to appear as its own transcript section, with
-                # a zero exit after it and before the next section starts.
+                # a zero exit after it and before the next STEP starts.
+                #
+                # The next step, and not the next line that looks like a
+                # header. run_step writes `=== <label>` and the commands it
+                # runs write whatever they like: the first step here is
+                # stage-1/setup/verify.sh, which prints ten headers of its own
+                # in exactly that shape. Cutting the section at the first of
+                # them reported a step that had exited 0 as having no
+                # completed section, and it did that against a rehearsal in
+                # which all five steps passed. fresh_install.sh runs verify.sh
+                # inside the target as its fourth step, so week 4 would have
+                # met the same thing.
                 missing = []
+                sections = step_sections(body, STEPS)
                 for label in STEPS:
-                    head = f"=== {label}"
-                    at = body.find(head)
-                    if at < 0:
-                        missing.append(label)
-                        continue
-                    rest = body[at + len(head):]
-                    nxt = rest.find("\n=== ")
-                    section = rest if nxt < 0 else rest[:nxt]
-                    if "[exit 0]" not in section:
+                    section = sections.get(label)
+                    if section is None or "[exit 0]" not in section:
                         missing.append(label)
                 if bad:
                     fail(f"the transcript records {len(bad)} non-zero exit(s) "
