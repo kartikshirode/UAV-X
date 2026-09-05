@@ -263,8 +263,7 @@ class Router:
                                            tuple(position))
         distance = self._distance_to(message.get("attachment_id"))
         _, replies = self.roles.on_message(message, now, distance)
-        for reply in replies:
-            self._send_role(reply, now)
+        self._send_role_replies(replies, now)
         self._relay_flood(incoming, now)
 
     def _relay_flood(self, incoming: pk.Packet, now: float) -> None:
@@ -734,7 +733,26 @@ class Router:
         # waiting to overhear itself, which never happens.
         distance = self._distance_to(body.get("attachment_id"))
         _, replies = self.roles.on_message(message, now, distance)
+        self._send_role_replies(replies, now)
+
+    def _send_role_replies(self, replies, now: float) -> None:
+        """Send what the machine wants sent, except the acceptance.
+
+        Chunk 4.1. The machine produces a ROLE_ACK the moment it decodes an
+        ASSIGN naming this node, and the router used to put that on the wire
+        straight away. It said only that a message had been received: the
+        aircraft was still 195 m from the slot, and nothing anywhere read the
+        flag it set at the coordinator.
+
+        `uavx_roles.role_manager` sends it instead, on arrival, from the
+        vehicle whose role it is. Same message, same epoch, same reader. It
+        now means the node that was told to move has moved, which is what
+        `relay_role_moved` claims and what a run record should be able to be
+        read against.
+        """
         for reply in replies:
+            if reply.get("kind") == election.ROLE_ACK:
+                continue
             self._send_role(reply, now)
 
     # -- the application ----------------------------------------------------
