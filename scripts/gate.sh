@@ -525,7 +525,14 @@ gate_w2() {
 
 w3_tests() {
   uavx_require_overlay
-  gate_test uavx_comms uavx_msgs uavx_gcs
+  # uavx_sim and uavx_mission are here from chunk 3.4 onward, and the reason
+  # is the hole W2 fell into one week earlier: the tests a chunk is built
+  # around lived in a package the gate never ran, so the week could go green
+  # with none of them written. 3.4 adds station keeping to uavx_mission and
+  # the whole comms wiring plus the delivery block to uavx_sim, and the week
+  # tested neither. A gate that skips the packages the week changed is a gate
+  # measuring last week.
+  gate_test uavx_comms uavx_msgs uavx_gcs uavx_sim uavx_mission
 }
 
 w3_geometry() {
