@@ -236,6 +236,11 @@ GCS_LABEL = "gcs"
 # than either has ever needed and far less than the stall watchdog allows.
 TOOL_TIMEOUT_S = 10.0
 
+# How often the runner asks the radio whether a gate landed, in simulated
+# seconds. One HELLO period: the swarm cannot notice a blackout faster than
+# that either.
+RADIO_POLL_S = 1.0
+
 # Chunk 4.2. How long before an injected event the ROS graph is captured.
 # The snapshot is the evidence that the system is wired the way the seam
 # rules require, and a snapshot taken after a vehicle was destroyed is a
@@ -1092,6 +1097,7 @@ class Harness:
         self.role_ledgers = None
         self.gcs_ledger = None
         self.destroyed_labels = set()
+        self._radio_asked_at = None
         self.station_seconds = 0.0
         self.scenario_relative = None
         self.nodes = []
@@ -1221,6 +1227,14 @@ class Harness:
         silence = vehicle.silent_for(self.sim_now)
         if silence is None or silence >= KILL_SILENCE_S:
             return False
+        # Asked at most once a second of simulated time. The observation poll
+        # runs every iteration of the flight loop and this one shells out to
+        # the parameter service, so an answer that took a second and came back
+        # no would otherwise be the only thing the loop did.
+        if (self._radio_asked_at is not None
+                and self.sim_now - self._radio_asked_at < RADIO_POLL_S):
+            return False
+        self._radio_asked_at = self.sim_now
         done = self._run_tool(gated_radios_command())
         if done is None or done.returncode != 0:
             return False
