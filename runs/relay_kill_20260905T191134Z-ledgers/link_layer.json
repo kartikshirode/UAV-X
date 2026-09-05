@@ -1,0 +1,39 @@
+{
+ "absent": [],
+ "deliveries": 95085,
+ "deliveries_by_pair": {
+  "gcs->uav_1": 9119,
+  "uav_1->gcs": 15042,
+  "uav_1->uav_2": 15042,
+  "uav_1->uav_3": 7370,
+  "uav_2->uav_1": 6072,
+  "uav_2->uav_3": 6072,
+  "uav_2->uav_4": 6072,
+  "uav_3->uav_1": 5356,
+  "uav_3->uav_2": 7662,
+  "uav_3->uav_4": 7662,
+  "uav_4->uav_2": 4808,
+  "uav_4->uav_3": 4808
+ },
+ "drain_stopped_by": "window",
+ "drain_window_s": 3.0,
+ "drained_sim_s": 3.0,
+ "drained_wall_s": 2.921,
+ "dropped_no_position": 4,
+ "node": "link_layer",
+ "nodes": [
+  "uav_1",
+  "uav_2",
+  "uav_3",
+  "uav_4",
+  "gcs"
+ ],
+ "radio_delivered": 95085,
+ "radio_draws": 80,
+ "radio_dropped": 75727,
+ "radio_off": [],
+ "seed": 43,
+ "still_pending": 0,
+ "transmissions": 42707,
+ "undecodable": 0
+}
