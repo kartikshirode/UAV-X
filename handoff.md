@@ -16,7 +16,9 @@ Repo: github.com/kartikshirode/UAV-X. This project is its own repository and doe
 
 ## Where we are
 
-Day 7, 1 September. Week 1 is built. All seven chunks are implemented, four vehicles have flown, and the harness produces a run record and a graph snapshot that the seam pass accepts. The week is **not accepted**, because acceptance is `bash scripts/gate.sh 1` and that refuses to start without `submission/human-preflight.json`. What landed, what broke and what is still open is in [docs/progress/week-1.md](docs/progress/week-1.md).
+Day 11, 5 September. Weeks 1, 2 and 3 are accepted: `bash scripts/gate.sh 1`, `2` and `3` have each exited 0, which is 19 of the 25 chunks. Week 4 is the whole of what is left.
+
+The swarm surveys, and it relays. `survey_baseline` covered all 400 cells of the frozen box off flown poses. `relay_required` delivers 99.7% of everything four station-keeping vehicles generate over a mesh where the far one has no link to the ground station at all, and `direct_only`, the same file with forwarding off, delivers exactly 0 from that vehicle. What landed, what broke and what is still open is in [docs/progress/week-1.md](docs/progress/week-1.md), [week-2.md](docs/progress/week-2.md) and [week-3.md](docs/progress/week-3.md).
 
 Registration came through on 1 September and the id is `UAVX-8C4749FDD12C`. The preflight schema requires it now, because the other two fields in that block are a date and an address and a person can type both without ever having registered.
 
@@ -79,8 +81,8 @@ Flight is 25% and the tooling hands it to you. Budget one week on flight and two
 ## What's not done, in order of risk
 
 1. **The next round of the plan review.** Each round's fixes get read only by their author until Codex sees them, which is the position that produced 11 findings the first time and 9 the last. Prompt is in [_codex-review-prompt.md](_codex-review-prompt.md); current position in `.claude/review-status.json`.
-2. **No mission has been flown.** Four vehicles arm, climb, hold and land, and one scenario runs end to end and publishes a record. The survey pattern, the mesh layer and the relay logic are weeks 2 to 4 and none of them exists.
-3. **Recording the video.** The `gazebo` GUI binary takes the distro down, so the one thing still blocked is the part that needs a picture. `gzclient` is installed and untested. Deal with it well before 20 September, and keep the headless fallback.
+2. **Nothing has failed in a run yet.** The survey flies and the mesh delivers, both in steady state. Every scenario that kills a vehicle, gates a radio or moves a relay is week 4, and the routing and election logic behind them is unit tested against the state machines and has never been driven by a simulator.
+3. **The demo needs a shot, not a camera.** The capture path exists and is proven: gzserver renders a camera sensor headless and the recording rehearsal produces a 60 s clip with the run id burned into every frame and its sha256 in a receipt. What it produces is not yet a demo, because one static camera cannot make a 480 m formation of half metre vehicles look like anything and `relay_required` has nothing moving in it. The shot belongs to `mission_integrated`.
 4. **The organiser email.** Drafted in [stage-1/organiser-email.md](stage-1/organiser-email.md), not sent.
 
 Closed on 26 August: whether Gazebo runs here at all, and whether four vehicles fit. `gzserver` starts headless and leaves the distro alone; only the GUI binary is dangerous. `scripts/sitl_multi.sh` brings up 4 PX4 instances with a ROS namespace each and 43 topics apiece, and the whole stack costs under 800 MB of the 11.5 GB available.
@@ -138,22 +140,43 @@ Carried from the Vaani and Adversarial IDS handoffs, same servers:
 
 ## Honest gaps
 
-- No mission has been flown. Four vehicles arm, climb, hold and land; nothing has surveyed anything or relayed a packet.
-- Weeks 2 to 4 call `uavx_eval.check`, which does not exist. It fails with a clear message, which is correct, and untested against real work. `run_scenario.sh` was in that list until week 1 built it.
-- `check_submission.py` has still only run against an empty package and against its own fixtures, never against a real one. The seam checker has 48 fixtures now and has seen exactly one real ROS graph. That graph failed it on three endpoints, and none of the three was a bypass, which is the argument for capturing more of them.
+- Nothing has failed in a run. Four vehicles survey, four station-keep and relay, and no scenario has yet killed a vehicle or gated a radio.
+- `check_submission.py` has still only run against an empty package and against its own fixtures, never against a real one. The seam checker has 51 fixtures and has now seen five real ROS graphs; the first failed it on three endpoints and none of the three was a bypass, which is the argument for capturing more of them.
+- Bring-up is flaky under load. Two rehearsal runs died at it on 5 September, once with a boost transport assertion inside gzserver and once with two of four namespaces missing from DDS discovery. The second is fixed by waiting for discovery rather than sampling it once. The first happened once in about thirty bring-ups and has not been chased.
 - The same mistake has now been caught twice: a checker that only examines what its author thought to list, confirming what its author already believed. First the frozen topology, where the relay kill turned out to be a no-op. Then the integrated mission, where the survey box sat 240.8 m from the anchor while the design claimed 250. `check_geometry.py` now walks every pair at every sampled instant of every trajectory. Assume that class of mistake is hiding somewhere else too, and that the next place it turns up will also look thoroughly checked.
 - Three checkers found bugs in themselves while being written, which is the argument for writing the fixtures. The seam suite exposed a `grep` under `pipefail` that killed the static pass mid-scan: it printed its header, exited 1 and checked nothing, and nobody had noticed because `uavx_ws/src` does not exist yet so the guard above it always fired first.
 
 ## Next
 
-NEXT-WEEK: 3
+NEXT-WEEK: 4
 
-Week 2 is the survey and the first mesh work. Before any of it, read
-[docs/progress/week-1.md](docs/progress/week-1.md) and
-[docs/audits/week-1.md](docs/audits/week-1.md); between them they carry 17
+Week 4 is every scenario where something breaks, plus the packaging tail. Eight
+chunks, and `4.7` is the integrated run the proposal is built on.
+
+Two things are known to be waiting there and both are written up in
+[docs/progress/week-3.md](docs/progress/week-3.md) rather than left to be
+discovered, and both turn on the 10 Hz clock.
+
+The separation floor and the altitude layers are both frozen at 10 m, so two
+vehicles stacked one above the other sit exactly on the floor and the accepted
+survey run recorded 9.90 m. Standing rule 4 forbids moving either number. Where
+it bites is narrower than that sounds: the integrated mission flies its two
+surveyors mirrored, 12.5 m apart in x, so they are never closer than 16.0 m,
+and the relay band puts every mover 15 m above the highest mission altitude.
+The scenario that stacks vehicles on purpose is `encounter`, and there the
+yield rule is what has to hold them apart.
+
+`queue_drain` asserts a control queue delay at or under 50 ms against a 10 Hz
+clock, which rules out one implementation rather than all of them. A packet
+served on the next timer tick reads 100 ms; a packet served in the callback
+that queued it reads the same clock twice and reads 0. So control is served on
+arrival and never behind data, and the 2.25 s drain bound holds the same way,
+with the first batch going out when the route returns rather than at the next
+tick.
+
+Before any of it, read the three progress files. Between them they carry 27
 defects found in the acceptance harness itself, and the harness is what every
-later week is graded by. Four audit findings are still open, and the first of
-them, the pose sampling rate, decides what week 2's coverage number means.
+week is graded by.
 
 ## Execution notes
 
