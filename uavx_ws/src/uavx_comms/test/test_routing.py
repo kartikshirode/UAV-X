@@ -622,3 +622,58 @@ def test_the_attachment_node_is_never_the_vehicle_that_just_failed():
     assert epoch.members == frozenset({"uav_3", "uav_4"})
     assert epoch.attachment_id == "uav_1", (
         "the component attached to " + repr(epoch.attachment_id))
+
+
+# ------------------------------------------------------------ the control path
+def test_a_forwarded_control_message_leaves_in_the_callback_that_took_it():
+    """Chunk 4.3, and the accepted relay_kill is what asked for it.
+
+    That run reported a control queue delay of 0.20 s with nothing queued
+    behind anything. Control was already served before observations and the
+    periodic messages were already generated inside the tick that serves them.
+    What waited was everything arriving on the radio, queued in the rx
+    callback and served on the next tick, and /clock advances at 10 Hz on
+    this stack so any wait at all reads as a tenth of a second.
+    """
+    net = settled_net()
+    relay = net.router("uav_2")
+    relay._send_lsa(net.now)
+    relay._serve_control(net.now)
+    flooded = [p for p in relay.drain_tx(net.now) if p.kind == pk.KIND_LSA]
+    assert flooded, "the relay sent no link state, so this measures nothing"
+
+    anchor = net.router("uav_1")
+    before = len(anchor._tx)
+    anchor.on_rx(flooded[0], net.now)
+    assert len(anchor._tx) > before, (
+        "the arrival produced nothing to send on, so the forwarding path is "
+        "not what this test is measuring")
+    assert not anchor.control
+    assert anchor.control_max_delay_s == 0.0
+
+
+def test_the_delay_is_reported_beside_what_it_is_a_statement_about():
+    # A zero delay from a node that served no control at all is the shape of
+    # a measurement nobody took, which is round 3 finding 8 in another place.
+    for node_id in ("uav_1", "uav_2", "uav_3", "uav_4"):
+        summary = settled_net().router(node_id).observation_summary()
+        assert summary["control_queue_max_delay_s"] <= 0.05, node_id
+        assert summary["control_served"] > 0, node_id
+        assert summary["control_peak_depth"] > 0, node_id
+
+
+def test_a_deep_observation_backlog_does_not_delay_control():
+    """The claim the 50 ms bound exists to test.
+
+    architecture.md section 3: observations never delay control. The far
+    surveyor fills its store, and its HELLOs, its link state and the role
+    traffic still go out on the tick that made them.
+    """
+    net = settled_net()
+    far = net.router("uav_4")
+    for n in range(600):
+        far.observe(net.now + n * 0.001)
+    assert len(far.store) >= params.QUEUE_CAPACITY / 2
+    drain(net, 4.0)
+    assert far.control_max_delay_s <= 0.05
+    assert far.control_served > 0

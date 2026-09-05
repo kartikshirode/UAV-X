@@ -159,6 +159,12 @@ class Router:
         self.drops: Dict[str, int] = {}
         self.protocol_errors = 0
         self.control_max_delay_s = 0.0
+        # What that delay is a statement about. Control is served in the
+        # callback that produced it, so the delay is zero in a healthy run,
+        # and a zero next to no count at all is the shape of a measurement
+        # nobody took.
+        self.control_served = 0
+        self.control_peak_depth = 0
         self.reports: List[Tuple[float, str]] = []
         self.last_slot: Optional[slots.SlotDecision] = None
 
@@ -185,7 +191,17 @@ class Router:
     # -- the seam, ingress --------------------------------------------------
 
     def on_rx(self, incoming: pk.Packet, now: float) -> None:
-        """One packet off this node's rx topic. The only way anything gets in."""
+        """One packet off this node's rx topic. The only way anything gets in.
+
+        Whatever this produces leaves in the same callback. See _serve_control:
+        a HELLO forwarded here and served on the next tick has waited a tick,
+        and on a 10 Hz clock a tick reads as a tenth of a second of delay that
+        had nothing to do with anything being busy.
+        """
+        self._dispatch(incoming, now)
+        self._serve_control(now)
+
+    def _dispatch(self, incoming: pk.Packet, now: float) -> None:
         if incoming.kind not in pk.KIND_NAMES:
             self.protocol_errors += 1
             self._drop(DROP_UNKNOWN_KIND)
@@ -375,6 +391,36 @@ class Router:
             self.control.popleft()
             self._drop("control_evicted")
         self.control.append((now, outgoing))
+        self.control_peak_depth = max(self.control_peak_depth,
+                                      len(self.control))
+
+    def _serve_control(self, now: float) -> int:
+        """Hand the radio every control message that is waiting.
+
+        Private on purpose. Nothing outside the router calls it: it is the
+        two internal places control is produced, and the only way anything
+        leaves this object is still drain_tx.
+
+        Called wherever control is produced: the tick that generates HELLO and
+        LSA, and the rx callback that forwards somebody else's. architecture.md
+        section 3 says observations never delay control, and a queue served
+        only on the tick makes that false by a tick even when the radio is
+        idle.
+
+        Control is not charged against the forward rate. That rate is the size
+        of the observation pipe and the number the 2.25 s drain bound comes
+        from, and taking control out of it would make a swarm that talks more
+        drain slower.
+        """
+        served = 0
+        while self.control:
+            queued_at, outgoing = self.control.popleft()
+            self.control_max_delay_s = max(self.control_max_delay_s,
+                                           now - queued_at)
+            self._emit(outgoing)
+            served += 1
+        self.control_served += served
+        return served
 
     # -- routing helpers ----------------------------------------------------
 
@@ -814,15 +860,8 @@ class Router:
         traffic that would end the outage, and the swarm takes longer to
         recover the harder it was working.
         """
+        self._serve_control(now)
         allowance = self.service.allowance(dt)
-        while allowance > 0 and self.control:
-            queued_at, outgoing = self.control.popleft()
-            self.control_max_delay_s = max(self.control_max_delay_s,
-                                           now - queued_at)
-            self._emit(outgoing)
-            allowance -= 1
-        if allowance <= 0:
-            return
 
         next_hop = self._observation_next_hop()
         if next_hop is None:
@@ -871,6 +910,8 @@ class Router:
             "evicted": self.store.evicted,
             "peak_queue_depth": self.store.peak,
             "control_queue_max_delay_s": self.control_max_delay_s,
+            "control_served": self.control_served,
+            "control_peak_depth": self.control_peak_depth,
             "protocol_errors": self.protocol_errors,
             "drops": dict(self.drops),
             # When each of this node's own observations was minted, so the

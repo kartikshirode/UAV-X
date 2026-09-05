@@ -210,6 +210,11 @@ class RouterNode(Node):
             self.decode_failures += 1
             return
         self.router.on_rx(incoming, now)
+        # And out again in the same callback. The router serves its control
+        # queue at the end of on_rx, and leaving the result in the tx buffer
+        # until the node's next tick would put the wait back where the
+        # measurement can see it.
+        self.publish()
 
     def publish(self) -> None:
         now = self.now_s()

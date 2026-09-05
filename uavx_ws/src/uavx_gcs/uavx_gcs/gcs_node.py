@@ -123,6 +123,11 @@ class GcsNode(Node):
             self.decode_failures += 1
             return
         self.router.on_rx(incoming, now)
+        # The acknowledgement leaves in the callback that accepted the
+        # observation. This node acknowledges everything that arrives, so a
+        # tick's worth of waiting here is a tick added to every origin's
+        # retention and to the handback that is waiting on one of them.
+        self.publish()
 
     def publish(self) -> None:
         now = self.now_s()
