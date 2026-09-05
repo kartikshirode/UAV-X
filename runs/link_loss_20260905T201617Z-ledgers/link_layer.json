@@ -1,0 +1,43 @@
+{
+ "absent": [],
+ "blackout_hold_s": 120.0,
+ "blackout_nodes": [],
+ "blackout_restored_at": 359.8,
+ "blackout_started_at": 239.8,
+ "deliveries": 112666,
+ "deliveries_by_pair": {
+  "gcs->uav_1": 11776,
+  "uav_1->gcs": 19635,
+  "uav_1->uav_2": 14944,
+  "uav_1->uav_3": 6575,
+  "uav_2->uav_1": 11482,
+  "uav_2->uav_3": 11482,
+  "uav_2->uav_4": 11482,
+  "uav_3->uav_1": 3565,
+  "uav_3->uav_2": 4211,
+  "uav_3->uav_4": 7574,
+  "uav_4->uav_2": 4149,
+  "uav_4->uav_3": 5791
+ },
+ "drain_stopped_by": "window",
+ "drain_window_s": 3.0,
+ "drained_sim_s": 3.0,
+ "drained_wall_s": 3.001,
+ "dropped_no_position": 4,
+ "node": "link_layer",
+ "nodes": [
+  "uav_1",
+  "uav_2",
+  "uav_3",
+  "uav_4",
+  "gcs"
+ ],
+ "radio_delivered": 112666,
+ "radio_draws": 439,
+ "radio_dropped": 113682,
+ "radio_off": [],
+ "seed": 43,
+ "still_pending": 0,
+ "transmissions": 56591,
+ "undecodable": 0
+}
