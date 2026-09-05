@@ -99,6 +99,7 @@ from uavx_sim.graph_snapshot import (CaptureFailed, IncompleteSnapshot,
 from uavx_sim.resource_sampler import ResourceSampler, ResourceSamplerError
 from uavx_sim.scenario import ScenarioError
 from uavx_sim.scenario import load as load_scenario
+from uavx_sim import video
 from uavx_sim.survey import (CRUISE_SPEED_PARAM, SurveyError,
                              collector_command, coverage_from_payload,
                              home_of, mission_node_command, model_map,
@@ -220,6 +221,12 @@ COMMS_SETTLE_S = 8.0
 
 LINK_LABEL = "link-layer"
 GCS_LABEL = "gcs"
+
+# Chunk 3.6. Where the raw frames go while a recording run is in progress. On
+# ext4 under the distribution and never on /mnt/c: a minute of 960 by 540 rgb8
+# is about 650 MB and writing it across the Windows filesystem boundary would
+# cost more than the render does.
+FRAMES_DIR = "/tmp"
 
 # The simulation is lockstep, so a clock that stops advancing means a process
 # is wedged rather than that the run is slow.
@@ -485,21 +492,31 @@ class Launcher:
     reimplementing either here would mean two launchers to keep in step.
     """
 
-    def __init__(self, repo, launcher, vehicles, hold_s, log_path):
+    def __init__(self, repo, launcher, vehicles, hold_s, log_path, world=None):
         self._repo = repo
         self._launcher = launcher
         self._vehicles = vehicles
         self._hold_s = hold_s
         self._log_path = Path(log_path)
+        # Chunk 3.6. None means the launcher's own default, which is the world
+        # every gated scenario flies in. A recording run asks for the one with
+        # a camera in it, and only a recording run does: rendering a camera
+        # under software OpenGL costs real time, and the runs already archived
+        # were flown without one.
+        self._world = world
         self.process = None
 
     def start(self):
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
         handle = open(self._log_path, "wb")
         try:
+            command = ["bash", str(self._launcher),
+                       "--vehicles", str(self._vehicles),
+                       "--hold", str(int(self._hold_s))]
+            if self._world:
+                command += ["--world", str(self._world)]
             self.process = subprocess.Popen(
-                ["bash", str(self._launcher), "--vehicles", str(self._vehicles),
-                 "--hold", str(int(self._hold_s))],
+                command,
                 stdout=handle, stderr=subprocess.STDOUT, cwd=str(self._repo),
                 # Its own session, so the whole tree can be signalled at once.
                 # The launcher spends its hold inside `sleep`, and a TERM to the
@@ -625,6 +642,27 @@ class SimClock:
         from uavx_msgs.msg import RunMetrics
 
         self._node.create_subscription(RunMetrics, METRICS_TOPIC, callback, 10)
+
+    def subscribe_images(self, callback):
+        """The world camera's frames, on this same node. Chunk 3.6.
+
+        On this node and not a new one, deliberately. A second process would
+        be a second name in the graph the seam pass has to account for, and
+        the runner is already an outside process with an allowlist that says
+        what it may hold. Depth 1 and best effort: a frame that arrives while
+        the last one is still being written is a frame this capture does not
+        get, and queueing it would only make the clip lag the run.
+        """
+        from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
+                               ReliabilityPolicy)
+        from sensor_msgs.msg import Image
+
+        profile = QoSProfile(depth=1,
+                             reliability=ReliabilityPolicy.BEST_EFFORT,
+                             history=HistoryPolicy.KEEP_LAST,
+                             durability=DurabilityPolicy.VOLATILE)
+        self._node.create_subscription(Image, video.IMAGE_TOPIC, callback,
+                                       profile)
 
     def spin(self, timeout_s=0.0):
         self._rclpy.spin_once(self._node, timeout_sec=timeout_s)
@@ -1012,6 +1050,19 @@ class Harness:
                 scenario.raw.get("hover_altitudes_m") or {})
         except CommsError as exc:
             raise HarnessFailure(str(exc), EXIT_ARGS) from exc
+        # Chunk 3.6. Set only for a recording run, and the whole of the
+        # capture state, so a run that is not recording carries none of it.
+        self.clip = options.get("record")
+        self.clip_seconds = options.get("record_seconds")
+        self.overlay = options.get("overlay_text")
+        self.frames_dir = Path(FRAMES_DIR)
+        self.frames_handle = None
+        self.frames = 0
+        self.frame_first_s = None
+        self.frame_last_s = None
+        self.frame_size = None
+        self.frame_errors = 0
+        self.capture = None
         self.ledger_dir = self.runs_dir / (self.run_id + "-ledgers")
         self.ledger_paths = {}
         self.delivery = None
@@ -1036,6 +1087,11 @@ class Harness:
         self.elapsed_s = 0.0
         self.prep_seconds = 0.0
         self.clock_messages = 0
+
+    @property
+    def recording(self):
+        """Whether this run has a clip to produce."""
+        return bool(self.clip)
 
     @property
     def measured(self):
@@ -1123,9 +1179,10 @@ class Harness:
             self.bring_up_attempts = attempt
             log_path = Path("/tmp") / f"uavx-launcher-{self.run_id}-{attempt}.log"
             refresh_ros_daemon()
-            self.launcher = Launcher(self.repo, launcher_script,
-                                     len(self.scenario.vehicles), hold_s,
-                                     log_path)
+            self.launcher = Launcher(
+                self.repo, launcher_script, len(self.scenario.vehicles),
+                hold_s, log_path,
+                world=video.RECORD_WORLD if self.recording else None)
             self.launcher.start()
             if self.launcher.wait_ready(READY_TIMEOUT_S):
                 print(f"  launcher reported {len(self.scenario.vehicles)} "
@@ -1566,6 +1623,120 @@ class Harness:
         self.delivery = delivery_from_ledgers(routers, gcs)
         return self.delivery
 
+    # ------------------------------------------------------------- capture
+    def open_capture(self):
+        """The raw frame file, opened before the first frame can arrive."""
+        if not self.recording:
+            return
+        self.frames_dir.mkdir(parents=True, exist_ok=True)
+        path = video.raw_path(self.frames_dir)
+        try:
+            self.frames_handle = open(path, "wb")
+        except OSError as exc:
+            raise HarnessFailure(
+                f"cannot write frames to {path}: {exc}", EXIT_RECORDING) from exc
+        self.clock.subscribe_images(self.on_frame)
+        print(f"  capturing {self.clip_seconds:.0f}s of simulated time from "
+              f"{video.IMAGE_TOPIC}", flush=True)
+
+    def capture_done(self):
+        """Whether the capture window has covered what was asked for."""
+        if self.frames_handle is None or self.frame_first_s is None:
+            return False
+        return (self.frame_last_s - self.frame_first_s
+                >= float(self.clip_seconds))
+
+    def on_frame(self, message):
+        """One rendered frame, appended raw.
+
+        Stamped with scenario time rather than with the message's own header,
+        because the clip is timed against the clock the record is timed
+        against and the two have to be the same one.
+        """
+        if self.frames_handle is None or self.sim_now is None:
+            return
+        if self.capture_done():
+            return
+        try:
+            rgb = video.as_rgb(message.encoding, message.data,
+                               message.width, message.height, message.step)
+        except video.RecorderError as exc:
+            # Counted rather than raised. One malformed frame is not a reason
+            # to end a 240 second run, and the count reaches the record so a
+            # short clip has a stated cause.
+            self.frame_errors += 1
+            if self.frame_errors == 1:
+                print(f"  WARNING  a frame could not be read: {exc}",
+                      flush=True)
+            return
+        try:
+            self.frames_handle.write(rgb)
+        except OSError as exc:
+            self.frame_errors += 1
+            print(f"  WARNING  a frame could not be written: {exc}", flush=True)
+            return
+        if self.frame_size is None:
+            self.frame_size = (message.width, message.height)
+        self.frames += 1
+        if self.frame_first_s is None:
+            self.frame_first_s = self.sim_now
+        self.frame_last_s = self.sim_now
+
+    def close_capture(self):
+        """Encode what was captured, or say why there is no clip.
+
+        Runs after the scenario loop and before teardown, so a failure here
+        is reported against the capture rather than against whatever the
+        teardown was doing at the time.
+        """
+        if self.frames_handle is None:
+            return
+        try:
+            self.frames_handle.close()
+        except OSError:
+            pass
+        self.frames_handle = None
+        if self.frame_size is None:
+            raise HarnessFailure(
+                f"no frame arrived on {video.IMAGE_TOPIC} in the whole run. "
+                f"The world was loaded without a camera, or gzserver could "
+                f"not render one. That is the thing this rehearsal exists to "
+                f"find out now rather than during the submission tail.",
+                EXIT_RECORDING)
+        width, height = self.frame_size
+        span = (self.frame_last_s or 0.0) - (self.frame_first_s or 0.0)
+        try:
+            rate = video.capture_rate(self.frames, span)
+            command = video.encode_command(self.frames_dir, self.clip, rate,
+                                           width, height, self.overlay)
+        except video.RecorderError as exc:
+            raise HarnessFailure(str(exc), EXIT_RECORDING) from exc
+
+        print(f"  encoding {self.frames} frames of {width}x{height} over "
+              f"{span:.1f}s of simulated time at {rate:.2f} Hz", flush=True)
+        try:
+            done = subprocess.run(command, capture_output=True, text=True,
+                                  timeout=600)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise HarnessFailure(f"ffmpeg could not be run: {exc}",
+                                 EXIT_RECORDING) from exc
+        if done.returncode != 0:
+            raise HarnessFailure(
+                f"ffmpeg exited {done.returncode}: "
+                f"{(done.stderr or done.stdout).strip()[-800:]}",
+                EXIT_RECORDING)
+
+        problems = video.clip_problems(self.clip, float(self.clip_seconds),
+                                       span, self.frames)
+        if problems:
+            raise HarnessFailure("; ".join(problems), EXIT_RECORDING)
+        self.capture = video.receipt_fields(width, height, self.frames, span,
+                                            rate)
+        self.capture["video_frame_errors"] = self.frame_errors
+        reclaimed = video.sweep(self.frames_dir) / (1 << 20)
+        print(f"  ok    clip written to {self.clip}, {reclaimed:.0f} MiB of "
+              f"frames swept", flush=True)
+
     # ---------------------------------------------------------------- loop
     def fly_scenario(self):
         duration = float(self.scenario.duration_s)
@@ -1588,6 +1759,7 @@ class Harness:
         self.sampler = ResourceSampler(root_pid=os.getpid())
         self.zero_s = first
         self.sim_now = 0.0
+        self.open_capture()
         next_pose = 0.0
         next_resource = 0.0
         capture_at = duration * GRAPH_CAPTURE_FRACTION
@@ -1642,6 +1814,12 @@ class Harness:
                     f"time", EXIT_TIMEOUT)
             if self.sim_now >= duration:
                 break
+
+        # The clip first, while every path it names is still what it was.
+        # ffmpeg reads a file this loop just finished writing and nothing in
+        # the teardown touches it, but a failure here belongs to the capture
+        # and reporting it before the teardown keeps it that way.
+        self.close_capture()
 
         # The survey's processes come down while the clock is still running,
         # so the collector's last payload can arrive. Everything else is torn
@@ -1818,6 +1996,7 @@ class Harness:
             "comms": self.comms.as_record() if self.comms is not None else None,
             "station_ingress_wall_s": round(self.station_seconds, 1),
             "station_radius_m": STATION_RADIUS_M,
+            "capture": self.capture,
             "radio": getattr(self, "radio_ledger", None),
             "routers": getattr(self, "router_ledgers", None),
             "mission_started_wall_s": self.mission_started_wall,
@@ -1872,18 +2051,25 @@ def run(options):
                 f"--record-seconds {seconds} is longer than the scenario's "
                 f"{scenario.duration_s}s. A capture cannot outlast the run it "
                 f"is a capture of.")
-        # Fail here rather than three minutes into a run that cannot be
-        # recorded. There is no headless video path on this stack yet: the
-        # world scripts/sitl_multi.sh loads carries no camera sensor, and
-        # gzclient is never launched because the GUI binary takes this WSL
-        # distribution down. Chunk 3.6 owns the recording rehearsal and this is
-        # the message it needs to start from.
-        raise HarnessFailure(
-            "--record is not supported on this stack. gzserver runs headless "
-            "with no camera sensor in the world, so there is no frame source, "
-            "and gzclient must never be launched. Building the offscreen "
-            "capture path belongs to the recording rehearsal in chunk 3.6.",
-            EXIT_RECORDING)
+        # Chunk 3.6. Everything the capture needs, checked before a simulator
+        # is started, because finding out at the end of a four minute run
+        # that the overlay was unusable costs the whole run.
+        try:
+            video.overlay_filter(options["overlay_text"] or "")
+        except video.RecorderError as exc:
+            raise ArgumentError(str(exc)) from exc
+        if not Path(video.FONT).is_file():
+            raise HarnessFailure(
+                f"no font at {video.FONT}, so the run id cannot be burned "
+                f"into the frames. A clip nobody can tie to a run is the "
+                f"thing round 5 finding 6 found being accepted.",
+                EXIT_RECORDING)
+        record_world = repo / "worlds" / f"{video.RECORD_WORLD}.world"
+        if not record_world.is_file():
+            raise HarnessFailure(
+                f"no camera world at {record_world}. gzserver renders no "
+                f"frames without one and gzclient must never be launched.",
+                EXIT_RECORDING)
 
     launcher_script = require_dependencies(repo)
 
@@ -2053,6 +2239,11 @@ def run(options):
           f"{record['injected_event_count']} injected event(s) observed, "
           f"peak {resources['peak_rss_mib']} MiB, "
           f"{resources['samples']} resource samples", flush=True)
+    if harness.capture is not None:
+        print(f"  ok    clip {harness.capture['video_frames']} frames, "
+              f"{harness.capture['video_span_sim_s']:.1f}s of simulated time, "
+              f"{harness.capture['video_capture_hz']:.2f} Hz capture",
+              flush=True)
     if coverage is not None:
         print(f"  ok    coverage {coverage['coverage_fraction']:.4f} from "
               f"{coverage['coverage_source']}, "

@@ -11,7 +11,8 @@
     "/metrics_collector",
     "/scenario_runner",
     "/gazebo",
-    "/gazebo/gazebo_ros_state"
+    "/gazebo/gazebo_ros_state",
+    "/uavx_record/uavx_camera_plugin"
   ],
   "_outside_note": "Matched by exact name. Substring matching gave anything called /uav_2/link_layer_helper the link layer's exemption to read ground truth, which is the whole bypass.",
   "swarm_packet_type": "uavx_msgs/msg/SwarmPacket",
@@ -219,7 +220,8 @@
       ],
       "subscribers": [
         "/parameter_events",
-        "/uavx_eval/metrics"
+        "/uavx_eval/metrics",
+        "/uavx_record/view/image_raw"
       ],
       "services": [
         "/scenario_runner/*"
@@ -267,10 +269,28 @@
         "/reset_world"
       ],
       "actions": []
+    },
+    "/uavx_record/uavx_camera_plugin": {
+      "publishers": [
+        "/uavx_record/view/image_raw",
+        "/uavx_record/view/camera_info",
+        "/rosout",
+        "/parameter_events"
+      ],
+      "subscribers": [
+        "/clock",
+        "/parameter_events"
+      ],
+      "services": [
+        "/uavx_record/uavx_camera_plugin/*",
+        "/uavx_record/set_camera_info"
+      ],
+      "actions": []
     }
   },
   "_survey_note": "Chunk 2.4. survey_baseline runs four mission executors and the collector and nothing else, because architecture.md section 6 disables communications in it so the scenario measures the mission alone. It was first written without a required_outside override, on the reasoning that the allowance belonged to week 1; the third survey run failed on exactly that, reporting a missing link layer in the one scenario the design says has no radio. The override is here now and it carries its reason, which is the rule seam_graph.required_outside enforces: weeks 1 and 2 may drop a required process and must say why, weeks 3 and 4 may not drop one at all. The runner subscribes to /uavx_eval/metrics for the collector final payload, which is how coverage reaches the record, and that subscription is listed above because everything an outside process holds is.",
   "_harness_note": "Chunk 1.7. gate.sh runs check_seam.sh --scenario harness_check and no such manifest existed, so that line exited 2, CANNOT CHECK, and the chunk could never have passed. harness_check runs the harness and nothing else: there are no routers, no mission executors and no GCS in week 1, because none of them are built yet. So its expected set is empty and the only process it requires is the runner. required_outside is overridden here rather than globally, so a real scenario still has to show the radio and the collector; a scenario that quietly dropped either would be claiming delivery numbers that came from somewhere else.",
   "_state_plugin_note": "Chunk 2.4. libgazebo_ros_state is a WorldPlugin declared in worlds/uavx_empty.world, and it registers its own ROS node beside /gazebo rather than publishing through it. Nothing accounted for that, so the first run with ground truth in it reported the publisher of ground truth as an unaccounted-for member of the swarm. It is the simulator, exactly like /gazebo, and the seam rule is about who reads ground truth and not who publishes it. Its two entity-state services are how a caller could move a model, which no process in this repository does and every one of them would be caught by its own allowlist if it tried.",
-  "_gazebo_note": "Chunk 1.7, the first time this checker ever ran over a graph captured from a real ROS system rather than a synthetic fixture. /gazebo is a ROS node and appears in every scenario graph, and nothing accounted for it, so a correct run failed with the simulator itself listed as an unaccounted-for member of the swarm. It is the simulator: it publishes the clock and the ground truth and it owns the world services. The seam rule was never about who publishes ground truth, it is about who reads it, and the SwarmPacket ban below still applies to it like anything else."
+  "_gazebo_note": "Chunk 1.7, the first time this checker ever ran over a graph captured from a real ROS system rather than a synthetic fixture. /gazebo is a ROS node and appears in every scenario graph, and nothing accounted for it, so a correct run failed with the simulator itself listed as an unaccounted-for member of the swarm. It is the simulator: it publishes the clock and the ground truth and it owns the world services. The seam rule was never about who publishes ground truth, it is about who reads it, and the SwarmPacket ban below still applies to it like anything else.",
+  "_camera_note": "Chunk 3.6. worlds/uavx_record.world is loaded only by a recording run and adds one static camera, so /uavx_record/uavx_camera_plugin is an outside process that may be in a graph and is never required to be. It publishes an image and reads the clock, and the only thing that subscribes to it is the runner, which is why the image topic is on /scenario_runner's list and on nobody else's. A swarm node reading the camera would be a swarm node seeing the whole field at once, which is the same claim reading ground truth would make. Every endpoint here was read off ros2 node info against the world running, not written from what the plugin looked like it would do."
 }

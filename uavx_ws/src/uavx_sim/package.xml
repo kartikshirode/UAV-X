@@ -23,6 +23,10 @@
   <exec_depend>uavx_gcs</exec_depend>
   <exec_depend>uavx_mission</exec_depend>
 
+  <!-- Chunk 3.6. The camera the recording world carries publishes an image,
+       and the runner is the only thing that reads it. -->
+  <exec_depend>sensor_msgs</exec_depend>
+
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
