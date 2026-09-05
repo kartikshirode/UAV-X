@@ -129,6 +129,11 @@ class Router:
         # latency does not disappear when a queue does.
         self.route_returned_at: Optional[float] = None
         self.drain_end_at: Optional[float] = None
+        # Every moment this node declared itself cut off. A count would say
+        # how often and not when, and link_loss asks whether anything went
+        # down again after the relay was handed back, which is a question
+        # about times.
+        self.outages: list = []
         self.last_gcs_route: Optional[List[str]] = None
         # Set when a component has work but nowhere feasible to park a relay.
         # It suppresses further elections until the component changes, so the
@@ -678,6 +683,7 @@ class Router:
         if (not self.disconnected
                 and now - self._route_absent_since >= params.NEIGHBOUR_TIMEOUT_S):
             self.disconnected = True
+            self.outages.append(round(now, 3))
             self._report(now, "disconnected")
         if self.disconnected and self.elections_enabled:
             self._maybe_open_election(now)
@@ -937,6 +943,10 @@ class Router:
             "unacknowledged_ids": sorted(
                 packet.identity_str() for packet in self.pending_ack.values()),
             "unacknowledged": len(self.pending_ack),
+            # When this node lost its route, each time it did. The handback
+            # claim is that giving the vehicle back broke nothing, and an
+            # outage after the release is what would make it false.
+            "outages": list(self.outages),
             # When this node last had a route it had held for the stability
             # window. Cleared the moment the route goes, so a value later than
             # an injected event is this node saying it lost the route and got
@@ -949,6 +959,13 @@ class Router:
                                   else round(self.route_returned_at, 3)),
             "drain_end_at": (None if self.drain_end_at is None
                              else round(self.drain_end_at, 3)),
+            # The handback transaction, straight out of the machine that ran
+            # it. Empty on a node that never opened an epoch. Only the owner
+            # holds all of it: it is the node that prepared the path, took the
+            # confirmation off the destination's acknowledgement and sent the
+            # release, and it applies its own release locally rather than
+            # waiting to overhear itself.
+            "handback": self.roles.handback_trace(),
             # The slot this node last computed for a relay, or None if it
             # never ran an election. Carried out of the component that decided
             # it rather than recomputed by the runner, which would be a second
