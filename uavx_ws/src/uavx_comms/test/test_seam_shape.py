@@ -21,6 +21,62 @@ from conftest import settled_net
 from uavx_comms import pure_net, router as router_module
 
 SOURCE = Path(router_module.__file__).resolve().parent
+REPO = SOURCE.parents[3]
+CHECK_SEAM = REPO / "scripts" / "check_seam.sh"
+
+# Chunk 3.1. Until it, every file in this package was pure logic and these
+# tests said so without qualification. Wiring the mesh to ROS needs files that
+# import rclpy and name the seam, and relaxing the rules for the whole package
+# to admit them would delete the guarantee the package exists to make.
+#
+# So the exceptions are named, and the naming is the test. A file that is not
+# in one of these two sets is held to every original rule, and a file that is
+# in one of them and does not exist fails, so the lists cannot rot quietly
+# once a module is renamed or deleted.
+#
+# codec is not a node. It is the one place that knows both the dataclass and
+# the wire type, so it imports the message package and nothing else from ROS.
+WIRE_MODULES = frozenset({"codec.py"})
+
+# The nodes. Each one wires an object from the pure half to the two endpoints
+# scripts/seam_manifests.json allows it and adds no decisions of its own.
+NODE_MODULES = frozenset({"link_layer.py", "router_node.py"})
+
+EXCEPTED = WIRE_MODULES | NODE_MODULES
+
+
+def pure_modules():
+    """Every file in this package that is still required to be pure logic."""
+    return [p for p in sorted(SOURCE.glob("*.py")) if p.name not in EXCEPTED]
+
+
+def privileged_by_the_real_checker():
+    """The modules scripts/check_seam.sh exempts from the ground truth ban.
+
+    Read out of the checker rather than restated here. Week 2's third harness
+    defect was this exemption and a fixture agreeing with each other and both
+    being wrong about where a module lives, because the fixture was written
+    from the same assumption as the checker. A list typed here would be a
+    third copy of that assumption.
+    """
+    assert CHECK_SEAM.is_file(), (
+        str(CHECK_SEAM) + " is the checker these rules mirror, and without it "
+        "the exemption below would be this file's own opinion")
+    body = CHECK_SEAM.read_text(encoding="utf-8")
+    prefix = "uavx_comms/uavx_comms/"
+    found = set()
+    for line in body.splitlines():
+        text = line.strip()
+        if text.startswith(prefix) and ")" in text:
+            named = text.split(")")[0].strip()
+            leaf = named[len(prefix):]
+            if leaf.endswith(".py") and "*" not in leaf:
+                found.add(leaf)
+    assert found, (
+        "no exempt module was found in " + str(CHECK_SEAM) + ". Either the "
+        "exemption moved or its spelling changed, and this test would then "
+        "be enforcing a rule the gate does not.")
+    return found
 
 
 def test_a_router_holds_no_reference_to_another_router_or_to_the_link():
@@ -126,13 +182,42 @@ def test_no_pure_module_names_a_topic_or_a_vehicle_id():
     arrives as an argument.
     """
     offenders = []
-    for path in sorted(SOURCE.glob("*.py")):
+    for path in pure_modules():
         for value in code_strings(path):
             if "/uavx/" in value:
                 offenders.append(path.name + " builds the topic " + repr(value))
             if value.startswith("uav_") or value.startswith("/uav_"):
                 offenders.append(path.name + " names the vehicle " + repr(value))
     assert not offenders, repr(offenders)
+
+
+def test_no_node_module_names_a_second_vehicle():
+    """The nodes may name the seam. They may not name somebody else's.
+
+    This is the rule scripts/check_seam.sh actually applies: it counts the
+    distinct vehicle endpoint literals in a file and calls a file holding two
+    of them a bypass, because a process that can name a second vehicle's
+    endpoint can talk to it without crossing the radio. The link layer is
+    exempt there because it is the radio, and it builds its endpoints from a
+    vehicle list rather than spelling any of them, so it passes this anyway.
+    """
+    endpoint = re.compile(r"/uavx/(uav_[0-9]+|gcs)/")
+    offenders = []
+    for name in sorted(EXCEPTED):
+        path = SOURCE / name
+        named = set()
+        for value in code_strings(path):
+            named.update(endpoint.findall(value))
+        if len(named) > 1:
+            offenders.append(name + " names " + repr(sorted(named)))
+    assert not offenders, repr(offenders)
+
+
+def test_the_excepted_modules_all_exist():
+    """A list of exceptions that names nothing exempts nothing, and a list
+    that names a deleted file hides the next one that is added."""
+    missing = sorted(n for n in EXCEPTED if not (SOURCE / n).is_file())
+    assert not missing, repr(missing)
 
 
 # scripts/check_seam.sh greps this whole source tree for the ground-truth
@@ -151,7 +236,7 @@ def test_nothing_in_the_package_imports_ros_or_the_simulator():
     """Pure means pure. The gate builds this package before any node exists."""
     banned_imports = {"rclpy", GROUND_TRUTH[1], "px4" + "_msgs", "uavx_msgs"}
     offenders = []
-    for path in sorted(SOURCE.glob("*.py")):
+    for path in pure_modules():
         for name in sorted(imported_names(path) & banned_imports):
             offenders.append(path.name + " imports " + name)
         for value in code_strings(path):
@@ -159,6 +244,32 @@ def test_nothing_in_the_package_imports_ros_or_the_simulator():
                 if banned in value:
                     offenders.append(path.name + " names " + banned)
     assert not offenders, repr(offenders)
+
+
+def test_every_module_that_imports_ros_has_been_declared_one_that_may():
+    """The set is checked in both directions, which is what makes it a pin.
+
+    Without this, the exception list would only ever have to grow: somebody
+    adds a fourth node, adds its name, and nothing notices that the package
+    quietly stopped being mostly pure logic. Here a file that imports ROS and
+    is not declared fails, and a declared file that imports none of it fails
+    too, so the list describes the package rather than excusing it.
+    """
+    ros = {"rclpy", GROUND_TRUTH[1], "px4" + "_msgs", "uavx_msgs"}
+    reaches_ros = {p.name for p in sorted(SOURCE.glob("*.py"))
+                   if imported_names(p) & ros}
+    assert reaches_ros == EXCEPTED, (
+        "modules importing ROS: " + repr(sorted(reaches_ros))
+        + ", declared: " + repr(sorted(EXCEPTED)))
+
+
+def test_the_wire_module_imports_the_message_package_and_no_more():
+    """codec converts. It does not run, and it does not read the world."""
+    for name in sorted(WIRE_MODULES):
+        imports = imported_names(SOURCE / name)
+        assert "uavx_msgs" in imports, name + " converts nothing"
+        for banned in ("rclpy", GROUND_TRUTH[1], "px4" + "_msgs"):
+            assert banned not in imports, name + " imports " + banned
 
 
 def test_no_module_here_would_fail_the_static_seam_pass():
@@ -174,16 +285,35 @@ def test_no_module_here_would_fail_the_static_seam_pass():
     Running the same two predicates here means a violation is found while the
     file is being written rather than in W3, where it fails a gate.
     """
+    exempt = privileged_by_the_real_checker()
     ground_truth = re.compile("|".join(re.escape(t) for t in GROUND_TRUTH))
     channels = re.compile("|".join(re.escape(t) for t in CHANNELS))
     offenders = []
     for path in sorted(SOURCE.glob("*.py")):
         body = path.read_text(encoding="utf-8")
-        if ground_truth.search(body):
+        if ground_truth.search(body) and path.name not in exempt:
             offenders.append(path.name + " reads simulator ground truth")
         if channels.search(body):
             offenders.append(path.name + " creates a service or an action")
     assert not offenders, repr(offenders)
+
+
+def test_the_ground_truth_exemption_is_used_and_is_not_wider_than_it_needs():
+    """The exemption is a real hole in the rule, so it is held to two things.
+
+    It is used, meaning the file it names does read ground truth. An exemption
+    covering a file that does not need it is an exemption nobody would notice
+    growing. And it is small: exactly one module in this package, the radio.
+    """
+    exempt = privileged_by_the_real_checker()
+    assert exempt == {"link_layer.py"}, repr(sorted(exempt))
+    ground_truth = re.compile("|".join(re.escape(t) for t in GROUND_TRUTH))
+    for name in sorted(exempt):
+        path = SOURCE / name
+        assert path.is_file(), name + " is exempted and does not exist"
+        assert ground_truth.search(path.read_text(encoding="utf-8")), (
+            name + " is exempted from the ground truth ban and reads no "
+            "ground truth, so the exemption is covering nothing")
 
 
 def test_a_router_can_be_driven_with_nothing_but_the_two_methods():
