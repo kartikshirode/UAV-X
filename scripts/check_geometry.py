@@ -495,6 +495,9 @@ def run(quiet: bool = False) -> int:
     check_encounter(out, ok)
     check_survey_baseline(out, ok)
     check_relay_scenarios(out, ok)
+    check_fault_scenarios(out, ok)
+    check_encounter_files(out, ok)
+    check_integrated_file(out, ok)
 
     return len(failures)
 
@@ -990,9 +993,8 @@ def check_encounter(out, ok) -> None:
     out("\n" + "=" * 62)
     out("encounter: the yield rule has to be forced, not hoped for")
     out("=" * 62)
-    a0, a1 = (250.0, -120.0, 45.0), (250.0, 120.0, 45.0)
-    b0, b1 = (130.0, 0.0, 45.0), (370.0, 0.0, 45.0)
-    t_start = 20.0
+    (a0, a1), (b0, b1) = ENCOUNTER_A, ENCOUNTER_B
+    t_start = ENCOUNTER_START_S
     la, lb = math.dist(a0, a1), math.dist(b0, b1)
     note("encounter:path", la)
     if abs(la - lb) < 1e-6:
@@ -1176,6 +1178,392 @@ def check_relay_scenarios(out, ok) -> None:
     else:
         ok(f"uav_4 to gcs is {far:.1f} m, beyond r_max of {R_MAX:.0f} m, so a "
            f"delivery of 0 in direct_only is the only honest outcome")
+
+
+# --- the six files week 4 flies --------------------------------------------
+#
+# Chunk 3.2's lesson, six more times. Every number below already appears above
+# as a constant the trajectory walk uses, and until this section existed it
+# also appeared in a YAML file that nothing compared it with. A kill typed at
+# 130 s instead of 120 would fly, fail over, recover and write a record, and
+# the only thing wrong with the run would be that it was not the run
+# architecture.md describes.
+KILL_AT_S = 120.0
+KILL_DURATION = 300.0
+
+BLACKOUT_AT_S = 120.0
+BLACKOUT_RESTORE_S = 240.0
+LINK_LOSS_DURATION = 360.0
+
+DRAIN_AT_S = 60.0
+DRAIN_RESTORE_S = 105.0
+DRAIN_DURATION = 180.0
+DRAIN_ORIGINS = 2                # uav_3 and uav_4, the cut off component
+DRAIN_BOUND_S = 2.25             # the gate's drain bound, derived below
+
+ENCOUNTER_START_S = 20.0
+ENCOUNTER_DURATION = 90.0
+ENCOUNTER_ALT = 45.0
+ENCOUNTER_A = ((250.0, -120.0, ENCOUNTER_ALT), (250.0, 120.0, ENCOUNTER_ALT))
+ENCOUNTER_B = ((130.0, 0.0, ENCOUNTER_ALT), (370.0, 0.0, ENCOUNTER_ALT))
+
+# relay_kill and link_loss are one fault told twice, once as a vehicle that is
+# gone and once as one that is only quiet. They may differ in the event and in
+# the room the run leaves after it, and in nothing else.
+FAULT_PAIRED_KEYS = ("seed", "vehicles", "headless", "hover_altitudes_m",
+                     "comms")
+
+# The encounter pair may differ in one flag, inside `safety`.
+ENCOUNTER_PAIRED_KEYS = ("seed", "duration_s", "vehicles", "injected_events",
+                         "headless", "hover_altitudes_m", "tracks", "comms")
+
+STATIC = ("uav_1", "uav_2")
+SURVEYORS = ("uav_3", "uav_4")
+
+
+def frozen_params():
+    """The protocol constants, from the one file that defines them.
+
+    Appended to the path, never inserted, and params.py imports nothing, so
+    this works on a bare checkout with no overlay built. Restating 512 and 200
+    here would give the queue two homes and the drain bound would then be
+    derived from whichever one somebody edited last.
+    """
+    root = REPO / "uavx_ws" / "src" / "uavx_comms"
+    if str(root) not in sys.path:
+        sys.path.append(str(root))
+    from uavx_comms import params
+    return params
+
+
+def _event(doc, index=0):
+    events = doc.get("injected_events")
+    if not isinstance(events, list) or len(events) <= index:
+        return {}
+    event = events[index]
+    return event if isinstance(event, dict) else {}
+
+
+def _check_common_geometry(name, doc, ok) -> None:
+    """The stations, altitudes and roles of a common geometry scenario."""
+    comms = doc.get("comms")
+    if not isinstance(comms, dict):
+        fail(f"{name} carries no comms block, so it flies no radio")
+        return
+    stations = comms.get("stations")
+    if not isinstance(stations, dict):
+        fail(f"{name} names no stations")
+        return
+    before = len(failures)
+    for vehicle in sorted(v for v in START if v != "gcs"):
+        got = stations.get(vehicle)
+        want = START[vehicle]
+        if (not isinstance(got, list) or len(got) != 3
+                or any(not isinstance(v, (int, float)) or isinstance(v, bool)
+                       for v in got)):
+            fail(f"{name} station for {vehicle} is {got!r}, not three numbers")
+            continue
+        drift = math.dist([float(v) for v in got], want)
+        if drift > 1e-6:
+            fail(f"{name} stands {vehicle} at {tuple(got)}, {drift:.3f} m "
+                 f"from the frozen {want}")
+    alts = doc.get("hover_altitudes_m")
+    if not isinstance(alts, dict):
+        fail(f"{name} names no hover altitudes")
+    else:
+        for vehicle in sorted(v for v in START if v != "gcs"):
+            if abs(float(alts.get(vehicle, -1)) - START[vehicle][2]) > 1e-6:
+                fail(f"{name} climbs {vehicle} to {alts.get(vehicle)!r} and "
+                     f"the frozen layer is {START[vehicle][2]}")
+    if comms.get("roles") != FROZEN_ROLES:
+        fail(f"{name} starts the swarm as {comms.get('roles')!r}, and the "
+             f"common geometry table says {FROZEN_ROLES!r}")
+    if len(failures) == before:
+        ok(f"{name} stands all four vehicles on the frozen table")
+
+
+def check_fault_scenarios(out, ok) -> None:
+    """relay_kill, link_loss and queue_drain: the fault and its timing."""
+    out("")
+    out("=" * 62)
+    out("relay_kill, link_loss and queue_drain: the fault, and when")
+    out("=" * 62)
+
+    kill = _scenario("relay_kill")
+    loss = _scenario("link_loss")
+    drain = _scenario("queue_drain")
+    if kill is None or loss is None or drain is None:
+        return
+
+    for name, doc in (("relay_kill", kill), ("link_loss", loss),
+                      ("queue_drain", drain)):
+        _check_common_geometry(name, doc, ok)
+
+    # ------------------------------------------------------- the three events
+    event = _event(kill)
+    if event.get("type") != "kill" or event.get("target") != "uav_2":
+        fail(f"relay_kill injects {event.get('type')!r} on "
+             f"{event.get('target')!r}; the scenario is the relay dying")
+    elif float(event.get("at_s", -1)) != KILL_AT_S:
+        fail(f"relay_kill kills at {event.get('at_s')!r} s and the design "
+             f"says {KILL_AT_S:.0f} s")
+    elif float(kill.get("duration_s", 0)) != KILL_DURATION:
+        fail(f"relay_kill runs {kill.get('duration_s')!r} s against the "
+             f"frozen {KILL_DURATION:.0f} s")
+    else:
+        left = KILL_DURATION - KILL_AT_S
+        slot = banded_slot(START["uav_1"], [START["uav_4"]])
+        budget = reconnect_budget(math.dist(START["uav_3"], slot))
+        ok(f"relay_kill kills the relay at {KILL_AT_S:.0f} s and leaves "
+           f"{left:.0f} s, which is {left / budget:.1f} times the derived "
+           f"{budget:.1f} s budget")
+
+    event = _event(loss)
+    if event.get("type") != "comms_blackout" or event.get("target") != "uav_2":
+        fail(f"link_loss injects {event.get('type')!r} on "
+             f"{event.get('target')!r}; the scenario is the relay going quiet "
+             f"while it keeps flying")
+    elif float(event.get("at_s", -1)) != BLACKOUT_AT_S:
+        fail(f"link_loss gates the radio at {event.get('at_s')!r} s and the "
+             f"design says {BLACKOUT_AT_S:.0f} s")
+    elif float(event.get("restore_at_s", -1)) != BLACKOUT_RESTORE_S:
+        fail(f"link_loss restores at {event.get('restore_at_s')!r} s and the "
+             f"design says {BLACKOUT_RESTORE_S:.0f} s. A vehicle that never "
+             f"comes back is relay_kill with extra steps")
+    elif float(loss.get("duration_s", 0)) != LINK_LOSS_DURATION:
+        fail(f"link_loss runs {loss.get('duration_s')!r} s against the frozen "
+             f"{LINK_LOSS_DURATION:.0f} s")
+    else:
+        after = LINK_LOSS_DURATION - BLACKOUT_RESTORE_S
+        ok(f"link_loss gates the radio for "
+           f"{BLACKOUT_RESTORE_S - BLACKOUT_AT_S:.0f} s and leaves {after:.0f} s "
+           f"for the handback, which is the only thing this scenario tests "
+           f"that relay_kill does not")
+
+    # ----------------------------------------------- one fault, told twice
+    for key in FAULT_PAIRED_KEYS:
+        if kill.get(key) != loss.get(key):
+            fail(f"relay_kill and link_loss disagree on {key}. They differ in "
+                 f"the event and in the room left after it, and a pair that "
+                 f"differs in a third thing compares two runs rather than two "
+                 f"faults")
+    if not failures:
+        ok("relay_kill and link_loss share their seed, vehicles, stations, "
+           "roles and flags")
+
+    # -------------------------------------------------- the 45 second hold
+    event = _event(drain)
+    outage = float(event.get("restore_at_s", 0)) - float(event.get("at_s", -1))
+    note("queue_drain:outage_s", outage, "s")
+    if event.get("type") != "comms_blackout" or event.get("target") != "uav_2":
+        fail(f"queue_drain injects {event.get('type')!r} on "
+             f"{event.get('target')!r}")
+    elif float(event.get("at_s", -1)) != DRAIN_AT_S:
+        fail(f"queue_drain gates the radio at {event.get('at_s')!r} s and the "
+             f"gate asserts outage_start_s == {DRAIN_AT_S:.0f}")
+    elif float(event.get("restore_at_s", -1)) != DRAIN_RESTORE_S:
+        fail(f"queue_drain restores at {event.get('restore_at_s')!r} s and "
+             f"the gate asserts outage_end_s == {DRAIN_RESTORE_S:.0f}")
+    elif float(drain.get("duration_s", 0)) != DRAIN_DURATION:
+        fail(f"queue_drain runs {drain.get('duration_s')!r} s against the "
+             f"frozen {DRAIN_DURATION:.0f} s")
+    else:
+        ok(f"queue_drain holds the route down for {outage:.0f} s, which is "
+           f"the depth the queue is sized for")
+
+    if (drain.get("comms") or {}).get("elections_enabled") is not False:
+        fail("queue_drain leaves elections on. An election puts a relay in "
+             "the air inside the reconnect budget and the queue never reaches "
+             "the depth this scenario exists to reach")
+    elif (kill.get("comms") or {}).get("elections_enabled") is not True:
+        fail("relay_kill has elections off, so nothing would replace the relay")
+    else:
+        ok("queue_drain is the only one of the three with elections off")
+
+    # ------------------------------------------ the arithmetic off that hold
+    params = frozen_params()
+    generated = outage * params.APP_PACKET_RATE_HZ * DRAIN_ORIGINS
+    note("queue_drain:generated", generated, "packets")
+    drain_s = note("queue_drain:drain_s",
+                   generated / params.FORWARD_RATE_PPS, "s")
+    out(f"    {outage:.0f} s x {params.APP_PACKET_RATE_HZ:.0f} Hz x "
+        f"{DRAIN_ORIGINS} origins = {generated:.0f} packets")
+    out(f"    {generated:.0f} at {params.FORWARD_RATE_PPS:.0f} per second = "
+        f"{drain_s:.2f} s")
+    if generated > params.QUEUE_CAPACITY:
+        fail(f"{generated:.0f} packets overflow the {params.QUEUE_CAPACITY} "
+             f"the queue holds, so the scenario would evict and the gate "
+             f"asserts nothing was evicted")
+    elif abs(drain_s - DRAIN_BOUND_S) > 1e-9:
+        fail(f"the drain works out at {drain_s:.3f} s and the gate asserts "
+             f"{DRAIN_BOUND_S}. One of the two was derived and the other was "
+             f"typed")
+    else:
+        headroom = params.QUEUE_CAPACITY - generated
+        ok(f"{generated:.0f} packets buffered, {headroom:.0f} short of the "
+           f"{params.QUEUE_CAPACITY} capacity, drained in {drain_s:.2f} s")
+
+
+def check_encounter_files(out, ok) -> None:
+    """encounter and encounter_noyield: the tracks, and the one flag."""
+    out("")
+    out("=" * 62)
+    out("encounter and encounter_noyield: the tracks, and the one flag")
+    out("=" * 62)
+
+    run = _scenario("encounter")
+    control = _scenario("encounter_noyield")
+    if run is None or control is None:
+        return
+
+    want = {"uav_3": ENCOUNTER_A, "uav_4": ENCOUNTER_B}
+    for name, doc in (("encounter", run), ("encounter_noyield", control)):
+        tracks = doc.get("tracks")
+        if not isinstance(tracks, dict):
+            fail(f"{name} names no tracks, so nothing says where the two "
+                 f"vehicles fly")
+            continue
+        before = len(failures)
+        for vehicle, (start, end) in sorted(want.items()):
+            line = tracks.get(vehicle)
+            if not isinstance(line, dict):
+                fail(f"{name} gives {vehicle} no track")
+                continue
+            for key, frozen in (("start_enu", start), ("end_enu", end)):
+                got = line.get(key)
+                if (not isinstance(got, list) or len(got) != 3
+                        or any(not isinstance(v, (int, float))
+                               or isinstance(v, bool) for v in got)):
+                    fail(f"{name} {vehicle} {key} is {got!r}, not three "
+                         f"numbers")
+                    continue
+                drift = math.dist([float(v) for v in got], frozen)
+                if drift > 1e-6:
+                    fail(f"{name} flies {vehicle} {key} to {tuple(got)}, "
+                         f"{drift:.3f} m from the frozen {frozen}")
+            if float(line.get("start_s", -1)) != ENCOUNTER_START_S:
+                fail(f"{name} starts {vehicle} at {line.get('start_s')!r} s. "
+                     f"Both start together or one of them arrives first and "
+                     f"the conflict is not the one the design describes")
+            if float(line.get("speed_mps", -1)) != CRUISE_SPEED:
+                fail(f"{name} flies {vehicle} at {line.get('speed_mps')!r} m/s "
+                     f"against the frozen cruise speed of {CRUISE_SPEED:.0f}")
+        alts = doc.get("hover_altitudes_m") or {}
+        for vehicle in sorted(want):
+            if abs(float(alts.get(vehicle, -1)) - ENCOUNTER_ALT) > 1e-6:
+                fail(f"{name} puts {vehicle} at {alts.get(vehicle)!r} m. Both "
+                     f"vehicles are commanded to {ENCOUNTER_ALT:.0f} m on "
+                     f"purpose, so the altitude layers cannot save them and "
+                     f"the yield rule has to act")
+        if float(doc.get("duration_s", 0)) != ENCOUNTER_DURATION:
+            fail(f"{name} runs {doc.get('duration_s')!r} s against the frozen "
+                 f"{ENCOUNTER_DURATION:.0f} s")
+        if len(failures) == before:
+            ok(f"{name} flies the two frozen paths at {CRUISE_SPEED:.0f} m/s "
+               f"from t = {ENCOUNTER_START_S:.0f} s")
+
+    for key in ENCOUNTER_PAIRED_KEYS:
+        if run.get(key) != control.get(key):
+            fail(f"the encounter pair disagree on {key}. A control that "
+                 f"differs in two things measures neither of them")
+    on = (run.get("safety") or {}).get("yield_enabled")
+    off = (control.get("safety") or {}).get("yield_enabled")
+    if on is not True or off is not False:
+        fail(f"yield_enabled is {on!r} in encounter and {off!r} in "
+             f"encounter_noyield; the control is the same scenario with the "
+             f"rule off and nothing else")
+    elif not failures:
+        ok("the pair differ in safety.yield_enabled and in nothing else")
+
+
+def check_integrated_file(out, ok) -> None:
+    """mission_integrated: the box, the lanes and who flies them."""
+    out("")
+    out("=" * 62)
+    out("mission_integrated: the box, the split and the kill")
+    out("=" * 62)
+
+    doc = _scenario("mission_integrated")
+    if doc is None:
+        return
+
+    survey = doc.get("survey")
+    if not isinstance(survey, dict):
+        fail("mission_integrated carries no survey block, so the run that the "
+             "proposal is built on surveys nothing")
+        return
+
+    before = len(failures)
+    for key, want in (("origin_x", BOX_X0), ("origin_y", BOX_Y0),
+                      ("width_m", BOX_X1 - BOX_X0),
+                      ("height_m", BOX_Y1 - BOX_Y0),
+                      ("cell_m", CELL), ("footprint_m", SENSOR_R),
+                      ("cruise_speed_mps", CRUISE_SPEED),
+                      ("survey_speed_mps", SURVEY_SPEED),
+                      ("start_s", T_SURVEY)):
+        got = survey.get(key)
+        if got is None or abs(float(got) - want) > 1e-9:
+            fail(f"mission_integrated survey.{key} is {got!r} and the design "
+                 f"says {want}")
+    if len(failures) == before:
+        cells = int((BOX_X1 - BOX_X0) / CELL) * int((BOX_Y1 - BOX_Y0) / CELL)
+        ok(f"the box is {BOX_X1 - BOX_X0:.0f} m by {BOX_Y1 - BOX_Y0:.0f} m at "
+           f"({BOX_X0:.0f}, {BOX_Y0:.0f}), {cells} cells of {CELL:.0f} m")
+
+    flyers = survey.get("vehicles")
+    if list(flyers or []) != list(SURVEYORS):
+        fail(f"mission_integrated has {flyers!r} flying the box and the design "
+             f"says {list(SURVEYORS)}")
+    elif survey.get("mirrored") is not True:
+        fail("mission_integrated does not fly the two strips mirrored. "
+             "Mirroring is what keeps uav_3 nearer the attachment node by at "
+             "least 13.0 m for the whole survey instead of by the 0.8 m that "
+             "separates the two station-keeping candidates in relay_kill")
+    else:
+        ok(f"{' and '.join(SURVEYORS)} fly the box mirrored, "
+           f"{' and '.join(STATIC)} hold the chain up")
+
+    comms = doc.get("comms")
+    stations = (comms or {}).get("stations")
+    if not isinstance(stations, dict):
+        fail("mission_integrated names no stations")
+    else:
+        if sorted(stations) != sorted(STATIC):
+            fail(f"mission_integrated gives stations to {sorted(stations)} and "
+                 f"only {list(STATIC)} hold one. A surveyor with a station has "
+                 f"two places to be")
+        for vehicle in sorted(set(stations) & set(START)):
+            got = stations.get(vehicle)
+            if (isinstance(got, list) and len(got) == 3
+                    and math.dist([float(v) for v in got],
+                                  START[vehicle]) > 1e-6):
+                fail(f"mission_integrated stands {vehicle} off the frozen "
+                     f"table at {tuple(got)}")
+    if (comms or {}).get("roles") != FROZEN_ROLES:
+        fail(f"mission_integrated starts the swarm as "
+             f"{(comms or {}).get('roles')!r} against {FROZEN_ROLES!r}")
+
+    alts = doc.get("hover_altitudes_m") or {}
+    for vehicle in sorted(SURVEYORS):
+        if abs(float(alts.get(vehicle, -1)) - SURVEY_ALT[vehicle]) > 1e-6:
+            fail(f"mission_integrated surveys {vehicle} at "
+                 f"{alts.get(vehicle)!r} m and the design says "
+                 f"{SURVEY_ALT[vehicle]}")
+
+    event = _event(doc)
+    if event.get("type") != "kill" or event.get("target") != "uav_2":
+        fail(f"mission_integrated injects {event.get('type')!r} on "
+             f"{event.get('target')!r}")
+    elif float(event.get("at_s", -1)) != T_KILL:
+        fail(f"mission_integrated kills at {event.get('at_s')!r} s and the "
+             f"trajectory walk above puts the surveyors 58% through their "
+             f"strips at {T_KILL:.0f} s")
+    elif float(doc.get("duration_s", 0)) != MISSION_DURATION:
+        fail(f"mission_integrated runs {doc.get('duration_s')!r} s against "
+             f"the frozen {MISSION_DURATION:.0f} s")
+    else:
+        ok(f"the relay dies at {T_KILL:.0f} s of a {MISSION_DURATION:.0f} s "
+           f"run, with work unfinished on both sides of the failure")
 
 
 def frange(a: float, b: float, step: float):
