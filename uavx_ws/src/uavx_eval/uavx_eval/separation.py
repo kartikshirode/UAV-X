@@ -23,6 +23,22 @@ from __future__ import annotations
 import math
 
 
+# Chunk 4.2. Two airframes at this range have touched. The PX4 iris model is
+# about 0.47 m across its rotors, so a metre between centres is roughly twice
+# the extent of one aircraft and there is no arrangement of two of them that
+# fits inside it.
+#
+# What this number cannot do is catch a pass-through. Ground truth arrives at
+# 10 Hz on this stack and two vehicles closing at 10 m/s each cover 2 m
+# between frames, so a crossing that happens between two samples leaves no
+# frame under the threshold. That is a limit of the sampling rate rather than
+# of the threshold, it is why the separation floor is 10 m and not 1 m, and it
+# is why `separation_violations` is the number the safety claim rests on.
+# `collision_contacts` is the stronger statement of the two and the weaker
+# instrument.
+CONTACT_M = 1.0
+
+
 class SeparationError(ValueError):
     """The monitor cannot report on what it was given."""
 
@@ -68,9 +84,11 @@ class SeparationMonitor:
         self.min_separation_m = float(min_separation_m)
         self.samples = 0
         self.violations = 0
+        self.contacts = 0
         self.closest = None
         self.closest_pair = None
         self.first_violation_s = None
+        self.first_contact_s = None
 
     def offer(self, sim_time_s, poses) -> None:
         """Take one sampled frame of ground-truth positions."""
@@ -86,6 +104,10 @@ class SeparationMonitor:
             self.violations += 1
             if self.first_violation_s is None:
                 self.first_violation_s = float(sim_time_s)
+        if distance <= CONTACT_M:
+            self.contacts += 1
+            if self.first_contact_s is None:
+                self.first_contact_s = float(sim_time_s)
 
     def report(self) -> dict:
         """The fields the run record carries for safety.
@@ -97,10 +119,14 @@ class SeparationMonitor:
         out = {
             "contact_monitor_samples": self.samples,
             "separation_violations": self.violations,
+            "collision_contacts": self.contacts,
+            "contact_distance_m": CONTACT_M,
         }
         if self.closest is not None:
             out["min_pairwise_separation_m"] = self.closest
             out["min_pairwise_separation_pair"] = list(self.closest_pair)
         if self.first_violation_s is not None:
             out["first_separation_violation_s"] = self.first_violation_s
+        if self.first_contact_s is not None:
+            out["first_collision_contact_s"] = self.first_contact_s
         return out
