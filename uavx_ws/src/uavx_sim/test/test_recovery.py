@@ -29,9 +29,9 @@ Runs on a clean checkout with nothing built.
 import pytest
 
 from uavx_sim.recovery import (RecoveryError, destroyed_by, fault_at,
-                               lost_route, outage_window, ratio_after,
-                               recovery_block, reconnect_s, relay_slot,
-                               safety_from_payload)
+                               lost_route, outage_block, outage_window,
+                               ratio_after, recovery_block, reconnect_s,
+                               relay_slot, safety_from_payload)
 
 VEHICLES = tuple(f"uav_{n}" for n in range(1, 5))
 ANCHOR, RELAY, NEAR, FAR = VEHICLES
@@ -87,9 +87,18 @@ def routers(**overrides):
     return out
 
 
-def gcs(delivered):
+def gcs(delivered, created=None):
+    """The destination's file, in the node's own clock.
+
+    `created` is its copy of each creation stamp, which is what scopes the
+    delivered set to the run. Unset it stands at the delivery time: a packet
+    was created no later than it arrived.
+    """
+    created = created or {}
     return {"node": "gcs", "duplicated": 0,
-            "ledger": [{"id": i, "created_at": 0.0, "delivered_at": EPOCH + at}
+            "ledger": [{"id": i,
+                        "created_at": EPOCH + created.get(i, at),
+                        "delivered_at": EPOCH + at}
                        for i, at in sorted(delivered.items())]}
 
 
@@ -313,3 +322,27 @@ def test_two_vehicles_claiming_the_role_is_refused():
     with pytest.raises(RecoveryError) as caught:
         block(role_ledgers=[role(NEAR, moved=True), role(FAR, moved=True)])
     assert "two vehicles" in str(caught.value)
+
+
+# ----------------------------------------------------------- the outage block
+def test_the_block_is_measured_over_the_window_the_run_produced():
+    delivered = {ident(ANCHOR, 1): 200.4, ident(RELAY, 1): 100.4,
+                 ident(NEAR, 1): 200.4, ident(FAR, 1): 200.4}
+    got = outage_block(routers(), gcs(delivered), KILL_AT, EPOCH)
+    assert got["outage_start_s"] == KILL_AT
+    assert got["outage_end_s"] == pytest.approx(RETURNED[FAR])
+    assert got["generated"] == 4
+    assert got["missing_ids"] == []
+
+
+def test_what_the_dead_relay_still_held_is_excused_only_when_it_is_named():
+    held = {RELAY: {"unacknowledged_ids": [ident(RELAY, 1)]}}
+    delivered = {ident(ANCHOR, 1): 200.4, ident(NEAR, 1): 200.4,
+                 ident(FAR, 1): 200.4}
+    without = outage_block(routers(**held), gcs(delivered), KILL_AT, EPOCH)
+    assert without["missing_ids"] == [ident(RELAY, 1)]
+
+    with_it = outage_block(routers(**held), gcs(delivered), KILL_AT, EPOCH,
+                           destroyed=(RELAY,))
+    assert with_it["missing_ids"] == []
+    assert with_it["lost_with_vehicle"] == {RELAY: [ident(RELAY, 1)]}
