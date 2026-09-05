@@ -1,0 +1,17 @@
+{
+  "kind": "recording-rehearsal",
+  "result": "pass",
+  "method": "headless gzserver capture via run_scenario.sh --record",
+  "clip": "submission/dryrun-recording.mp4",
+  "clip_sha256": "9cf8ca43b9dd2f6f3565cf711a49681bb502f63041676af8505a90621156e4c4",
+  "duration_s": 60.08,
+  "run_id": "rehearsal_relay_required_20260905T114516Z",
+  "run_record": "submission/dryrun-recording-run.jsonl",
+  "graph_snapshot": "submission/dryrun-recording-graph.json",
+  "graph_snapshot_sha256": "80490aec45f72c67f91489a9127a1dae464717fd42f5c8d4a8dadc7d98d62861",
+  "overlay_text": "rehearsal_relay_required_20260905T114516Z",
+  "scenario": "scenarios/relay_required.yaml",
+  "source_tree_sha256": "aaf710d5d04aaf246269b11adf34e59e6063f221703b0602a530187f5d3f7c61",
+  "done": "2026-09-05",
+  "ended": "2026-09-05T11:51:46Z"
+}

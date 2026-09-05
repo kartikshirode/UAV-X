@@ -1,0 +1,18 @@
+{
+  "kind": "rebuild-rehearsal",
+  "result": "pass",
+  "target": "/tmp/uavx-rehearse-install",
+  "started": "2026-09-05T11:41:52Z",
+  "done": "2026-09-05",
+  "ended": "2026-09-05T11:45:15Z",
+  "source_tree_sha256": "aaf710d5d04aaf246269b11adf34e59e6063f221703b0602a530187f5d3f7c61",
+  "transcript": "submission/dryrun-install-transcript.log",
+  "transcript_sha256": "149a50b15d2d275b9508ce8a3cf034edfa34037b591ce09efd84ff929553da7b",
+  "steps_run": [
+    "verify.sh, stack matches versions.lock",
+    "colcon build into a fresh prefix",
+    "the built overlay sources and every executable is where ros2 run looks",
+    "colcon test in the fresh prefix",
+    "smoke run, four vehicles airborne"
+  ]
+}
