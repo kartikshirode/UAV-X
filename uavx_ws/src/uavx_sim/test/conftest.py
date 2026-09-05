@@ -27,3 +27,15 @@ REPO_SCRIPTS = PACKAGE_ROOT.parent.parent.parent / "scripts"
 
 if REPO_SCRIPTS.is_dir() and str(REPO_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(REPO_SCRIPTS))
+
+# Chunk 3.4. uavx_sim.comms imports the ground station's arithmetic and the
+# frozen protocol constants rather than restating either, because a delivery
+# ratio computed twice is two answers to the question the communication row
+# of the rubric is scored on. Both of those modules are pure, so the same
+# source tree fallback applies to them.
+SRC = PACKAGE_ROOT.parent
+
+for sibling in ("uavx_comms", "uavx_gcs"):
+    root = SRC / sibling
+    if root.is_dir() and str(root) not in sys.path:
+        sys.path.insert(0, str(root))
