@@ -33,6 +33,7 @@ refused before anything is launched.
 from __future__ import annotations
 
 import math
+import numbers
 from typing import Optional, Sequence, Tuple
 
 # The layer altitudes are 10 m apart and PX4 holds a setpoint to well inside
@@ -46,7 +47,22 @@ class StationError(ValueError):
 
 
 def _finite(value) -> bool:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    """Whether this is a usable coordinate, whatever width it arrived in.
+
+    `numbers.Real` rather than `(int, float)`, and chunk 4.2 is what it cost
+    to find out why. `RoleAssignment.slot` is a float32[3], rclpy hands a
+    subscriber a numpy array of float32, and numpy's float32 is not a Python
+    float. Every component of a perfectly good relay slot failed this test,
+    `station_of` read three unusable numbers as no station at all, and the
+    mission executor treated a command to fly 195 m as "as you were". The
+    vehicle sat still for the whole run, no exception was raised and nothing
+    was logged. numpy registers its scalars as numbers.Real, and so does
+    anything else that is a real number without being a float.
+
+    bool stays refused. True is an int and an int is Real, and a station of
+    (True, True, True) is somebody passing flags where a position goes.
+    """
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
         return False
     return math.isfinite(float(value))
 

@@ -201,6 +201,7 @@ class MissionNode(Node):
         self.slot_target = None
         self.slot_commands = 0
         self.slot_errors = 0
+        self.slot_messages = 0
 
         self.sequence = 0
         self.positions_seen = 0
@@ -298,7 +299,16 @@ class MissionNode(Node):
             self.slot_errors += 1
             self.get_logger().error(f"unusable slot command: {exc}")
             return
+        self.slot_messages += 1
         if target == self.slot_target:
+            if self.slot_messages == 1:
+                # The first one, whatever it says. Without this the node is
+                # silent in exactly the case that is hardest to tell from a
+                # topic nobody is publishing on, which is what chunk 4.2 spent
+                # a 300 s run finding out.
+                self.get_logger().info(
+                    f"{self.vehicle_id} is hearing its role manager, which "
+                    f"has asked for nothing so far")
             return
 
         self.slot_target = target

@@ -12,6 +12,7 @@ Runs on a clean checkout with nothing built.
 """
 
 import math
+from fractions import Fraction
 
 import pytest
 
@@ -110,3 +111,33 @@ def test_an_unset_station_ignores_the_altitude_entirely():
 def test_a_station_with_no_altitude_to_check_against_is_refused():
     with pytest.raises(StationError, match="nothing to be checked against"):
         station_of(list(FAR), altitude_m=math.nan)
+
+
+# ------------------------------------- a coordinate is a real number, not a float
+def test_a_real_number_that_is_not_a_float_is_still_a_coordinate():
+    """Chunk 4.2, and it cost a whole run to find.
+
+    `RoleAssignment.slot` is a float32[3] and rclpy hands a subscriber a
+    numpy array of float32, which is not a Python float. Every component of a
+    perfectly good relay slot was read as unusable, three unusable numbers
+    are "no station", and the mission executor treated a command to fly 195 m
+    as "as you were". Nothing raised and nothing was logged. Fraction stands
+    in for numpy here so the test needs no dependency.
+    """
+    got = station_of([Fraction(475), Fraction(-75), Fraction(60)],
+                     altitude_m=60.0)
+    assert got == FAR
+
+
+def test_the_message_type_the_role_manager_actually_sends():
+    numpy = pytest.importorskip("numpy")
+    got = station_of(list(numpy.array(FAR, dtype=numpy.float32)),
+                     altitude_m=60.0)
+    assert got == pytest.approx(FAR)
+    assert all(isinstance(v, float) for v in got)
+
+
+def test_flags_are_still_not_a_position():
+    # bool is an int and an int is a real number, so the guard against it has
+    # to be explicit.
+    assert station_of([True, True, True]) is None
