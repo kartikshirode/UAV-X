@@ -187,3 +187,46 @@ def test_headless_that_is_not_exactly_true_is_rejected(tmp_path, headless):
     with pytest.raises(ScenarioError) as caught:
         load(path)
     assert "headless" in str(caught.value)
+
+
+# --------------------------------------------------------------- the blackout
+def blackout(**overrides):
+    row = {"type": "comms_blackout", "target": "uav_2", "at_s": 30,
+           "restore_at_s": 45}
+    row.update(overrides)
+    return row
+
+
+def with_event(tmp_path, event):
+    return broken(tmp_path, lambda doc: doc.__setitem__("injected_events",
+                                                        [event]))
+
+
+def test_a_blackout_that_ends_inside_the_run_is_accepted(tmp_path):
+    scenario = load(with_event(tmp_path, blackout()))
+    event = scenario.injected_events[0]
+    assert event.type == "comms_blackout"
+    assert event.raw["restore_at_s"] == 45
+
+
+def test_a_blackout_that_never_ends_is_rejected(tmp_path):
+    # A gate nothing lifts and a gate that lifts itself are different faults,
+    # and the record has to say which this run was.
+    event = blackout()
+    del event["restore_at_s"]
+    with pytest.raises(ScenarioError, match="never ends"):
+        load(with_event(tmp_path, event))
+
+
+@pytest.mark.parametrize("restore", [30, 29, 60, 120, "later", None])
+def test_a_restore_outside_the_outage_is_rejected(tmp_path, restore):
+    with pytest.raises(ScenarioError):
+        load(with_event(tmp_path, blackout(restore_at_s=restore)))
+
+
+def test_a_kill_cannot_be_restored(tmp_path):
+    # A vehicle destroyed and then returned is not a fault this design models
+    # and not one the organisers name.
+    with pytest.raises(ScenarioError, match="Only a comms_blackout ends"):
+        load(with_event(tmp_path, {"type": "kill", "target": "uav_2",
+                                   "at_s": 30, "restore_at_s": 45}))

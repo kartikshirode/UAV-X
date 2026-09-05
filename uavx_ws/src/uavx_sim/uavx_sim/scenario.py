@@ -194,6 +194,28 @@ def _from_mapping(doc: dict, stem: str, where: str) -> Scenario:
                 f"{where}: {at} at_s {at_s!r} is outside [0, {duration!r}), so "
                 f"the event either never fires or fires after the run has ended")
 
+        # Chunk 4.3. Only a blackout comes back, and it says when. A kill
+        # carrying a restore time would be a scenario asking for a vehicle to
+        # be destroyed and then returned, which is not a fault this design
+        # models and not one the organisers name.
+        restore = event.get("restore_at_s")
+        if restore is not None and event_type != "comms_blackout":
+            raise ScenarioError(
+                f"{where}: {at} is a {event_type} with a restore_at_s. Only a "
+                f"comms_blackout ends")
+        if event_type == "comms_blackout":
+            if not _finite_number(restore):
+                raise ScenarioError(
+                    f"{where}: {at} has restore_at_s {restore!r}. A blackout "
+                    f"that never ends is a different fault from one that "
+                    f"does, and the run record has to say which this was")
+            if restore <= at_s or restore >= duration:
+                raise ScenarioError(
+                    f"{where}: {at} is gated at {at_s} and restored at "
+                    f"{restore}, which is not inside ({at_s}, {duration}). "
+                    f"The handback needs the radio back with room left to "
+                    f"give the vehicle back in")
+
         events.append(Event(type=event_type, target=target, at_s=at_s,
                             raw=MappingProxyType(dict(event))))
 

@@ -17,6 +17,9 @@ What is decided here:
     role_manager_command one vehicle's role executive, for a run with an
                          election in it
     link_layer_command   the radio, with the model map the launcher wrote
+    blackout_hold_s      how long a gated radio stays gated, as a duration
+    gate_radio_command   the parameter set that injects a blackout
+    gated_radios_command the parameter get that observes one landed
     gcs_command          the ground station
     delivery_from_ledgers the five delivery fields, from the files the nodes
                          wrote, refused if they contradict each other
@@ -73,6 +76,15 @@ ROLE_LEDGER_KEYS = ("node", "moved", "released", "returned_to_station")
 DELIVERY_KEYS = ("delivery_ratio", "delivery_ratio_by_node",
                  "delivered_hops_by_node", "delivered_edges_by_node",
                  "app_packets_sent_by_node", "app_packets_delivered_by_node")
+
+# The radio's node name. seam_manifests.json matches /link_layer by exact
+# name, and this is the other place that name is written: the runner injects a
+# blackout by setting a parameter on it.
+LINK_LAYER_NODE = "/link_layer"
+
+# The two events a scenario can inject that this runner carries out.
+KILL = "kill"
+COMMS_BLACKOUT = "comms_blackout"
 
 # A ratio is delivered over generated and both come from counting the same
 # identities, so the two ways of arriving at it agree exactly or one of them
@@ -363,8 +375,71 @@ def role_manager_command(vehicle_id: str, spawn_row, spec: CommsSpec,
             + ros_args(parameters, namespace=vehicle_id))
 
 
+def blackout_hold_s(raw: Mapping) -> float:
+    """How long a radio gated by this scenario stays gated.
+
+    A duration and not a moment. The radio counts in simulated seconds since
+    the simulator came up and the scenario counts from its own zero, and the
+    difference between the two is the bring-up, which nothing knows when the
+    radio is launched. A duration means the same thing in both clocks.
+
+    Zero when the scenario gates nothing, which is also what a scenario that
+    starts in a blackout and never lifts it would want.
+    """
+    events = raw.get("injected_events") if isinstance(raw, Mapping) else None
+    holds = []
+    for event in events or ():
+        if not isinstance(event, Mapping) or event.get("type") != COMMS_BLACKOUT:
+            continue
+        at = event.get("at_s")
+        restore = event.get("restore_at_s")
+        if not _finite(at) or not _finite(restore):
+            raise CommsError(
+                f"a comms_blackout runs from {at!r} to {restore!r}, and both "
+                f"have to be times for the radio to know how long to hold")
+        holds.append(float(restore) - float(at))
+    if not holds:
+        return 0.0
+    if len(set(holds)) > 1:
+        raise CommsError(
+            f"this scenario gates radios for {sorted(set(holds))} seconds. "
+            f"One hold is passed to the radio, so two would mean one of the "
+            f"blackouts ends at a time nothing chose")
+    return holds[0]
+
+
+def gate_radio_command(vehicles: Sequence[str]) -> list:
+    """`ros2 param set` on the radio, gating exactly these vehicles.
+
+    The parameter service, which is the one interface a swarm node has that
+    is not the seam, and which seam_manifests.json allows on every node
+    because rclpy gives every node one. The alternative was a topic the
+    runner publishes on, and a runner that can publish to a node is a runner
+    that can inject anything.
+
+    An empty list lifts the gate. It is never used by a scenario, because the
+    radio lifts its own gate after the frozen hold, and it is the honest
+    spelling of the parameter's other value.
+    """
+    inside = ", ".join(f"'{str(v)}'" for v in vehicles)
+    return ["ros2", "param", "set", LINK_LAYER_NODE, "radio_off",
+            "[" + inside + "]"]
+
+
+def gated_radios_command() -> list:
+    """`ros2 param get` on the radio: which vehicles it says are gated.
+
+    The other half of injecting a fault, and the half that matters. The
+    injector's contract is that the effect is observed on the thing it was
+    applied to rather than inferred from the request having been sent, and
+    for a blackout the thing is the radio.
+    """
+    return ["ros2", "param", "get", LINK_LAYER_NODE, "radio_off",
+            "--hide-type"]
+
+
 def link_layer_command(vehicles: Sequence[str], model_entries: Sequence[str],
-                       seed: int, ledger_path) -> list:
+                       seed: int, ledger_path, hold_s: float = 0.0) -> list:
     """`ros2 run uavx_comms link_layer`, the one radio for the whole swarm.
 
     No namespace. The graph names it `/link_layer`, which is the exact name
@@ -383,11 +458,16 @@ def link_layer_command(vehicles: Sequence[str], model_entries: Sequence[str],
         raise CommsError(
             f"the seed is {seed!r} and must be an integer. The fade band is "
             f"random and a run nobody can replay is not evidence")
+    if not _finite(hold_s) or hold_s < 0:
+        raise CommsError(
+            f"the blackout hold is {hold_s!r}. A radio holds a gate for a "
+            f"length of time, or for the rest of the run if that is zero")
     parameters = {
         "use_sim_time": True,
         "vehicles": list(vehicles),
         "model_map": list(model_entries),
         "seed": int(seed),
+        "blackout_hold_s": float(hold_s),
         "ledger_path": str(ledger_path),
     }
     return (["ros2", "run", "uavx_comms", "link_layer"]

@@ -28,8 +28,10 @@ import json
 
 import pytest
 
-from uavx_sim.comms import (CommsError, comms_spec, delivery_from_ledgers,
-                            gcs_command, link_layer_command, read_ledger,
+from uavx_sim.comms import (CommsError, blackout_hold_s, comms_spec,
+                            delivery_from_ledgers, gate_radio_command,
+                            gated_radios_command, gcs_command,
+                            link_layer_command, read_ledger,
                             role_manager_command, role_managers_of,
                             router_command, station_node_command)
 from uavx_sim.work import WorkError
@@ -403,3 +405,80 @@ def test_a_vehicle_flying_a_strip_is_given_no_station_at_all():
 def test_a_station_that_is_not_a_point_is_refused(bad):
     with pytest.raises(CommsError, match="three finite numbers"):
         role_manager_command(FAR, SPAWN, spec(), "/tmp/role.json", station=bad)
+
+
+# --------------------------------------------------------------- the blackout
+def gated(**overrides):
+    row = {"type": "comms_blackout", "target": RELAY, "at_s": 120,
+           "restore_at_s": 240}
+    row.update(overrides)
+    return {"injected_events": [row]}
+
+
+def test_the_hold_is_the_gap_between_the_two_times():
+    assert blackout_hold_s(gated()) == 120.0
+
+
+def test_a_scenario_that_gates_nothing_holds_nothing():
+    assert blackout_hold_s({}) == 0.0
+    assert blackout_hold_s({"injected_events": [
+        {"type": "kill", "target": RELAY, "at_s": 120}]}) == 0.0
+
+
+def test_a_blackout_with_no_end_cannot_produce_a_hold():
+    body = gated()
+    del body["injected_events"][0]["restore_at_s"]
+    with pytest.raises(CommsError, match="how long to hold"):
+        blackout_hold_s(body)
+
+
+def test_two_blackouts_of_different_lengths_are_refused():
+    # One hold is passed to the radio, so two would mean one of them ends at
+    # a time nobody chose.
+    body = gated()
+    body["injected_events"].append({"type": "comms_blackout", "target": NEAR,
+                                    "at_s": 120, "restore_at_s": 300})
+    with pytest.raises(CommsError, match="one of the blackouts"):
+        blackout_hold_s(body)
+
+
+def test_the_radio_is_told_how_long_to_hold_a_gate():
+    command = link_layer_command(VEHICLES, ["iris_0=" + ANCHOR], 24,
+                                 "/tmp/l.json", hold_s=120.0)
+    assert "blackout_hold_s:=120.000000" in command
+
+
+def test_a_run_with_no_blackout_still_says_so():
+    command = link_layer_command(VEHICLES, ["iris_0=" + ANCHOR], 24,
+                                 "/tmp/l.json")
+    assert "blackout_hold_s:=0.000000" in command
+
+
+@pytest.mark.parametrize("bad", [-1.0, float("nan"), None])
+def test_a_hold_that_is_not_a_length_of_time_is_refused(bad):
+    with pytest.raises(CommsError):
+        link_layer_command(VEHICLES, ["iris_0=" + ANCHOR], 24, "/tmp/l.json",
+                           hold_s=bad)
+
+
+def test_the_gate_is_set_on_the_radio_and_on_nothing_else():
+    """The one interface a swarm node has that is not the seam.
+
+    A topic the runner published on would be a runner that can inject
+    anything, and the static pass counts a second vehicle endpoint in a file
+    as a bypass whatever the file does with it.
+    """
+    command = gate_radio_command([RELAY])
+    assert command[:4] == ["ros2", "param", "set", "/link_layer"]
+    assert command[4] == "radio_off"
+    assert command[5] == "['" + RELAY + "']"
+
+
+def test_lifting_the_gate_is_the_empty_list():
+    assert gate_radio_command([])[5] == "[]"
+
+
+def test_observing_a_gate_reads_it_back_off_the_radio():
+    command = gated_radios_command()
+    assert command[:4] == ["ros2", "param", "get", "/link_layer"]
+    assert "--hide-type" in command
