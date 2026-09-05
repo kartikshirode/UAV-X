@@ -1,0 +1,33 @@
+{
+ "absent": [],
+ "deliveries": 92631,
+ "deliveries_by_pair": {
+  "gcs->uav_1": 8910,
+  "uav_1->gcs": 14980,
+  "uav_1->uav_2": 14980,
+  "uav_2->uav_1": 12135,
+  "uav_2->uav_3": 12135,
+  "uav_2->uav_4": 12135,
+  "uav_3->uav_2": 4345,
+  "uav_3->uav_4": 4345,
+  "uav_4->uav_2": 4333,
+  "uav_4->uav_3": 4333
+ },
+ "dropped_no_position": 0,
+ "node": "link_layer",
+ "nodes": [
+  "uav_1",
+  "uav_2",
+  "uav_3",
+  "uav_4",
+  "gcs"
+ ],
+ "radio_delivered": 92631,
+ "radio_draws": 0,
+ "radio_dropped": 86181,
+ "radio_off": [],
+ "seed": 31,
+ "still_pending": 0,
+ "transmissions": 44703,
+ "undecodable": 0
+}
