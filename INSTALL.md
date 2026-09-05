@@ -61,4 +61,24 @@ bash scripts/run_smoke.sh --vehicles 4 --runs-dir "$UAVX_INSTALL_ROOT/runs"
 
 A successful run leaves `latest.jsonl` in the runs directory and no `px4`, `gzserver` or `gzclient` process behind. The Stage 1 evidence scenarios use `scripts/run_scenario.sh`; their exact inputs and acceptance checks are in `stage-1/architecture.md` and `scripts/gate.sh`.
 
+## 6. Reproduce a recorded run
+
+The demo video is a capture of this software running, and this is the command that produces one. It flies a scenario and records it at the same time.
+
+```bash
+bash scripts/run_scenario.sh scenarios/relay_required.yaml \
+  --record /tmp/uavx-demo.mp4 --record-seconds 60 \
+  --overlay-text "$(date -u +demo_%Y%m%dT%H%M%SZ)" \
+  --run-id "$(date -u +demo_%Y%m%dT%H%M%SZ)" \
+  --runs-dir "$UAVX_INSTALL_ROOT/runs"
+```
+
+Three things about it are worth knowing before it is run.
+
+The frames come from a camera sensor inside the world, not from a screen. `gzclient` is never launched: the GUI binary takes this WSL distribution down, and there is no window to record. A recording run loads `worlds/uavx_record.world`, which is the ordinary world with one static camera added, and every other run loads `worlds/uavx_empty.world` so nothing pays for rendering it does not use.
+
+The run id is burned into every frame and the clip's sha256 goes into the run record, so a clip and the run it claims to be of can be checked against each other. `scripts/check_dryruns.py` is what does that checking.
+
+It needs about 700 MB of free space in `/tmp` for a 60 second capture, and the frames are deleted as soon as the clip is encoded. `ffmpeg` and `ffprobe` are installed by `stage-1/setup/06-submission-tools.sh` and confirmed by `verify.sh`.
+
 If setup fails, read [stage-1/setup/README.md](stage-1/setup/README.md). It lists the failures already seen on this machine, including the Gazebo package conflict, the PX4 build command and the XRCE dependency pin.
