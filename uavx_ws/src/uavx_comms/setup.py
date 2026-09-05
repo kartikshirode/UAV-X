@@ -15,11 +15,15 @@ setup(
     zip_safe=True,
     maintainer="kartikshirode",
     maintainer_email="megamindsresearch@gmail.com",
-    description="The UAV-X mesh: link model, routing and relay election, "
-                "as pure logic with no ROS dependency.",
+    description="The UAV-X mesh: the link model, the routing and election "
+                "state machines, and the two nodes that wire them to the "
+                "tx and rx seam.",
     license="MIT",
     tests_require=["pytest"],
     entry_points={
-        "console_scripts": [],
+        "console_scripts": [
+            "router = uavx_comms.router_node:main",
+            "link_layer = uavx_comms.link_layer:main",
+        ],
     },
 )

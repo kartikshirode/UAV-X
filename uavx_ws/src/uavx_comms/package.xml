@@ -8,13 +8,28 @@
     the routing state machine and the relay election are the deliverable
     rather than configuration.
 
-    Chunk 2.3 builds the pure half: functions and state machines a unit test
-    can drive with no ROS graph, no simulator and no wall clock. W3 wraps them
-    in nodes that publish only to their own tx and subscribe only to their own
-    rx, which is why nothing in this package names a topic or a vehicle id.
+    Chunk 2.3 built the pure half: functions and state machines a unit test
+    can drive with no ROS graph, no simulator and no wall clock. Chunk 3.1
+    wrapped them in two nodes. `router` publishes only to its own tx and
+    subscribes only to its own rx, and builds both from its vehicle_id rather
+    than naming either. `link_layer` is the radio, and is the one process here
+    that may read simulator ground truth, because it represents physics rather
+    than a member of the swarm.
+
+    uavx_mission is a dependency for one reason: uavx_mission.frames owns the
+    conversion between the frozen ENU frame and the local NED frame PX4
+    reports in. A second copy of that conversion in this package would be the
+    drift this repository keeps finding, and frames already documents what a
+    home subtracted in the wrong frame looks like, which is a position.
   </description>
   <maintainer email="megamindsresearch@gmail.com">kartikshirode</maintainer>
   <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>uavx_msgs</exec_depend>
+  <exec_depend>uavx_mission</exec_depend>
+  <exec_depend>px4_msgs</exec_depend>
+  <exec_depend>gazebo_msgs</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
