@@ -66,12 +66,21 @@ def router(node, minted, custodied=None, **extra):
     return row
 
 
-def gcs(delivered, duplicated=0, **extra):
+def gcs(delivered, duplicated=0, created=None, **extra):
+    """The destination's file.
+
+    `created` is the destination's own copy of each creation stamp, which is
+    what scopes the delivered set to the run. Unset it stands at the delivery
+    time: a packet was created no later than it arrived, and the tests that
+    care about the difference pass it.
+    """
+    created = created or {}
     row = {
         "node": "gcs",
         "duplicated": duplicated,
         "control_queue_max_delay_s": 0.0,
-        "ledger": [{"id": i, "created_at": 0.0, "delivered_at": at}
+        "ledger": [{"id": i, "created_at": created.get(i, at),
+                    "delivered_at": at}
                    for i, at in sorted(delivered.items())],
     }
     row.update(extra)
@@ -441,3 +450,40 @@ def test_a_destroyed_vehicle_that_did_not_say_what_it_held_is_refused():
         observations([router(RELAY, relay)], gcs({ident(RELAY, 1): 118.4}),
                      120.0, 152.0, destroyed=[RELAY])
     assert "still holding" in str(caught.value)
+
+
+# --------------------------------------------------- the block covers the run
+def test_traffic_minted_before_the_run_is_not_part_of_it():
+    """The radio settles for eight seconds before scenario time zero.
+
+    Those observations are real and the run record's delivery ratio counts
+    them. They are not part of the outage arithmetic, and the schema puts a
+    minimum of zero on every creation time in this block, which is how the
+    first complete relay_kill was refused.
+    """
+    minted = {ident(NEAR, 1): -8.1, ident(NEAR, 2): 61.0}
+    got = observations([router(NEAR, minted)],
+                       gcs({ident(NEAR, 1): -7.9, ident(NEAR, 2): 106.0},
+                           created={ident(NEAR, 1): -8.1,
+                                    ident(NEAR, 2): 61.0}),
+                       OUT_START, OUT_END)
+    assert got["generated_ids"] == [ident(NEAR, 2)]
+    assert got["delivered_ids"] == [ident(NEAR, 2)]
+    assert got["generated_before_run"] == 1
+    assert observations_set_equal(got) is True
+
+
+def test_a_run_with_nothing_before_it_says_so():
+    assert a_run()["generated_before_run"] == 0
+
+
+def test_an_id_nobody_minted_is_still_unexpected():
+    # The delivered side is scoped by the destination's own creation stamp
+    # and not by membership of the generated set. Scoping it by membership
+    # would make this check structurally impossible to fail.
+    got = a_run(gcs_ledger=gcs({ident(NEAR, 1): 106.0, ident(NEAR, 2): 106.0,
+                                ident(NEAR, 3): 106.0, ident(FAR, 1): 106.0,
+                                ident(FAR, 2): 106.0, ident(FAR, 3): 106.0,
+                                ident(ANCHOR, 9): 106.0}))
+    assert got["unexpected_ids"] == [ident(ANCHOR, 9)]
+    assert observations_set_equal(got) is False

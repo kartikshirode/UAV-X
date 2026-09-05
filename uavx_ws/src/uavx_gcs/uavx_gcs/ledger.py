@@ -197,6 +197,37 @@ def delivered_rows(gcs_ledger: Mapping) -> Dict[str, float]:
     return out
 
 
+# Scenario time zero. The comms nodes come up before it, by the settle the
+# runner gives them to find each other's topics, and they mint observations in
+# that window. Those are delivered and the run record's delivery ratio counts
+# them; they are not part of the outage arithmetic, and the schema puts a
+# minimum of zero on every creation time in this block.
+RUN_START_S = 0.0
+
+
+def created_rows(gcs_ledger: Mapping) -> Dict[str, float]:
+    """When each accepted observation says it was made, per the destination.
+
+    The packet carries its own creation stamp, so this is the destination's
+    copy of a time the origin also reported. It is what scopes the delivered
+    set to the run without scoping it to the generated set: an id nobody
+    minted has a creation time too, and it has to stay visible as unexpected
+    rather than disappear for being absent from the other list.
+    """
+    rows = gcs_ledger.get("ledger")
+    if not isinstance(rows, (list, tuple)):
+        return {}
+    out: Dict[str, float] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        identity = row.get("id")
+        when = _number(row.get("created_at"))
+        if isinstance(identity, str) and identity and when is not None:
+            out.setdefault(identity, when)
+    return out
+
+
 def backlog_custodian(router_ledgers: Sequence[Mapping],
                       outage_ids: Iterable[str]) -> Optional[str]:
     """The lowest id member that held observations it did not mint.
@@ -241,6 +272,11 @@ def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
     `destroyed` is the vehicles this run killed. See `_lost_with`: what those
     aircraft were still holding alone went down with them, and the delivered
     set cannot contain data that stopped existing.
+
+    Both sets are scoped to the run. The radio is up before scenario time
+    zero, by the settle the nodes need to find each other, and the traffic in
+    that window belongs to the delivery ratio rather than to the outage
+    arithmetic. See RUN_START_S.
     """
     router_ledgers = list(router_ledgers)
     start, end = _number(outage_start_s), _number(outage_end_s)
@@ -262,8 +298,22 @@ def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
               generated_rows(router_ledgers).items()}
     arrived = {i: when - offset for i, when in
                delivered_rows(gcs_ledger).items()}
+    born = {i: when - offset for i, when in
+            created_rows(gcs_ledger).items()}
 
-    lost = _lost_with(router_ledgers, destroyed, set(arrived))
+    # Scoped to the run, on both sides and by the same rule. See RUN_START_S.
+    # The delivered side is scoped by the destination's own copy of the
+    # creation stamp rather than by membership of the generated set, so an id
+    # nobody minted is still counted as unexpected.
+    before_run = sorted(i for i, when in minted.items() if when < RUN_START_S)
+    minted = {i: when for i, when in minted.items() if when >= RUN_START_S}
+    arrived = {i: when for i, when in arrived.items()
+               if born.get(i, RUN_START_S) >= RUN_START_S}
+
+    lost = {node: [i for i in ids if i in minted]
+            for node, ids in _lost_with(router_ledgers, destroyed,
+                                        set(arrived)).items()}
+    lost = {node: ids for node, ids in lost.items() if ids}
     for ids in lost.values():
         for identity in ids:
             minted.pop(identity, None)
@@ -333,6 +383,10 @@ def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
         # is not a threshold.
         "missing_count": len(missing),
         "unexpected_count": len(unexpected),
+        # What the run started after. Reported rather than silently dropped:
+        # a block that quietly narrowed its own denominator is the shape this
+        # project has spent four weeks refusing.
+        "generated_before_run": len(before_run),
         "ledger": [{"id": i, "created_at_s": round(minted[i], 3),
                     "delivered_at_s": (None if i not in arrived
                                        else round(arrived[i], 3))}
