@@ -1,0 +1,60 @@
+# The control. Chunk 3.5.
+#
+# architecture.md section 6: identical to relay_required.yaml with forwarding
+# disabled, so only direct links deliver. uav_4 is 484.6 m from the ground
+# station, beyond r_max, so its delivery must be exactly 0. Without this run,
+# a relay that worked in a scenario where the direct link also happened to
+# work has shown nothing.
+#
+# Every value below is the same as relay_required.yaml except comms.forwarding,
+# and scripts/check_geometry.py compares the two files field by field so the
+# pair cannot drift apart into two different measurements.
+#
+# check_scenario.py requires this to equal the file stem.
+name: direct_only
+
+# Deliberately the same seed as relay_required. The fade band is random, and
+# a control drawn from a different sequence differs from the measurement in
+# two things rather than one.
+seed: 31
+
+duration_s: 240
+
+vehicles:
+  - uav_1
+  - uav_2
+  - uav_3
+  - uav_4
+
+injected_events: []
+
+headless: true
+
+hover_altitudes_m:
+  uav_1: 30
+  uav_2: 40
+  uav_3: 50
+  uav_4: 60
+
+comms:
+  enabled: true
+
+  # The whole difference. Every router still hears its neighbours, still
+  # floods HELLO and LSA, and still computes the route it would use. It
+  # carries nobody else's observations, so uav_3 and uav_4 have no way home
+  # and uav_1, at 167.7 m, keeps delivering its own.
+  forwarding: false
+
+  elections_enabled: true
+
+  roles:
+    uav_1: gcs_anchor
+    uav_2: relay
+    uav_3: survey
+    uav_4: survey
+
+  stations:
+    uav_1: [165.0, 0.0, 30.0]
+    uav_2: [330.0, 0.0, 40.0]
+    uav_3: [475.0, 75.0, 50.0]
+    uav_4: [475.0, -75.0, 60.0]

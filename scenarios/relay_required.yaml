@@ -1,0 +1,73 @@
+# The scenario the relay claim rests on. Chunk 3.4.
+#
+# architecture.md section 6: common geometry, station-keeping, no survey
+# motion, routing enabled, 240 s, each node sending 5 application packets a
+# second to the ground station. uav_4 is 484.6 m from the GCS, well beyond
+# r_max, so everything it delivers arrived over hops the link model drew.
+#
+# scripts/check_geometry.py holds the stations below against its own copy of
+# the frozen table and recomputes all ten distances from them, so this file
+# is a copy with a witness rather than a second opinion.
+#
+# check_scenario.py requires this to equal the file stem.
+name: relay_required
+
+# The link model's fade band is random and the seed is what makes a run
+# replay. direct_only.yaml carries this same seed on purpose: the two runs
+# are a measurement and its control, and they have to differ in the
+# forwarding flag and in nothing else.
+seed: 31
+
+# Frozen run duration. 240 s at 5 Hz is 1200 application packets per node,
+# and the gate asks for 1080, which is that figure less 10%.
+duration_s: 240
+
+vehicles:
+  - uav_1
+  - uav_2
+  - uav_3
+  - uav_4
+
+# Nothing fails here. relay_kill and link_loss exist for that, and this
+# scenario has to show the mesh working before either of them means anything.
+injected_events: []
+
+headless: true
+
+# The cruise altitude column of the frozen geometry table. The runner climbs
+# to these before scenario time zero and comms.py compares each one against
+# the third component of that vehicle's station, because two spellings of one
+# number drift and the drift here is a vehicle holding station in its
+# neighbour's band.
+hover_altitudes_m:
+  uav_1: 30
+  uav_2: 40
+  uav_3: 50
+  uav_4: 60
+
+comms:
+  enabled: true
+
+  # The one flag that separates this scenario from its control.
+  forwarding: true
+
+  # Elections are on and nothing opens one. No vehicle fails here, so the
+  # roles below are the roles at the end, and a run that reports a role
+  # change has found something worth reading.
+  elections_enabled: true
+
+  roles:
+    uav_1: gcs_anchor
+    uav_2: relay
+    uav_3: survey
+    uav_4: survey
+
+  # The common geometry table of architecture.md section 6, in metres, with
+  # the ground station at the origin. Every vehicle flies here before
+  # scenario time zero and holds. The chain is gcs to uav_1 to uav_2 to both
+  # surveyors, with uav_3 and uav_4 also linked to each other.
+  stations:
+    uav_1: [165.0, 0.0, 30.0]
+    uav_2: [330.0, 0.0, 40.0]
+    uav_3: [475.0, 75.0, 50.0]
+    uav_4: [475.0, -75.0, 60.0]

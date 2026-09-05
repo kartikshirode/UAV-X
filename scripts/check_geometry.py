@@ -32,6 +32,9 @@ import itertools
 import math
 import sys
 from collections import deque
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
 
 # --- radio, mirroring stage-1/architecture.md section 2 ---------------------
 R_FULL = 200.0           # deterministic delivery at or under this
@@ -491,6 +494,7 @@ def run(quiet: bool = False) -> int:
     check_rejected(out, ok, build_integrated())
     check_encounter(out, ok)
     check_survey_baseline(out, ok)
+    check_relay_scenarios(out, ok)
 
     return len(failures)
 
@@ -1029,6 +1033,149 @@ def check_survey_baseline(out, ok) -> None:
     if abs(width * strips - side) > 1e-9:
         fail(f"{strips} strips of {width} m do not tile a {side} m box")
     _ = (x0, y0)
+
+
+# --- the two files chunk 3.4 and 3.5 fly -----------------------------------
+# The scenario name against the starting role in the common geometry table of
+# architecture.md section 6, in the spelling uavx_comms.router_node accepts.
+FROZEN_ROLES = {"uav_1": "gcs_anchor", "uav_2": "relay",
+                "uav_3": "survey", "uav_4": "survey"}
+RELAY_DURATION = 240.0
+APP_PACKET_RATE_HZ = 5.0
+APP_PACKET_FLOOR = 1080          # the gate's threshold: 240 x 5, less 10%
+
+# Everything the pair must agree on. The two scenarios are a measurement and
+# its control, so the only keys allowed to differ are the file name and the
+# one flag being controlled for.
+PAIRED_KEYS = ("seed", "duration_s", "vehicles", "injected_events",
+               "headless", "hover_altitudes_m")
+PAIRED_COMMS_KEYS = ("enabled", "elections_enabled", "roles", "stations")
+
+
+def _scenario(name: str):
+    """One scenario file, or None with a failure already recorded."""
+    try:
+        import yaml
+    except ImportError:
+        fail("pyyaml is not installed, so the relay scenarios cannot be read "
+             "and the stations they fly are compared with nothing")
+        return None
+    path = REPO / "scenarios" / f"{name}.yaml"
+    try:
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except OSError:
+        fail(f"no scenario at {path}. The relay claim is a claim about where "
+             f"four vehicles stand, and there is no file saying where")
+        return None
+    except yaml.YAMLError as exc:
+        fail(f"{path} is not valid YAML: {exc}")
+        return None
+    if not isinstance(doc, dict):
+        fail(f"{path} does not parse to a mapping")
+        return None
+    return doc
+
+
+def check_relay_scenarios(out, ok) -> None:
+    """relay_required and direct_only: the stations, and the one difference.
+
+    Round 4's lesson one level down again. Until this chunk the geometry
+    lived in START above and in the scenario files, and nothing compared the
+    two. A station typed 10 m out would fly, deliver packets and write a
+    record, and the only thing wrong with the run would be that it was not
+    the run architecture.md describes.
+    """
+    out("")
+    out("=" * 62)
+    out("relay_required and direct_only: stations, roles and the one flag")
+    out("=" * 62)
+
+    relay = _scenario("relay_required")
+    direct = _scenario("direct_only")
+    if relay is None or direct is None:
+        return
+
+    for name, doc in (("relay_required", relay), ("direct_only", direct)):
+        comms = doc.get("comms")
+        if not isinstance(comms, dict):
+            fail(f"{name} carries no comms block, so it flies no radio")
+            continue
+        stations = comms.get("stations")
+        if not isinstance(stations, dict):
+            fail(f"{name} names no stations")
+            continue
+        for vehicle in sorted(v for v in START if v != "gcs"):
+            got = stations.get(vehicle)
+            want = START[vehicle]
+            if (not isinstance(got, list) or len(got) != 3
+                    or any(not isinstance(v, (int, float))
+                           or isinstance(v, bool) for v in got)):
+                fail(f"{name} station for {vehicle} is {got!r}, not three numbers")
+                continue
+            drift = math.dist([float(v) for v in got], want)
+            if drift > 1e-6:
+                fail(f"{name} stands {vehicle} at {tuple(got)}, "
+                     f"{drift:.3f} m from the frozen {want}")
+        if len(stations) == 4 and not failures:
+            ok(f"{name} stands all four vehicles on the frozen table")
+
+        alts = doc.get("hover_altitudes_m")
+        if not isinstance(alts, dict):
+            fail(f"{name} names no hover altitudes")
+        else:
+            for vehicle in sorted(v for v in START if v != "gcs"):
+                if abs(float(alts.get(vehicle, -1)) - START[vehicle][2]) > 1e-6:
+                    fail(f"{name} climbs {vehicle} to {alts.get(vehicle)!r} and "
+                         f"the frozen layer is {START[vehicle][2]}")
+
+        roles = comms.get("roles")
+        if roles != FROZEN_ROLES:
+            fail(f"{name} starts the swarm as {roles!r}, and the common "
+                 f"geometry table says {FROZEN_ROLES!r}")
+
+        if float(doc.get("duration_s", 0)) != RELAY_DURATION:
+            fail(f"{name} runs {doc.get('duration_s')!r} s and the gate's "
+                 f"packet threshold is written for {RELAY_DURATION:.0f} s")
+
+    # ------------------------------------------------- the one difference
+    for key in PAIRED_KEYS:
+        if relay.get(key) != direct.get(key):
+            fail(f"the pair disagree on {key}: {relay.get(key)!r} against "
+                 f"{direct.get(key)!r}. A control that differs in two things "
+                 f"measures neither of them")
+    rc, dc = relay.get("comms") or {}, direct.get("comms") or {}
+    for key in PAIRED_COMMS_KEYS:
+        if rc.get(key) != dc.get(key):
+            fail(f"the pair disagree on comms.{key}")
+    if rc.get("forwarding") is not True or dc.get("forwarding") is not False:
+        fail(f"forwarding is {rc.get('forwarding')!r} in relay_required and "
+             f"{dc.get('forwarding')!r} in direct_only; the control is the "
+             f"same scenario with forwarding off and nothing else")
+    elif not failures:
+        ok("the pair differ in comms.forwarding and in nothing else")
+
+    # ------------------------------------------- what the gate can assert
+    expected = RELAY_DURATION * APP_PACKET_RATE_HZ
+    note("relay:app_packets_per_node", expected, "packets")
+    if expected < APP_PACKET_FLOOR:
+        fail(f"{RELAY_DURATION:.0f} s at {APP_PACKET_RATE_HZ:.0f} Hz is "
+             f"{expected:.0f} packets and the gate asks for {APP_PACKET_FLOOR}")
+    else:
+        ok(f"{expected:.0f} application packets per node, gate floor "
+           f"{APP_PACKET_FLOOR}, margin "
+           f"{(expected - APP_PACKET_FLOOR) / expected * 100:.0f}%")
+
+    # The control's whole claim: uav_4 cannot reach the ground station on its
+    # own. Recomputed here rather than quoted, from the same START the matrix
+    # above enumerates.
+    far = math.dist(START["uav_4"], START["gcs"])
+    if far <= R_MAX:
+        fail(f"uav_4 is {far:.1f} m from gcs, inside r_max of {R_MAX:.0f} m, "
+             f"so direct_only would deliver without any relay and the control "
+             f"would prove nothing")
+    else:
+        ok(f"uav_4 to gcs is {far:.1f} m, beyond r_max of {R_MAX:.0f} m, so a "
+           f"delivery of 0 in direct_only is the only honest outcome")
 
 
 def frange(a: float, b: float, step: float):
