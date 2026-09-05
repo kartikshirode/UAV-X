@@ -42,7 +42,7 @@ from px4_msgs.msg import OffboardControlMode, TrajectorySetpoint, VehicleLocalPo
 from rclpy.node import Node
 from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile,
                        QoSReliabilityPolicy)
-from uavx_msgs.msg import SwarmPacket
+from uavx_msgs.msg import RoleAssignment, SwarmPacket
 
 from uavx_mission import frames, station
 from uavx_mission.boustrophedon import plan_path
@@ -190,6 +190,18 @@ class MissionNode(Node):
             VehicleLocalPosition, f"{px4}/out/vehicle_local_position",
             self.on_position, PX4_QOS)
 
+        # Chunk 4.2. Where this vehicle's own role manager says it should be.
+        # A vehicle-local topic in this vehicle's namespace, carrying a role
+        # message rather than a SwarmPacket, so the seam rules allow it: swarm
+        # traffic crosses the radio and this is one process on an aircraft
+        # telling another where the aircraft is going.
+        self.create_subscription(
+            RoleAssignment, f"/{self.vehicle_id}/role_slot",
+            self.on_role_slot, 10)
+        self.slot_target = None
+        self.slot_commands = 0
+        self.slot_errors = 0
+
         self.sequence = 0
         self.positions_seen = 0
         # The last setpoint sent, so the heartbeat timer can keep holding it
@@ -251,6 +263,12 @@ class MissionNode(Node):
         is live.
         """
         self.positions_seen += 1
+        if self.slot_target is not None:
+            # Chunk 4.2. This vehicle has been sent somewhere by its own role
+            # manager, so it is not flying its own work. Advancing the plan
+            # here would fight the command every time a position arrived, and
+            # the vehicle would sit between the two.
+            return
         if self.mission is None:
             # Station-keeping. The setpoint was decided before the vehicle
             # reported anything and does not depend on where it is now, so
@@ -262,6 +280,45 @@ class MissionNode(Node):
             return
         self.last_setpoint = [float(v) for v in
                               frames.frozen_to_px4(target, self.home)]
+
+    def on_role_slot(self, msg: RoleAssignment) -> None:
+        """A point from this vehicle's role manager, or a withdrawal.
+
+        Three NaNs mean "as you were": a surveyor goes back to its strip and a
+        station-keeping vehicle to its station. Anything else is a place to be
+        and it overrides both, because a vehicle holding the relay role is not
+        doing its own work any more.
+        """
+        try:
+            target = station.station_of(list(msg.slot))
+        except station.StationError as exc:
+            # One malformed command must not take the aircraft down, and a
+            # half set point is exactly the kind that would otherwise fly it
+            # somewhere with one coordinate left over from the last one.
+            self.slot_errors += 1
+            self.get_logger().error(f"unusable slot command: {exc}")
+            return
+        if target == self.slot_target:
+            return
+
+        self.slot_target = target
+        self.slot_commands += 1
+        if target is not None:
+            self.last_setpoint = [float(v) for v in
+                                  frames.frozen_to_px4(target, self.home)]
+            self.get_logger().info(
+                f"{self.vehicle_id} commanded to "
+                f"{target[0]:.1f}, {target[1]:.1f}, {target[2]:.1f}")
+            return
+
+        # Withdrawn. A station-keeping vehicle has one place to go back to and
+        # knows it; a surveyor's next waypoint is whatever its plan says, and
+        # the next position report will produce it.
+        if self.station is not None:
+            self.last_setpoint = [float(v) for v in
+                                  frames.frozen_to_px4(self.station, self.home)]
+        self.get_logger().info(
+            f"{self.vehicle_id} released, back to its own work")
 
     def on_packet(self, msg: SwarmPacket) -> None:
         """Everything arriving from the radio, which in W2 is nothing.
