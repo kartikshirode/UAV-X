@@ -89,9 +89,14 @@ from pathlib import Path
 from uavx_sim import run_record
 from uavx_sim.comms import (CommsError, collector_command_no_survey,
                             comms_spec, delivery_from_ledgers, gcs_command,
-                            link_layer_command, read_ledger, router_command,
-                            station_gap, station_node_command,
-                            GCS_LEDGER_KEYS, ROUTER_LEDGER_KEYS)
+                            link_layer_command, read_ledger,
+                            role_manager_command, role_managers_of,
+                            router_command, station_gap, station_node_command,
+                            GCS_LEDGER_KEYS, ROLE_LEDGER_KEYS,
+                            ROUTER_LEDGER_KEYS)
+from uavx_sim.recovery import (RecoveryError, destroyed_by, fault_at,
+                               outage_block, recovery_block,
+                               safety_from_payload)
 from uavx_sim.event_injector import EventInjector
 from uavx_sim.graph_snapshot import (CaptureFailed, IncompleteSnapshot,
                                      capture_snapshot, sha256_of, utc_stamp,
@@ -222,6 +227,14 @@ COMMS_SETTLE_S = 8.0
 
 LINK_LABEL = "link-layer"
 GCS_LABEL = "gcs"
+
+# Chunk 4.2. How long before an injected event the ROS graph is captured.
+# The snapshot is the evidence that the system is wired the way the seam
+# rules require, and a snapshot taken after a vehicle was destroyed is a
+# picture of the survivors: three routers where the manifest names four, and
+# a seam pass that fails a run for doing exactly what the scenario asked.
+# So a run with a fault in it photographs itself while it is still whole.
+GRAPH_CAPTURE_MARGIN_S = 5.0
 
 # Chunk 3.6. Where the raw frames go while a recording run is in progress. On
 # ext4 under the distribution and never on /mnt/c: a minute of 960 by 540 rgb8
@@ -1067,6 +1080,10 @@ class Harness:
         self.ledger_dir = self.runs_dir / (self.run_id + "-ledgers")
         self.ledger_paths = {}
         self.delivery = None
+        self.router_ledgers = None
+        self.role_ledgers = None
+        self.gcs_ledger = None
+        self.destroyed_labels = set()
         self.station_seconds = 0.0
         self.scenario_relative = None
         self.nodes = []
@@ -1129,6 +1146,38 @@ class Harness:
                 raise HarnessFailure(
                     f"could not kill pid {pid} for {target}: {exc}",
                     EXIT_CHILD) from exc
+        self._destroy_onboard(target)
+
+    def _destroy_onboard(self, target):
+        """The processes that were running on the aircraft stop with it.
+
+        Chunk 4.2, and without it the fault is not the fault. Killing PX4
+        leaves the gazebo model where it was, so the radio still scores a
+        165 m link to a vehicle whose autopilot is gone, and the router still
+        answers HELLOs from a dead airframe. The mesh would never notice, the
+        election would never open, and the run would report a recovery time
+        for an outage that did not happen.
+
+        SIGUSR1 rather than SIGINT. That is the signal `router_node.spin`
+        reads as this vehicle being destroyed: the node writes what it had
+        counted and stops, with none of the three second drain a node gets at
+        the end of a run. A destroyed aircraft does not finish carrying its
+        queue, and giving it that window would be modelling a crash as a
+        controlled shutdown.
+
+        The file it writes is an instrument and not a message. Nothing in the
+        swarm reads it, it crosses no seam, and the runner needs it for the
+        one thing only the dead vehicle knows: which observations were on
+        board and nowhere else. See uavx_gcs.ledger._lost_with.
+        """
+        labels = [node["label"] for node in self.nodes
+                  if node["label"].endswith(f"-{target}")]
+        if not labels:
+            return
+        self.destroyed_labels.update(labels)
+        self._signal_nodes(signal.SIGUSR1, labels)
+        print(f"  {target} destroyed, and so are its "
+              f"{len(labels)} onboard node(s)", flush=True)
 
     def _effect_visible(self, kind, target):
         """Look at the target, never at whether the request was sent.
@@ -1273,6 +1322,11 @@ class Harness:
 
     def _check_nodes_alive(self):
         for node in self.nodes:
+            if node["label"] in self.destroyed_labels:
+                # It was on a vehicle this run destroyed. Its exit is the
+                # scenario working, and the record says so through the
+                # injected event that caused it.
+                continue
             code = node["process"].poll()
             if code is not None:
                 raise HarnessFailure(
@@ -1587,6 +1641,22 @@ class Harness:
                 self.comms.station_of(vehicle.name), self.comms,
                 self.ledger_paths[label]))
 
+        # One role executive per vehicle, and only in a run with an election.
+        # It holds this vehicle's tx endpoint for exactly one message, the
+        # acknowledgement it sends once the aircraft is actually on the slot,
+        # and it tells this vehicle's own mission executor where to be.
+        managers = role_managers_of(self.comms, vehicles)
+        for vehicle in self.vehicles:
+            if vehicle.name not in managers:
+                continue
+            label = f"role-{vehicle.name}"
+            self.ledger_paths[label] = (self.ledger_dir
+                                        / f"{vehicle.name}-role.json")
+            self._start_node(label, role_manager_command(
+                vehicle.name, self.spawn_of(vehicle.name), self.comms,
+                self.ledger_paths[label],
+                station=self.comms.stations.get(vehicle.name)))
+
         self.ledger_paths[GCS_LABEL] = self.ledger_dir / "gcs.json"
         self._start_node(GCS_LABEL, gcs_command(
             self.comms, self.ledger_paths[GCS_LABEL]))
@@ -1597,8 +1667,9 @@ class Harness:
                 vehicle.drain(None)
             time.sleep(0.05)
         self._check_nodes_alive()
-        print(f"  radio up, {len(self.vehicles)} router(s) and the ground "
-              f"station, forwarding {self.comms.forwarding}", flush=True)
+        print(f"  radio up, {len(self.vehicles)} router(s), {len(managers)} "
+              f"role manager(s) and the ground station, forwarding "
+              f"{self.comms.forwarding}", flush=True)
 
     def read_delivery(self):
         """The five delivery fields, off the files the nodes wrote.
@@ -1617,10 +1688,18 @@ class Harness:
             if path is None:
                 continue
             routers.append(read_ledger(path, ROUTER_LEDGER_KEYS))
+        roles = []
+        for vehicle in self.vehicles:
+            path = self.ledger_paths.get(f"role-{vehicle.name}")
+            if path is None:
+                continue
+            roles.append(read_ledger(path, ROLE_LEDGER_KEYS))
         gcs = read_ledger(self.ledger_paths[GCS_LABEL], GCS_LEDGER_KEYS)
         self.radio_ledger = read_ledger(self.ledger_paths[LINK_LABEL],
                                         ("node", "transmissions"))
         self.router_ledgers = routers
+        self.role_ledgers = roles
+        self.gcs_ledger = gcs
         self.delivery = delivery_from_ledgers(routers, gcs)
         return self.delivery
 
@@ -1764,6 +1843,13 @@ class Harness:
         next_pose = 0.0
         next_resource = 0.0
         capture_at = duration * GRAPH_CAPTURE_FRACTION
+        faults = [float(event.at_s) for event in self.scenario.injected_events]
+        if faults:
+            # Before the first one. See GRAPH_CAPTURE_MARGIN_S: the snapshot
+            # has to show the system the seam rules describe, and after a kill
+            # the system is three quarters of it.
+            capture_at = max(0.0, min(capture_at,
+                                      min(faults) - GRAPH_CAPTURE_MARGIN_S))
         wall_start = time.time()
         wall_limit = max(600.0, 6.0 * duration)
         last_advance_wall = wall_start
@@ -2000,6 +2086,7 @@ class Harness:
             "capture": self.capture,
             "radio": getattr(self, "radio_ledger", None),
             "routers": getattr(self, "router_ledgers", None),
+            "roles": self.role_ledgers,
             "mission_started_wall_s": self.mission_started_wall,
             "metrics_topic": METRICS_TOPIC if self.measured else None,
             "metrics_messages": self.metrics_messages,
@@ -2178,6 +2265,41 @@ def run(options):
         raise HarnessFailure(f"the delivery ledgers do not hold up: {exc}",
                              EXIT_ARTIFACT) from exc
 
+    # Chunk 4.2. The separation figures come off the collector's payload, on
+    # every run that had one. A survey run reports them too: the vehicles are
+    # 10 m apart in altitude by design and nothing had ever measured whether
+    # they stayed that way.
+    safety = None
+    if harness.metrics_payload is not None:
+        try:
+            safety = safety_from_payload(harness.metrics_payload)
+        except RecoveryError as exc:
+            raise HarnessFailure(
+                f"the collector cannot answer for separation: {exc}",
+                EXIT_ARTIFACT) from exc
+
+    # And the two blocks a run with a fault in it carries. Both are computed
+    # from the ledgers and the moment the injector watched the fault land,
+    # never from the scenario: `at_s` is when the runner asked, and every
+    # number here is measured from when it happened.
+    observations = None
+    recovery = None
+    if delivery is not None and harness.injector.count_observed():
+        events = harness.injector.records()
+        try:
+            landed = fault_at(events)
+            observations = outage_block(
+                harness.router_ledgers, harness.gcs_ledger, landed,
+                epoch_s=harness.zero_s, destroyed=destroyed_by(events))
+            if harness.role_ledgers:
+                recovery = recovery_block(
+                    harness.router_ledgers, harness.role_ledgers,
+                    harness.gcs_ledger, landed, epoch_s=harness.zero_s)
+        except RecoveryError as exc:
+            raise HarnessFailure(
+                f"the run had a fault in it and cannot say what happened "
+                f"next: {exc}", EXIT_ARTIFACT) from exc
+
     try:
         record = run_record.build_record(
             run_id=run_id,
@@ -2215,6 +2337,9 @@ def run(options):
             graph_snapshot_sha256=graph_sha,
             coverage=coverage,
             delivery=delivery,
+            safety=safety,
+            observations=observations,
+            recovery=recovery,
         )
     except run_record.RecordError as exc:
         raise HarnessFailure(f"the run record does not hold up: {exc}",
@@ -2250,6 +2375,29 @@ def run(options):
               f"{coverage['coverage_source']}, "
               f"{coverage['coverage_cells_seen']} of "
               f"{coverage['coverage_cells_total']} cells", flush=True)
+    if safety is not None:
+        closest = record.get("min_pairwise_separation_m")
+        print(f"  ok    closest approach "
+              f"{'none measured' if closest is None else f'{closest:.1f} m'}, "
+              f"{record['separation_violations']} violation(s) and "
+              f"{record['collision_contacts']} contact(s) over "
+              f"{record['contact_monitor_samples']} frames", flush=True)
+    if observations is not None:
+        print(f"  ok    outage {observations['outage_start_s']:.1f}s to "
+              f"{observations['outage_end_s']:.1f}s, "
+              f"{observations['generated_during_outage']} minted inside it, "
+              f"{observations['delivered_after_restore']} delivered after, "
+              f"backlog drained in {observations['backlog_drain_s']:.2f}s",
+              flush=True)
+        lost = observations.get("lost_with_vehicle_count")
+        if lost:
+            print(f"        {lost} observation(s) went down with "
+                  f"{', '.join(observations['lost_with_vehicle'])}", flush=True)
+    if recovery is not None:
+        print(f"  ok    reconnected in {recovery['time_to_reconnect_s']:.1f}s, "
+              f"relay {recovery['relay_role_holder']}, "
+              f"{recovery['delivery_ratio_after_recovery']:.4f} delivered "
+              f"after", flush=True)
     if delivery is not None:
         print(f"  ok    delivery {delivery['delivery_ratio']:.4f} overall",
               flush=True)

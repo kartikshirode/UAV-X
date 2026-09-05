@@ -51,6 +51,19 @@ from .simclock import ClockGate, Drain
 
 NODE_NAME = "router"
 
+# The signal that means "your aircraft has been destroyed". The runner sends
+# it to every process that was running on a vehicle it just killed, and the
+# difference from SIGINT is the whole point: SIGINT is the run ending, and a
+# node that gets it finishes carrying what it holds. This one is the airframe
+# stopping to exist. The node writes what it had counted and goes, with no
+# drain, because a destroyed vehicle does not deliver its queue and giving it
+# three seconds to try would be modelling a crash as a shutdown.
+#
+# Not present on every platform. The nodes only ever run on Linux and the
+# tests import this module nowhere, so absence means the runs that use it
+# cannot happen rather than that they happen differently.
+DESTROYED_SIGNAL = getattr(signal, "SIGUSR1", None)
+
 # The router's own timers are all frozen periods measured in seconds, and the
 # shortest of them is the HELLO period. Ticking well inside it means a timer
 # fires in the tick after it was due rather than a whole period late.
@@ -313,6 +326,13 @@ def spin(node_factory, args=None) -> int:
     found in the metrics collector: `rclpy.init` installs signal handlers that
     shut the context down before the exception reaches any `finally`, so the
     spin has to end on a flag instead.
+
+    Three signals, two meanings. SIGINT and SIGTERM are the run ending, and
+    the node stops generating and keeps carrying for the drain window before
+    it writes. DESTROYED_SIGNAL is this vehicle being destroyed, and the node
+    writes immediately. Both write, because the file is an instrument rather
+    than a message: the runner reads it to find out which observations were
+    on board and nowhere else when the aircraft was lost.
     """
     rclpy.init(args=args)
     node = None
@@ -321,8 +341,11 @@ def spin(node_factory, args=None) -> int:
     def request_stop(signum, frame):                 # noqa: ARG001
         stopping.append(signum)
 
+    wanted = [signal.SIGINT, signal.SIGTERM]
+    if DESTROYED_SIGNAL is not None:
+        wanted.append(DESTROYED_SIGNAL)
     previous = {}
-    for number in (signal.SIGINT, signal.SIGTERM):
+    for number in wanted:
         try:
             previous[number] = signal.signal(number, request_stop)
         except (OSError, ValueError):
@@ -331,7 +354,12 @@ def spin(node_factory, args=None) -> int:
         node = node_factory()
         while rclpy.ok() and not stopping:
             rclpy.spin_once(node, timeout_sec=0.05)
-        _drain(node)
+        if stopping and stopping[0] == DESTROYED_SIGNAL:
+            node.get_logger().warning(
+                "this vehicle was destroyed. Writing what it had counted and "
+                "stopping, with nothing carried")
+        else:
+            _drain(node)
     except KeyboardInterrupt:
         pass
     finally:
