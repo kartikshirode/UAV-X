@@ -138,6 +138,7 @@ class Router:
         # why deduplication there is a set comparison and not a count.
         self.pending_ack: Dict[Tuple[str, int], pk.Packet] = {}
         self.generated_ids: List[str] = []
+        self.generated_at: Dict[str, float] = {}
 
         # Destination bookkeeping. Only the node that is the destination ever
         # accepts, and it accepts an identity once.
@@ -762,6 +763,7 @@ class Router:
         self._obs_seq += 1
         obs = pk.observation(self.node_id, self._obs_seq, now)
         self.generated_ids.append(obs.identity_str())
+        self.generated_at[obs.identity_str()] = now
         self.pending_ack[obs.identity()] = obs
         self.store.push(obs)
         return obs
@@ -845,4 +847,21 @@ class Router:
             "control_queue_max_delay_s": self.control_max_delay_s,
             "protocol_errors": self.protocol_errors,
             "drops": dict(self.drops),
+            # When each of this node's own observations was minted, so the
+            # arithmetic downstream can say which of them were generated
+            # during an outage without asking the runner to guess from a rate.
+            "generated_at": {k: round(v, 3)
+                             for k, v in sorted(self.generated_at.items())},
+            # Everything this node's store has ever held, its own
+            # observations included. queue_drain's custody rule is that a
+            # disconnected component funnels its whole backlog to one member,
+            # so the claim is about what one node held rather than about what
+            # it held for others.
+            "custodied_ids": sorted(self.store.held_ids),
+            "custodied": len(self.store.held_ids),
+            # One row per accepted observation, non-empty only at the
+            # destination. The destination has built these since chunk 3.1 and
+            # nothing has ever read them: they are the per delivery times and
+            # paths every field of the observations block is computed from.
+            "ledger": list(self.ledger),
         }

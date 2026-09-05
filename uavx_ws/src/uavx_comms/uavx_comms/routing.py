@@ -196,6 +196,15 @@ class PacketQueue:
         self.duplicates = 0
         self.peak = 0
 
+        # Chunk 4.2. Every identity this queue has ever taken in, kept after
+        # the packet leaves. The peak depth is a number and cannot say whether
+        # one node held 450 or two nodes held 225 each, which is the
+        # difference between the design's custody rule working and the backlog
+        # splitting. Identities rather than packets: the packets are retained
+        # by their origins until acknowledged, so a second copy of them here
+        # is memory spent to answer a question a set of strings answers.
+        self.held_ids = set()
+
     def __len__(self) -> int:
         return len(self._items)
 
@@ -217,6 +226,7 @@ class PacketQueue:
             self.evicted += 1
             outcome = "evicted_oldest"
         self._items[key] = packet
+        self.held_ids.add(packet.identity_str())
         self.peak = max(self.peak, len(self._items))
         return outcome
 
