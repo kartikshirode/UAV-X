@@ -591,7 +591,7 @@ UNTYPED_GATE_PATHS = {
     # W4, fault recovery and safety.
     "coverage_fraction_at_kill", "strip_reassigned_to", "relay_role_released",
     "route_restored_after_blackout", "mover_returned_to_station",
-    "outage_count_after_release", "outage_duration_s",
+    "outage_count_after_release",
     "delivery_ratio_after_recovery", "separation_violations",
     "collision_contacts", "yield_events_by_node", "yield_hold_seconds",
     "observations.unexpected_count",

@@ -629,6 +629,17 @@ def _observation_problems(record) -> list:
             f"drain_start_s is {drain_end - drain_start}. One of the two was "
             f"measured and the other was typed")
 
+    duration = record.get("outage_duration_s")
+    if duration is not None:
+        if not _is_number(duration):
+            problems.append(f"outage_duration_s is {duration!r}, not a length "
+                            f"of time")
+        elif abs(float(duration) - (end - start)) > 1e-6:
+            problems.append(
+                f"outage_duration_s is {duration} and the window in the "
+                f"observations block runs {end - start}. The gate reads the "
+                f"first and the drain is measured inside the second")
+
     during = block.get("generated_during_outage")
     after = block.get("delivered_after_restore")
     if isinstance(during, int) and during > len(generated):
@@ -904,6 +915,19 @@ def _event_problems(record, requested, elapsed) -> list:
                 f"{where}.requested_t is {asked}, outside the {requested}s the "
                 f"scenario asked for")
 
+        lifts = event.get("restore_at_s")
+        if lifts is not None:
+            if not _is_number(lifts):
+                problems.append(f"{where}.restore_at_s is {lifts!r}, not a time")
+            elif _is_number(asked) and lifts <= asked:
+                problems.append(
+                    f"{where} is asked for at {asked} and told to lift at "
+                    f"{lifts}, which is not a window")
+            elif event.get("type") != "comms_blackout":
+                problems.append(
+                    f"{where} is a {event.get('type')!r} with a restore_at_s. "
+                    f"Only a blackout lifts; the rest have no end")
+
         seen = event.get("observed_t")
         if seen is None:
             # Null is the honest answer for an effect nobody saw, and it is
@@ -1044,6 +1068,15 @@ def build_record(*, run_id, scenario_path, scenario_sha256, seed, commit_sha,
         record["observations_set_equal"] = (
             not observations.get("missing_ids")
             and not observations.get("unexpected_ids"))
+        # How long the swarm was cut off, at the top level because it is the
+        # claim queue_drain is for and that run has no recovery block to
+        # carry it: elections are off, so no role manager moves and nothing
+        # else in the record is about the outage lasting the 45 s the queue
+        # is sized against.
+        window = [observations.get("outage_start_s"),
+                  observations.get("outage_end_s")]
+        if all(_is_number(value) for value in window):
+            record["outage_duration_s"] = round(window[1] - window[0], 3)
     if recovery is not None:
         if not isinstance(recovery, dict):
             raise RecordError(f"recovery is {recovery!r}, not a block of "

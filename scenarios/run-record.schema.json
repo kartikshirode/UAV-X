@@ -157,6 +157,14 @@
             ],
             "minimum": 0,
             "description": "Scenario time the effect was first seen on the target, or null when it never was. Null is the honest answer and is what keeps the event out of injected_event_count."
+          },
+          "restore_at_s": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Scenario time the fault was told to lift, or null for a fault with no end. Only a comms_blackout has one: the radio restores itself after a frozen hold rather than waiting for the harness to notice the vehicle is back. It bounds the outage window, so it sits in the record beside the two moments that were measured."
           }
         }
       }
@@ -185,6 +193,11 @@
       "type": "object",
       "description": "The numbers the gates assert on. Present only after every provenance field above has validated.",
       "additionalProperties": true
+    },
+    "outage_duration_s": {
+      "type": "number",
+      "minimum": 0,
+      "description": "How long the swarm was cut off, in scenario seconds. The observations window: it opens when the fault landed and closes when the route came back or when the fault was lifted, whichever happened first. queue_drain holds it open for the 45 s the 512 packet queue is sized against, and a swarm that reconnected early closes it early and falls short."
     },
     "requested_duration_s": {
       "type": "number",
@@ -463,7 +476,7 @@
     },
     "relay_slot": {
       "type": "object",
-      "description": "Round 5 finding 4: the slot clearance rule was never exercised by an accepted scenario, so nothing proved a future implementation would call it. The commanded slot and the clearance it was checked against go in the record.",
+      "description": "Round 5 finding 4: the slot clearance rule was never exercised by an accepted scenario, so nothing proved a future implementation would call it. The commanded slot and the clearance it was checked against go in the record. Required of the three fault scenarios that elect a relay and not of queue_drain, which forbids the election on purpose so that nothing shortens the outage the queue is sized against: no role manager runs there, seam_manifests.json says so too, and a slot in that record would be a point no component ever chose.",
       "required": [
         "commanded",
         "clearance_m",
@@ -614,8 +627,7 @@
             "enum": [
               "scenarios/relay_kill.yaml",
               "scenarios/link_loss.yaml",
-              "scenarios/mission_integrated.yaml",
-              "scenarios/queue_drain.yaml"
+              "scenarios/mission_integrated.yaml"
             ]
           }
         },

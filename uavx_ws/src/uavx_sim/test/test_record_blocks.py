@@ -23,7 +23,7 @@ Runs on a clean checkout with nothing built.
 
 import pytest
 
-from uavx_sim.run_record import RecordError, build_record
+from uavx_sim.run_record import RecordError, build_record, validate_record
 
 # The complete set of keyword arguments for one valid record already exists
 # next door, and a second copy here would drift from the schema the moment
@@ -190,6 +190,25 @@ def test_more_delivered_after_restore_than_generated_during_is_refused():
     assert "contains the first" in refused(
         observations=block(generated_during_outage=1,
                            delivered_after_restore=2))
+
+
+def test_the_outage_duration_is_promoted_for_the_gate_to_read():
+    """queue_drain has no recovery block to carry it.
+
+    Elections are off in that scenario, so no role manager moves and nothing
+    else in the record is about the outage having lasted the 45 s the queue
+    is sized against.
+    """
+    got = built(observations=block())
+    assert got["outage_duration_s"] == pytest.approx(45.0)
+
+
+def test_a_duration_that_is_not_the_window_is_refused():
+    record = built(observations=block())
+    record["outage_duration_s"] = 90.0
+    with pytest.raises(RecordError) as caught:
+        validate_record(record)
+    assert "the window in the observations block runs" in str(caught.value)
 
 
 def test_a_block_with_no_times_is_refused():
