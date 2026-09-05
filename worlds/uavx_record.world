@@ -1,0 +1,102 @@
+<?xml version="1.0" ?>
+<!--
+  The world a recording run flies in. Chunk 3.6.
+
+  It is worlds/uavx_empty.world with one static camera added, and it is a
+  separate file rather than an addition to that one for a plain reason: every
+  gated scenario runs in uavx_empty.world, none of them needs a camera, and
+  rendering one costs real time under software OpenGL. The runs already
+  archived were flown without it and the ones week 4 flies should match them.
+
+  Why a camera in the world at all. The video is a deliverable and the only
+  capture path this stack has. gzclient has taken this WSL distribution down
+  three times and is never launched, so there is no window to record; the
+  frames have to come from a sensor gzserver renders itself. Measured on 5
+  September 2026 before any of this was written: gzserver renders a camera
+  sensor headless here at about 7 Hz against a requested 10, publishes it on a
+  ROS image topic, and the frames are of the scene rather than blank.
+
+  Where it stands and why. The swarm occupies x 0 to 475 and y -75 to +75 at
+  30 to 60 m, per the common geometry table in architecture.md section 6. From
+  (-120, 0, 55) looking along +x the near vehicles sit about 0.2 rad below the
+  axis and the far pair about level, which the 0.675 rad vertical field covers
+  with the pitch below. The whole chain is in frame from takeoff to station.
+
+  The camera is not a sensor any process may reason about. It publishes an
+  image and nothing else reads it but the harness, and scripts/check_seam.sh
+  holds it to that: /uavx_record/uavx_camera_plugin is an outside process with
+  two publishers and no subscribers.
+-->
+<sdf version="1.5">
+  <world name="default">
+    <!-- A global light source -->
+    <include>
+      <uri>model://sun</uri>
+    </include>
+    <!-- A ground plane -->
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+    <include>
+      <uri>model://asphalt_plane</uri>
+    </include>
+    <physics name='default_physics' default='0' type='ode'>
+      <gravity>0 0 -9.8066</gravity>
+      <ode>
+        <solver>
+          <type>quick</type>
+          <iters>10</iters>
+          <sor>1.3</sor>
+          <use_dynamic_moi_rescaling>0</use_dynamic_moi_rescaling>
+        </solver>
+        <constraints>
+          <cfm>0</cfm>
+          <erp>0.2</erp>
+          <contact_max_correcting_vel>100</contact_max_correcting_vel>
+          <contact_surface_layer>0.001</contact_surface_layer>
+        </constraints>
+      </ode>
+      <max_step_size>0.004</max_step_size>
+      <real_time_factor>1</real_time_factor>
+      <real_time_update_rate>250</real_time_update_rate>
+      <magnetic_field>6.0e-6 2.3e-5 -4.2e-5</magnetic_field>
+    </physics>
+
+    <plugin name="gazebo_ros_state" filename="libgazebo_ros_state.so">
+      <ros>
+        <namespace>/gazebo</namespace>
+      </ros>
+      <update_rate>50.0</update_rate>
+    </plugin>
+
+    <model name="uavx_record_camera">
+      <static>true</static>
+      <pose>-120 0 55 0 0.10 0</pose>
+      <link name="link">
+        <sensor name="view" type="camera">
+          <update_rate>10.0</update_rate>
+          <always_on>1</always_on>
+          <camera>
+            <horizontal_fov>1.2</horizontal_fov>
+            <image>
+              <width>960</width>
+              <height>540</height>
+              <format>R8G8B8</format>
+            </image>
+            <clip>
+              <near>1.0</near>
+              <far>3000</far>
+            </clip>
+          </camera>
+          <plugin name="uavx_camera_plugin" filename="libgazebo_ros_camera.so">
+            <ros>
+              <namespace>/uavx_record</namespace>
+            </ros>
+            <camera_name>view</camera_name>
+            <frame_name>uavx_record_camera</frame_name>
+          </plugin>
+        </sensor>
+      </link>
+    </model>
+  </world>
+</sdf>
