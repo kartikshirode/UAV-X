@@ -39,6 +39,7 @@ from uavx_msgs.msg import SwarmPacket
 from uavx_comms import codec, election, params
 from uavx_comms.router import Router
 from uavx_comms.router_node import spin
+from uavx_comms.simclock import ClockGate
 
 from . import ledger as led
 
@@ -89,6 +90,10 @@ class GcsNode(Node):
         self.create_subscription(SwarmPacket, "/uavx/gcs/rx", self.on_rx, 50)
 
         self._last_tick = None
+        # Chunk 4.2. This node reported a 113.3 s control queue delay
+        # in a run with nothing queued: its first packet arrived
+        # before the first /clock message and was stamped 0.
+        self.gate = ClockGate()
         self.decode_failures = 0
         self.encode_failures = 0
 
@@ -101,11 +106,18 @@ class GcsNode(Node):
         return self.get_clock().now().nanoseconds / 1e9
 
     def on_rx(self, message: SwarmPacket) -> None:
+        now = self.now_s()
+        if not self.gate.sample(now):
+            self.gate.hold(message)
+            return
+        self._deliver(message, now)
+
+    def _deliver(self, message: SwarmPacket, now: float) -> None:
         incoming = codec.decode(message)
         if incoming is None:
             self.decode_failures += 1
             return
-        self.router.on_rx(incoming, self.now_s())
+        self.router.on_rx(incoming, now)
 
     def publish(self) -> None:
         now = self.now_s()
@@ -118,6 +130,10 @@ class GcsNode(Node):
 
     def tick(self) -> None:
         now = self.now_s()
+        if not self.gate.sample(now):
+            return
+        for held in self.gate.release():
+            self._deliver(held, now)
         if self._last_tick is None:
             self._last_tick = now
         dt = max(0.0, now - self._last_tick)
@@ -137,6 +153,7 @@ class GcsNode(Node):
             "delivered_edges_by_node":
                 led.delivered_edges_by_node(self.router.accepted_path),
         }
+        out.update(self.gate.as_record())
         out.update(self.router.observation_summary())
         return out
 

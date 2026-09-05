@@ -46,6 +46,7 @@ from uavx_msgs.msg import RoleAssignment, SwarmPacket
 from uavx_comms import codec, election
 from uavx_comms import packet as pk
 from uavx_comms.router_node import spin
+from uavx_comms.simclock import ClockGate
 from uavx_mission import frames, station as station_mod
 
 from . import grant as gr
@@ -140,6 +141,12 @@ class RoleManager(Node):
             VehicleLocalPosition, px4 + "/out/vehicle_local_position",
             self.on_position, PX4_QOS)
 
+        # Nothing is acted on before the simulated clock is live. A
+        # grant applied at a reading of zero carries a lease that has
+        # already expired by the time the radio comes up, so the
+        # vehicle would be granted the role and drop it in the same
+        # instant. See uavx_comms.simclock.
+        self.gate = ClockGate()
         self.position: Optional[tuple] = None
         self.positions_seen = 0
         self.decode_failures = 0
@@ -172,13 +179,19 @@ class RoleManager(Node):
         raised, for the reason the router gives: one malformed packet from
         somebody else must not take this vehicle's role manager down.
         """
+        now = self.now_s()
+        if not self.gate.sample(now):
+            self.gate.hold(message)
+            return
+        self._deliver(message, now)
+
+    def _deliver(self, message: SwarmPacket, now: float) -> None:
         incoming = codec.decode(message)
         if incoming is None:
             self.decode_failures += 1
             return
         if incoming.kind != pk.KIND_ROLE:
             return
-        now = self.now_s()
         outcome = self.tracker.apply(incoming.payload, now)
         if outcome == gr.ACCEPTED and self.tracker.grant is not None:
             held = self.tracker.grant
@@ -238,6 +251,10 @@ class RoleManager(Node):
     # --------------------------------------------------------------- the tick
     def tick(self) -> None:
         now = self.now_s()
+        if not self.gate.sample(now):
+            return
+        for held in self.gate.release():
+            self._deliver(held, now)
 
         if self.tracker.expire(now):
             self.trace.lapsed(now)
@@ -275,6 +292,7 @@ class RoleManager(Node):
             "acked_epoch": self.acked_epoch,
             "arrival_radius_m": ARRIVAL_M,
         })
+        out.update(self.gate.as_record())
         out["grants_seen"] = self.tracker.as_record()
         return out
 

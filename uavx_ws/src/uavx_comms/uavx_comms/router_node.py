@@ -46,6 +46,7 @@ from uavx_mission import frames
 
 from . import codec, election, params
 from .router import Router
+from .simclock import ClockGate
 
 NODE_NAME = "router"
 
@@ -140,6 +141,12 @@ class RouterNode(Node):
             self.on_position, PX4_QOS)
 
         self._last_tick: Optional[float] = None
+        # Nothing is acted on before the simulated clock is live.
+        # See simclock.py: a packet decoded at a clock reading of
+        # zero carries that stamp into every duration measured from
+        # it, and the ground station reported a 113.3 s control
+        # queue delay in a run with no outage because of it.
+        self.gate = ClockGate()
         self.encode_failures = 0
         self.decode_failures = 0
         self.positions_seen = 0
@@ -172,11 +179,18 @@ class RouterNode(Node):
         somebody else emitted something malformed, which is a failure mode the
         radio is supposed to absorb.
         """
+        now = self.now_s()
+        if not self.gate.sample(now):
+            self.gate.hold(message)
+            return
+        self._deliver(message, now)
+
+    def _deliver(self, message: SwarmPacket, now: float) -> None:
         incoming = codec.decode(message)
         if incoming is None:
             self.decode_failures += 1
             return
-        self.router.on_rx(incoming, self.now_s())
+        self.router.on_rx(incoming, now)
 
     def publish(self) -> None:
         now = self.now_s()
@@ -192,6 +206,10 @@ class RouterNode(Node):
 
     def tick(self) -> None:
         now = self.now_s()
+        if not self.gate.sample(now):
+            return
+        for held in self.gate.release():
+            self._deliver(held, now)
         if self._last_tick is None:
             self._last_tick = now
         dt = max(0.0, now - self._last_tick)
@@ -200,8 +218,17 @@ class RouterNode(Node):
         self.publish()
 
     def observe(self) -> None:
-        """One observation at the frozen rate. The router keeps it until acked."""
-        self.router.observe(self.now_s())
+        """One observation at the frozen rate. The router keeps it until acked.
+
+        Not before the clock is live. An observation minted at a
+        reading of zero expires 300 simulated seconds later, which is
+        already in the past by the time the radio comes up, so it
+        would be counted as generated and then dropped as expired.
+        """
+        now = self.now_s()
+        if not self.gate.sample(now):
+            return
+        self.router.observe(now)
         self.publish()
 
     # ---------------------------------------------------------- the ledger
@@ -216,6 +243,7 @@ class RouterNode(Node):
             "decode_failures": self.decode_failures,
             "encode_failures": self.encode_failures,
         }
+        out.update(self.gate.as_record())
         out.update(self.router.observation_summary())
         return out
 
