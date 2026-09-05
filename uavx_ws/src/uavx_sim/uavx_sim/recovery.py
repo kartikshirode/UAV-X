@@ -6,6 +6,7 @@ questions are harder because every one of them is about time:
 
     safety_from_payload  the four separation fields, off the collector
     destroyed_by         which vehicles this run killed and watched die
+    targets_of           which vehicles a fault was applied to at all
     fault_at             when the fault landed, from the injector's own record
     outage_window        when the swarm lost its route and when it had one again
     outage_block         the observations block, over that window
@@ -26,6 +27,12 @@ seconds since the simulator came up, and that is two minutes of bring-up
 before the run starts. The runner knows the offset, it is subtracted once at
 every point a file is read, and the rest of the module works in seconds since
 the scenario began, which is what the record means by `_s`.
+
+**The vehicle a fault was applied to is not evidence of recovery.** A gated
+radio comes back when the scenario says so, not when the swarm does anything,
+and a reconnect time measured over it is a stopwatch on the fault rather than
+on the response to it. Every recovery number here is computed over the
+routers the fault happened to and never over the one it happened at.
 
 **Nothing is inferred from the absence of evidence.** A reconnect time is
 measured over routers that say they lost a route and got it back. A run where
@@ -142,6 +149,26 @@ def destroyed_by(events: Iterable[Mapping]) -> Tuple[str, ...]:
     return tuple(sorted(out))
 
 
+def targets_of(events: Iterable[Mapping]) -> Tuple[str, ...]:
+    """Every vehicle a fault of this run was applied to and seen to land.
+
+    Not the same question as `destroyed_by`. That one asks which vehicles
+    stopped existing, and this one asks which ones the run did something to,
+    because neither a killed relay nor a gated one is evidence about how the
+    rest of the swarm recovered.
+    """
+    out = set()
+    for row in events or ():
+        if not isinstance(row, Mapping):
+            continue
+        if _number(row.get("observed_t")) is None:
+            continue
+        target = row.get("target")
+        if isinstance(target, str) and target:
+            out.add(target)
+    return tuple(sorted(out))
+
+
 def fault_at(events: Iterable[Mapping]) -> float:
     """When the first fault of this run was seen to land, in scenario seconds.
 
@@ -167,15 +194,22 @@ def fault_at(events: Iterable[Mapping]) -> float:
 
 # ------------------------------------------------------------- the outage
 def lost_route(router_ledgers: Sequence[Mapping], after_s: float,
-               epoch_s: float = 0.0) -> Dict[str, Tuple[float, Optional[float]]]:
+               epoch_s: float = 0.0,
+               exclude: Sequence[str] = ()) -> Dict[str, Tuple[float, Optional[float]]]:
     """The routers that lost their route after the fault and got one back.
 
     `route_returned_at` moves only on a transition from having no route to
     having one, so for a node that was connected the whole run it is a moment
     early in the bring-up. One later than the fault is that node saying it
     was cut off and is not any more.
+
+    `exclude` is the vehicles the fault was applied to. A gated radio loses
+    its own route the moment it is gated and gets it back the moment the
+    scenario's hold runs out, and neither of those is the swarm recovering
+    from anything.
     """
     offset = _offset(epoch_s)
+    skip = set(exclude)
     start = _number(after_s)
     if start is None:
         raise RecoveryError(f"after_s is {after_s!r}, not a time")
@@ -186,6 +220,8 @@ def lost_route(router_ledgers: Sequence[Mapping], after_s: float,
             raise RecoveryError(
                 "a router ledger with no node name cannot be attributed to a "
                 "vehicle")
+        if node in skip:
+            continue
         returned = _number(entry.get("route_returned_at"))
         if returned is None or returned - offset < start:
             continue
@@ -196,14 +232,15 @@ def lost_route(router_ledgers: Sequence[Mapping], after_s: float,
 
 
 def outage_window(router_ledgers: Sequence[Mapping], fault_at_s: float,
-                  epoch_s: float = 0.0) -> Tuple[float, float]:
+                  epoch_s: float = 0.0,
+                  exclude: Sequence[str] = ()) -> Tuple[float, float]:
     """When the swarm lost its route, and when the last cut off node had one.
 
     The end is `route_returned_at` rather than the confirmed recovery, because
     it is the moment a queue had somewhere to drain to. The confirmation is
     one stability window later and is what the reconnect time is measured to.
     """
-    lost = lost_route(router_ledgers, fault_at_s, epoch_s)
+    lost = lost_route(router_ledgers, fault_at_s, epoch_s, exclude)
     if not lost:
         raise RecoveryError(
             "no router reports losing its route after the fault landed. "
@@ -215,14 +252,15 @@ def outage_window(router_ledgers: Sequence[Mapping], fault_at_s: float,
 
 
 def reconnect_s(router_ledgers: Sequence[Mapping], fault_at_s: float,
-                epoch_s: float = 0.0) -> float:
+                epoch_s: float = 0.0,
+                exclude: Sequence[str] = ()) -> float:
     """From the fault landing to the last cut off node confirming a route.
 
     Confirmed, not merely present. A route that appears and drops again
     inside the stability window is the mesh flapping, and a reconnect time
     that stopped at the first appearance would report the flap as a recovery.
     """
-    lost = lost_route(router_ledgers, fault_at_s, epoch_s)
+    lost = lost_route(router_ledgers, fault_at_s, epoch_s, exclude)
     if not lost:
         raise RecoveryError(
             "no router lost its route after the fault, so a reconnect time "
@@ -307,7 +345,8 @@ def ratio_after(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
 
 def outage_block(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
                  fault_at_s: float, epoch_s: float = 0.0,
-                 destroyed: Sequence[str] = ()) -> dict:
+                 destroyed: Sequence[str] = (),
+                 exclude: Sequence[str] = ()) -> dict:
     """The observations block for a run with a fault in it.
 
     The window is measured rather than declared: it opens when the fault was
@@ -315,10 +354,13 @@ def outage_block(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
     window taken from the scenario would be the two numbers somebody typed,
     and the drain bound the gate reads is the difference between them.
     """
-    start, end = outage_window(router_ledgers, fault_at_s, epoch_s)
+    start, end = outage_window(router_ledgers, fault_at_s, epoch_s, exclude)
     try:
-        return led.observations(router_ledgers, gcs_ledger, start, end,
-                                epoch_s=epoch_s, destroyed=destroyed)
+        return led.observations(
+            router_ledgers, gcs_ledger, start, end, epoch_s=epoch_s,
+            destroyed=destroyed,
+            drained_by=sorted(lost_route(router_ledgers, fault_at_s, epoch_s,
+                                         exclude)))
     except led.LedgerError as exc:
         raise RecoveryError(str(exc)) from exc
 
@@ -346,7 +388,8 @@ def outages_after(router_ledgers: Sequence[Mapping], since_s: float,
 
 
 def route_restored(router_ledgers: Sequence[Mapping], fault_at_s: float,
-                   epoch_s: float = 0.0) -> bool:
+                   epoch_s: float = 0.0,
+                   exclude: Sequence[str] = ()) -> bool:
     """Whether the swarm has a route again and still had one at the end.
 
     Two things, because either alone is satisfied by a run that does not
@@ -354,7 +397,7 @@ def route_restored(router_ledgers: Sequence[Mapping], fault_at_s: float,
     disconnected, and a node that never lost it proves nothing about a
     recovery.
     """
-    lost = lost_route(router_ledgers, fault_at_s, epoch_s)
+    lost = lost_route(router_ledgers, fault_at_s, epoch_s, exclude)
     if not lost:
         return False
     if any(recovered is None for _, recovered in lost.values()):
@@ -477,7 +520,8 @@ def _rebased(row: Mapping, offset: float) -> dict:
 def recovery_block(router_ledgers: Sequence[Mapping],
                    role_ledgers: Sequence[Mapping],
                    gcs_ledger: Mapping, fault_at_s: float,
-                   epoch_s: float = 0.0) -> dict:
+                   epoch_s: float = 0.0,
+                   exclude: Sequence[str] = ()) -> dict:
     """The six recovery fields and the slot, from the files and the fault.
 
     The role half is read from the vehicles' own role managers rather than
@@ -495,9 +539,9 @@ def recovery_block(router_ledgers: Sequence[Mapping],
     except ValueError as exc:
         raise RecoveryError(str(exc)) from exc
 
-    _, end = outage_window(router_ledgers, fault_at_s, epoch_s)
+    _, end = outage_window(router_ledgers, fault_at_s, epoch_s, exclude)
     out["time_to_reconnect_s"] = round(
-        reconnect_s(router_ledgers, fault_at_s, epoch_s), 3)
+        reconnect_s(router_ledgers, fault_at_s, epoch_s, exclude), 3)
     out["delivery_ratio_after_recovery"] = ratio_after(
         router_ledgers, gcs_ledger, end, epoch_s)
     out["relay_slot"] = relay_slot(router_ledgers)
@@ -509,5 +553,5 @@ def recovery_block(router_ledgers: Sequence[Mapping],
         out["outage_count_after_release"] = outages_after(
             router_ledgers, handback["release_at"], epoch_s)
     out["route_restored_after_blackout"] = route_restored(
-        router_ledgers, fault_at_s, epoch_s)
+        router_ledgers, fault_at_s, epoch_s, exclude)
     return out

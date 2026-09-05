@@ -98,7 +98,7 @@ from uavx_sim.comms import (COMMS_BLACKOUT, KILL, CommsError,
                             ROUTER_LEDGER_KEYS)
 from uavx_sim.recovery import (RecoveryError, destroyed_by, fault_at,
                                outage_block, recovery_block,
-                               safety_from_payload)
+                               safety_from_payload, targets_of)
 from uavx_sim.event_injector import EventInjector
 from uavx_sim.graph_snapshot import (CaptureFailed, IncompleteSnapshot,
                                      capture_snapshot, sha256_of, utc_stamp,
@@ -2353,13 +2353,21 @@ def run(options):
         events = harness.injector.records()
         try:
             landed = fault_at(events)
+            # The vehicles the fault was applied to. Neither a killed relay
+            # nor a gated one is evidence about how the rest of the swarm
+            # recovered: a gated radio comes back when the scenario's hold
+            # runs out, and a reconnect time measured over it is a stopwatch
+            # on the fault rather than on the response to it.
+            hit = targets_of(events)
             observations = outage_block(
                 harness.router_ledgers, harness.gcs_ledger, landed,
-                epoch_s=harness.zero_s, destroyed=destroyed_by(events))
+                epoch_s=harness.zero_s, destroyed=destroyed_by(events),
+                exclude=hit)
             if harness.role_ledgers:
                 recovery = recovery_block(
                     harness.router_ledgers, harness.role_ledgers,
-                    harness.gcs_ledger, landed, epoch_s=harness.zero_s)
+                    harness.gcs_ledger, landed, epoch_s=harness.zero_s,
+                    exclude=hit)
         except RecoveryError as exc:
             raise HarnessFailure(
                 f"the run had a fault in it and cannot say what happened "
@@ -2458,6 +2466,15 @@ def run(options):
         if lost:
             print(f"        {lost} observation(s) went down with "
                   f"{', '.join(observations['lost_with_vehicle'])}", flush=True)
+    if recovery is not None and "handback" in recovery:
+        hand = recovery["handback"]
+        print(f"  ok    handback owned by {hand['epoch_owner']}, path "
+              f"{','.join(hand['prepared_path'])}, confirmed at "
+              f"{hand['confirmed_at']:.1f}s and released at "
+              f"{hand['release_at']:.1f}s, {hand['observation_gap_count']} "
+              f"gap(s) in the traffic, "
+              f"{recovery['outage_count_after_release']} outage(s) after",
+              flush=True)
     if recovery is not None:
         print(f"  ok    reconnected in {recovery['time_to_reconnect_s']:.1f}s, "
               f"relay {recovery['relay_role_holder']}, "

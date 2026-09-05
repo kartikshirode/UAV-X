@@ -33,7 +33,7 @@ from uavx_sim.recovery import (DELIVERY_GAP_S, RecoveryError, delivery_gaps,
                                lost_route, outage_block, outage_window,
                                outages_after, ratio_after, recovery_block,
                                reconnect_s, relay_slot, route_restored,
-                               safety_from_payload)
+                               safety_from_payload, targets_of)
 
 VEHICLES = tuple(f"uav_{n}" for n in range(1, 5))
 ANCHOR, RELAY, NEAR, FAR = VEHICLES
@@ -489,4 +489,84 @@ def test_the_block_carries_the_handback_when_there_was_one():
                 gcs_ledger=gcs(steady()))
     assert got["handback"]["epoch_owner"] == FAR
     assert got["outage_count_after_release"] == 0
+    assert got["route_restored_after_blackout"] is True
+
+
+# ------------------------------------------- the vehicle the fault happened at
+# link_loss: uav_2's radio is gated at 120.4 and the radio lifts the gate at
+# 240. So uav_2 loses its own route when it is gated and gets it back when the
+# hold runs out, on the scenario's timetable and not by anything the swarm did.
+GATED_BACK = 245.0
+
+def blacked_out():
+    """The same four vehicles, with the relay gated rather than destroyed."""
+    return routers(**{RELAY: {"route_returned_at": EPOCH + GATED_BACK,
+                              "recovered_at": EPOCH + GATED_BACK + 3.0}})
+
+
+def blackout_events():
+    return [{"type": "comms_blackout", "target": RELAY, "requested_t": 120.0,
+             "observed_t": KILL_AT, "restore_at_s": 240.0}]
+
+
+def test_every_vehicle_a_fault_was_applied_to_is_named():
+    assert targets_of(blackout_events()) == (RELAY,)
+    assert targets_of(events()) == (RELAY,)
+    assert targets_of([]) == ()
+
+
+def test_a_fault_nobody_saw_land_names_nobody():
+    assert targets_of([dict(blackout_events()[0], observed_t=None)]) == ()
+
+
+def test_the_gated_vehicle_is_not_counted_as_having_recovered():
+    lost = lost_route(blacked_out(), KILL_AT, EPOCH, exclude=(RELAY,))
+    assert sorted(lost) == [NEAR, FAR]
+
+
+def test_without_the_exclusion_the_recovery_waits_for_the_stopwatch():
+    """What the exclusion is for, written down.
+
+    The gated radio comes back at 245 because the scenario said 240 and the
+    hold ran out, so a reconnect measured over it is 128 s of waiting for a
+    timetable rather than 24 s of a swarm electing a new relay.
+    """
+    slow = reconnect_s(blacked_out(), KILL_AT, EPOCH)
+    quick = reconnect_s(blacked_out(), KILL_AT, EPOCH, exclude=(RELAY,))
+    assert slow > 45.0
+    assert quick == pytest.approx(CONFIRMED[FAR] - KILL_AT)
+
+
+def test_the_window_ends_when_the_cut_off_members_are_back():
+    _, end = outage_window(blacked_out(), KILL_AT, EPOCH, exclude=(RELAY,))
+    assert end == pytest.approx(RETURNED[FAR])
+
+
+def test_the_drain_is_the_one_the_outage_caused():
+    """uav_2's store empties two minutes later when its own radio returns.
+
+    That is a different event with a different cause, and folding the two
+    together reports a two minute drain for a design that promises 2.25 s.
+    """
+    late = blacked_out()
+    for row in late:
+        if row["node"] == RELAY:
+            row["drain_end_at"] = EPOCH + GATED_BACK + 3.0
+        elif row["node"] in (NEAR, FAR):
+            row["drain_end_at"] = EPOCH + RETURNED[FAR] + 1.2
+    delivered = {ident(ANCHOR, 1): 200.4, ident(RELAY, 1): 100.4,
+                 ident(NEAR, 1): 200.4, ident(FAR, 1): 200.4}
+    got = outage_block(late, gcs(delivered), KILL_AT, EPOCH,
+                       exclude=(RELAY,))
+    assert got["backlog_drain_s"] == pytest.approx(1.2)
+    assert got["drain_counted_for"] == sorted([NEAR, FAR])
+    assert got["drain_by_node"][RELAY] == pytest.approx(GATED_BACK + 3.0)
+
+
+def test_the_block_measures_a_blackout_over_the_members_it_cut_off():
+    delivered = {ident(ANCHOR, 1): 200.4, ident(RELAY, 1): 100.4,
+                 ident(NEAR, 1): 200.4, ident(FAR, 1): 200.4}
+    got = block(router_ledgers=blacked_out(), gcs_ledger=gcs(delivered),
+                exclude=(RELAY,))
+    assert got["time_to_reconnect_s"] <= 45.0
     assert got["route_restored_after_blackout"] is True
