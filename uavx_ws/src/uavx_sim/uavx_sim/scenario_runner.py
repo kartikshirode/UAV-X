@@ -96,8 +96,8 @@ from uavx_sim.comms import (COMMS_BLACKOUT, KILL, CommsError,
                             router_command, station_gap, station_node_command,
                             GCS_LEDGER_KEYS, ROLE_LEDGER_KEYS,
                             ROUTER_LEDGER_KEYS)
-from uavx_sim.recovery import (RecoveryError, destroyed_by, fault_at,
-                               outage_block, recovery_block,
+from uavx_sim.recovery import (RecoveryError, commanded_window, destroyed_by,
+                               fault_at, outage_block, recovery_block,
                                safety_from_payload, targets_of)
 from uavx_sim.event_injector import EventInjector
 from uavx_sim.graph_snapshot import (CaptureFailed, IncompleteSnapshot,
@@ -1911,7 +1911,8 @@ class Harness:
             self.clock.subscribe_metrics(self._on_metrics)
 
         self.injector = EventInjector(
-            [{"type": event.type, "target": event.target, "at_s": event.at_s}
+            [{"type": event.type, "target": event.target, "at_s": event.at_s,
+              "restore_at_s": event.raw.get("restore_at_s")}
              for event in self.scenario.injected_events],
             self._apply_effect, self._effect_visible)
 
@@ -2358,9 +2359,12 @@ def run(options):
                 EXIT_ARTIFACT) from exc
 
     # And the two blocks a run with a fault in it carries. Both are computed
-    # from the ledgers and the moment the injector watched the fault land,
-    # never from the scenario: `at_s` is when the runner asked, and every
-    # number here is measured from when it happened.
+    # from the ledgers and the moment the injector watched the fault land.
+    # The one thing taken from the scenario is the window a blackout was
+    # commanded for, and only as a ceiling: see recovery.outage_window, where
+    # a swarm that reconnected early closes the window early, and
+    # recovery.radio_confirms, where the radio's own file has to agree that it
+    # was gated across it.
     observations = None
     recovery = None
     if delivery is not None and harness.injector.count_observed():
@@ -2376,7 +2380,8 @@ def run(options):
             observations = outage_block(
                 harness.router_ledgers, harness.gcs_ledger, landed,
                 epoch_s=harness.zero_s, destroyed=destroyed_by(events),
-                exclude=hit)
+                exclude=hit, commanded=commanded_window(events),
+                radio_ledger=harness.radio_ledger)
             if harness.role_ledgers:
                 recovery = recovery_block(
                     harness.router_ledgers, harness.role_ledgers,

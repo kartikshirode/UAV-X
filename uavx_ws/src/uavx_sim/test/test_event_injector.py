@@ -287,7 +287,8 @@ def test_an_event_scheduled_past_the_run_is_still_reported():
 
     assert world.applied == []
     assert injector.records() == [
-        {"type": "kill", "target": "uav_2", "requested_t": 90.0, "observed_t": None}
+        {"type": "kill", "target": "uav_2", "requested_t": 90.0,
+         "observed_t": None, "restore_at_s": None}
     ]
 
 
@@ -325,13 +326,13 @@ def test_a_scenario_event_dict_is_accepted_as_given():
 # ------------------------------------------------------------ record shape
 
 def schema_event_keys():
-    """The required keys the provenance contract itself names, if it is here."""
+    """What the provenance contract names of an event: required, and all of them."""
     for parent in Path(__file__).resolve().parents:
         schema_path = parent / "scenarios" / "run-record.schema.json"
         if schema_path.is_file():
             schema = json.loads(schema_path.read_text(encoding="utf-8"))
-            required = schema["properties"]["injected_events"]["items"]["required"]
-            return set(required)
+            item = schema["properties"]["injected_events"]["items"]
+            return set(item["required"]), set(item["properties"])
     return None
 
 
@@ -348,17 +349,58 @@ def test_records_carry_exactly_the_keys_the_schema_names():
     injector.tick(25.0)
     injector.poll_observations(25.0)
 
-    expected = {"type", "target", "requested_t", "observed_t"}
-    assert set(RECORD_KEYS) == expected
+    required = {"type", "target", "requested_t", "observed_t"}
+    # restore_at_s is named by the schema and not required by it: only a
+    # blackout has an end, and a kill carries the null that says so.
+    named = required | {"restore_at_s"}
+    assert set(RECORD_KEYS) == required
     for record in injector.records():
-        assert set(record) == expected, (
+        assert required <= set(record) <= named, (
             "a record key the schema does not name, or one it requires and "
             "this record is missing"
         )
 
     from_schema = schema_event_keys()
     if from_schema is not None:
-        assert from_schema == expected, (
-            "scenarios/run-record.schema.json requires a different set of keys "
+        assert from_schema == (required, named), (
+            "scenarios/run-record.schema.json names a different set of keys "
             "than the injector writes"
         )
+
+
+# ------------------------------------------------- what the fault was, not just when
+def test_a_blackout_carries_the_moment_it_was_told_to_lift():
+    """Half of what a blackout is, and the record used to hold neither half.
+
+    The radio restores itself after a frozen hold, so nothing in the recovery
+    waits for the harness to notice the vehicle is back. That makes the hold
+    part of the fault rather than part of the harness, and the outage window
+    is bounded by it.
+    """
+    world = FakeWorld()
+    injector = injector_for(
+        [{"type": "comms_blackout", "target": "uav_2", "at_s": 60.0,
+          "restore_at_s": 105.0}],
+        world,
+    )
+    world.becomes_visible("comms_blackout", "uav_2")
+    injector.tick(61.0)
+    injector.poll_observations(61.0)
+
+    row = injector.records()[0]
+    assert row["requested_t"] == 60.0
+    assert row["restore_at_s"] == 105.0
+    assert row["observed_t"] == 61.0
+
+
+def test_a_kill_has_no_end():
+    injector = injector_for([kill_at(30.0)], FakeWorld())
+    assert injector.records()[0]["restore_at_s"] is None
+
+
+def test_a_fault_told_to_lift_before_it_starts_is_refused():
+    with pytest.raises(ValueError) as caught:
+        PendingEvent(type="comms_blackout", target="uav_2", at_s=60.0,
+                     restore_at_s=45.0)
+    assert "not a window" in str(caught.value)
+

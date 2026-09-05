@@ -79,6 +79,11 @@ class PendingEvent:
     type: str
     target: str
     at_s: float
+    # When the fault was told to end, for the faults that have an end. A
+    # blackout does: the radio restores itself after a frozen hold and the
+    # record has to say what that hold was, because the outage window is
+    # bounded by it. A kill does not, and carries None.
+    restore_at_s: Optional[float] = None
 
     def __post_init__(self) -> None:
         # Construction time, not fire time. A scenario carrying a bad event
@@ -100,6 +105,16 @@ class PendingEvent:
                 "starts at zero"
             )
         object.__setattr__(self, "at_s", at_s)
+        if self.restore_at_s is None:
+            return
+        restore = _finite_time(
+            self.restore_at_s, f"restore_at_s of the {self.type!r} event")
+        if restore <= at_s:
+            raise ValueError(
+                f"the {self.type!r} event on {self.target} starts at {at_s} "
+                f"and is told to lift at {restore}, which is not a window"
+            )
+        object.__setattr__(self, "restore_at_s", restore)
 
     @classmethod
     def from_mapping(cls, mapping: Mapping[str, Any]) -> "PendingEvent":
@@ -114,6 +129,7 @@ class PendingEvent:
             type=mapping["type"],
             target=mapping["target"],
             at_s=mapping["at_s"],
+            restore_at_s=mapping.get("restore_at_s"),
         )
 
 
@@ -235,6 +251,7 @@ class EventInjector:
                 "target": tracked.event.target,
                 "requested_t": tracked.event.at_s,
                 "observed_t": tracked.observed_t,
+                "restore_at_s": tracked.event.restore_at_s,
             }
             for tracked in self._tracked
         ]
