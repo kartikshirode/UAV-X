@@ -111,8 +111,8 @@ def test_the_only_traffic_surface_is_on_rx_and_drain_tx():
     assert traffic <= public
     unexpected = public - traffic - {
         "observe", "retry_pending", "set_position", "set_work", "tick",
-        "topology", "relay_set", "custodian", "reachability", "route_status",
-        "observation_summary",
+        "topology", "relay_set", "custodian", "custodian_named",
+        "reachability", "route_status", "observation_summary",
     }
     assert not unexpected, (
         "Router grew public methods this test has not considered: "

@@ -194,6 +194,107 @@ def test_the_backlog_custodian_is_the_lowest_id_of_the_disconnected_component():
         "the custodian is holding only its own observations: " + repr(held))
 
 
+def test_each_cut_off_node_writes_down_the_custodian_it_named():
+    """Because the answer cannot be reconstructed after the run.
+
+    By the time the ledgers are read the component has merged and every
+    forwarder is holding ids it did not mint, so custody alone names the
+    anchor: uav_1 carried the whole backlog to the ground station and wins
+    every lowest id tie. What the record wants is the member the component
+    chose while it had nowhere to send anything, and only the members
+    themselves were there for that.
+    """
+    net = frozen_net(elections_enabled=False)
+    net.run_for(CONVERGENCE_S)
+    net.start_observing("uav_3", at=net.now)
+    net.start_observing("uav_4", at=net.now)
+    drain(net, 2.0)
+    net.kill("uav_2")
+    net.run_for(40.0)
+
+    assert net.router("uav_3").custodian_named() == "uav_3"
+    assert net.router("uav_4").custodian_named() == "uav_3"
+    assert net.router("uav_1").custodian_named() is None, (
+        "the anchor never lost its route and has no business naming a "
+        "custodian for a component it was not in")
+
+    summary = net.router("uav_4").observation_summary()
+    assert summary["custodian_named"] == "uav_3"
+    assert summary["custodian_named_s"] > 30.0, (
+        "the seconds are what separates the settled answer from a single "
+        "tick before the neighbour table caught up")
+
+
+def test_the_custodian_ends_up_holding_the_detection_window_too():
+    """The three seconds before anybody knew, which used to go nowhere.
+
+    A node keeps sending toward the destination until its neighbour table
+    times out. Those packets meet a radio that is not there. They are retained
+    by the origin, so none of them is lost, and until this they stayed in the
+    origin's pending_ack for the whole outage while the design claimed one
+    member was holding the backlog.
+    """
+    net = frozen_net(elections_enabled=False)
+    net.run_for(CONVERGENCE_S)
+    net.start_observing("uav_3", at=net.now)
+    net.start_observing("uav_4", at=net.now)
+    drain(net, 2.0)
+    net.kill("uav_2")
+    net.run_for(40.0)
+    # Stop minting and let what is already moving arrive, or the newest
+    # observation of every vehicle is in the air rather than anywhere.
+    net.stop_observing("uav_3")
+    net.stop_observing("uav_4")
+    net.run_for(2.0)
+
+    custodian = net.router("uav_3")
+    held = set(custodian.store.identities())
+    for node in ("uav_3", "uav_4"):
+        origin = net.router(node)
+        # Either with the custodian or still in this node's own queue on its
+        # way there. The last observation a vehicle made is always the second
+        # of those.
+        in_flight = set(origin.store.identities())
+        stranded = {p.identity() for p in origin.pending_ack.values()
+                    if p.identity() not in held and p.identity() not in in_flight}
+        assert not stranded, (
+            node + " is holding " + str(len(stranded)) + " observations the "
+            "custodian never saw and its own queue is not carrying, so the "
+            "backlog is in two places and the depth the design is sized for "
+            "is in neither")
+
+
+def test_the_handover_happens_once_and_not_once_per_computation():
+    """A retry per computation is a retransmission storm wearing a hat.
+
+    What uav_4 has already passed to the custodian is out of uav_4's own
+    queue, so re-queueing everything unacknowledged every two seconds would
+    send the whole backlog again every two seconds, on a link that is also
+    carrying the observations the vehicle is still making.
+    """
+    net = frozen_net(elections_enabled=False)
+    net.run_for(CONVERGENCE_S)
+    net.start_observing("uav_4", at=net.now)
+    drain(net, 2.0)
+    net.kill("uav_2")
+    net.run_for(40.0)
+
+    origin = net.router("uav_4")
+    assert len(origin.store) < 30, (
+        "uav_4 is sitting on a queue of " + str(len(origin.store)) + " while "
+        "cut off, so it is re-queueing what it has already handed over")
+    assert origin.custodian() == "uav_3"
+
+
+def test_a_node_with_a_route_names_nobody():
+    net = settled_net()
+    net.run_for(5.0)
+    for node in ("uav_1", "uav_2", "uav_3", "uav_4"):
+        assert net.router(node).custodian_named() is None, (
+            node + " named a backlog custodian on a run where nothing was "
+            "ever cut off from the ground station")
+
+
 def test_a_full_custodian_queue_evicts_loudly_and_still_loses_no_observation():
     """Eviction is allowed. Silent eviction, and actual data loss, are not.
 

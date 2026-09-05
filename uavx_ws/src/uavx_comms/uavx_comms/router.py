@@ -134,6 +134,21 @@ class Router:
         # down again after the relay was handed back, which is a question
         # about times.
         self.outages: list = []
+        # Who this node named to hold the component's backlog, and for how
+        # many simulated seconds it named them. Written down because the
+        # answer cannot be reconstructed afterwards: by the time the run ends
+        # the component has merged, and reading custody off what each node
+        # turned out to be holding names the anchor that forwarded everything
+        # rather than the member that was cut off holding it.
+        #
+        # Seconds rather than a single name, because the first tick after a
+        # link drops can see a component of one before the neighbour table has
+        # caught up, and a node that named itself for a tenth of a second is
+        # not the custodian of anything.
+        self.custodian_seconds: Dict[str, float] = {}
+        # The custodian this node has already handed its backlog to. Cleared
+        # when a route returns, so the next outage hands over again.
+        self._handed_to: Optional[str] = None
         # One row per period this node had a route: when it came back, when
         # it had held it long enough to be believed, when the store first ran
         # empty on it, and when it went again.
@@ -489,6 +504,33 @@ class Router:
             return None
         return min(component)
 
+    def _note_custodian(self, dt: float) -> None:
+        """Charge this tick to whoever this node currently says holds the backlog.
+
+        Only while this node is cut off, which is the design's own condition
+        and not merely the absence of a route right now. Every node is without
+        a route for the first seconds of a run while the link state travels,
+        and a node counting its own bring-up would name itself custodian of a
+        component that had not finished forming.
+        """
+        if self.route.has_route() or not self.disconnected:
+            return
+        holder = self.custodian()
+        if holder is None:
+            return
+        step = float(dt)
+        if step <= 0:
+            return
+        self.custodian_seconds[holder] = (
+            self.custodian_seconds.get(holder, 0.0) + step)
+
+    def custodian_named(self) -> Optional[str]:
+        """The node this router named custodian for longest, ties to the lowest id."""
+        if not self.custodian_seconds:
+            return None
+        return min(self.custodian_seconds,
+                   key=lambda node: (-self.custodian_seconds[node], node))
+
     def reachability(self) -> Dict[str, bool]:
         """Every node this router knows of, and whether it can reach it now."""
         topo = self.topology()
@@ -518,6 +560,7 @@ class Router:
             self._compute_route(topo, now)
 
         self._track_connectivity(now)
+        self._note_custodian(dt)
 
         if now >= self._next_hello_at:
             self._next_hello_at = now + params.HELLO_PERIOD_S
@@ -585,6 +628,26 @@ class Router:
             # keyed by identity so re-queueing cannot inflate the depth the gate
             # reads.
             self.retry_pending()
+            self._handed_to = None
+        else:
+            # No route, so the backlog belongs with the component's custodian
+            # rather than with whoever happened to mint it.
+            #
+            # Everything this node sent in the three seconds between the radio
+            # going quiet and the neighbour table timing out was dropped by a
+            # radio that was not there. It is retained and it is nowhere near
+            # the member that is holding the backlog, and the design's claim
+            # is about one member holding it. Handing over once at the moment
+            # the component reorganises puts those observations where the rest
+            # of them are.
+            #
+            # Once per custodian and not once per computation. What this node
+            # has already passed on is out of its own queue, so a retry every
+            # two seconds would send the whole backlog again every two seconds.
+            holder = self.custodian()
+            if holder is not None and holder != self._handed_to:
+                self._handed_to = holder
+                self.retry_pending()
         self._offer_handback(topo, relays, now)
 
     def _with_slot(self, message: dict, now: float) -> Optional[dict]:
@@ -955,6 +1018,14 @@ class Router:
             # it held for others.
             "custodied_ids": sorted(self.store.held_ids),
             "custodied": len(self.store.held_ids),
+            # Who this node named to hold the component's backlog while it had
+            # no route, and for how long it named them. The record reads the
+            # custodian off the nodes that were actually cut off, because
+            # every forwarder ends up holding ids it did not mint and the
+            # lowest id of those is the anchor that was never disconnected.
+            "custodian_named": self.custodian_named(),
+            "custodian_named_s": round(
+                self.custodian_seconds.get(self.custodian_named(), 0.0), 3),
             # What this node has minted and not yet had acknowledged. In a
             # healthy run this is the last packet or two and it empties on the
             # next ack. It is in the file because of what it means when the
