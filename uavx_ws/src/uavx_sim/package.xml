@@ -21,6 +21,7 @@
        and still touches no tx or rx endpoint. -->
   <exec_depend>uavx_comms</exec_depend>
   <exec_depend>uavx_gcs</exec_depend>
+  <exec_depend>uavx_mission</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

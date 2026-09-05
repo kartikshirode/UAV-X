@@ -44,6 +44,7 @@ from typing import Dict, Mapping, Optional, Sequence, Tuple
 
 from uavx_comms import params as comms_params
 from uavx_gcs import ledger as led
+from uavx_mission import frames
 
 from uavx_sim.survey import SurveyError, home_of, ros_args
 
@@ -220,6 +221,21 @@ def _stations(block, vehicles: Sequence[str],
             f"comms.stations names {', '.join(extra)}, which the scenario "
             f"does not fly")
     return out
+
+
+# ------------------------------------------------------------- the ingress
+def station_gap(local_ned, home, station) -> float:
+    """How far a vehicle is from its station, in the frozen frame.
+
+    The conversion is imported and not repeated. `uavx_mission.frames` is the
+    one module that owns it and it records what goes wrong when a home is
+    subtracted in the wrong frame: the answer still looks like a position,
+    and it is wrong by exactly the distance the vehicle is from the world
+    origin, which reads correctly for the one vehicle that spawned there.
+    """
+    here = frames.px4_to_frozen(tuple(float(v) for v in local_ned),
+                                tuple(float(v) for v in home))
+    return math.dist(here, tuple(float(v) for v in station))
 
 
 # ------------------------------------------------------------ the commands

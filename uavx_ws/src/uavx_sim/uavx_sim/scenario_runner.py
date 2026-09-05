@@ -87,6 +87,11 @@ import time
 from pathlib import Path
 
 from uavx_sim import run_record
+from uavx_sim.comms import (CommsError, collector_command_no_survey,
+                            comms_spec, delivery_from_ledgers, gcs_command,
+                            link_layer_command, read_ledger, router_command,
+                            station_gap, station_node_command,
+                            GCS_LEDGER_KEYS, ROUTER_LEDGER_KEYS)
 from uavx_sim.event_injector import EventInjector
 from uavx_sim.graph_snapshot import (CaptureFailed, IncompleteSnapshot,
                                      capture_snapshot, sha256_of, utc_stamp,
@@ -96,7 +101,8 @@ from uavx_sim.scenario import ScenarioError
 from uavx_sim.scenario import load as load_scenario
 from uavx_sim.survey import (CRUISE_SPEED_PARAM, SurveyError,
                              collector_command, coverage_from_payload,
-                             mission_node_command, model_map, survey_spec)
+                             home_of, mission_node_command, model_map,
+                             survey_spec)
 
 # architecture.md section 1b freezes these. Nothing here invents a code, and a
 # path that cannot say which of them it is has no business returning at all.
@@ -194,6 +200,26 @@ OFFBOARD_DEADLINE_S = 90.0       # wall seconds for the fleet to enter offboard
 METRICS_TOPIC = "/uavx_eval/metrics"
 METRICS_FINAL_WAIT_S = 15.0      # for the collector's last payload on shutdown
 COLLECTOR_LABEL = "metrics-collector"
+
+# Chunk 3.4. A station-keeping scenario is a claim about where four vehicles
+# stand, so the ingress happens before scenario time zero and the run refuses
+# to start until every vehicle is there. Two reasons it cannot be folded into
+# the run itself. The topology only holds once they arrive, so a delivery
+# ratio measured across the ingress is a ratio over a graph the design never
+# describes. And uav_4 starts within a few metres of the ground station,
+# which would give direct_only the direct link its whole point is to be
+# denied.
+STATION_RADIUS_M = 5.0
+STATION_DEADLINE_S = 300.0       # wall seconds for the fleet to reach station
+STATION_REPORT_S = 15.0          # how often the ingress prints where it is
+
+# Wall seconds between the comms nodes coming up and scenario time zero. They
+# have to find each other's topics before the first observation is minted, and
+# a HELLO period is 1 s of simulated time.
+COMMS_SETTLE_S = 8.0
+
+LINK_LABEL = "link-layer"
+GCS_LABEL = "gcs"
 
 # The simulation is lockstep, so a clock that stops advancing means a process
 # is wedged rather than that the run is slow.
@@ -664,6 +690,13 @@ class Vehicle:
         self.heartbeats = 0
         self.armed = False
         self.landed_state = 0
+        # Chunk 3.4. The horizontal pair joins the one the climb already
+        # needed, because a station is a point and not an altitude. Still
+        # this vehicle's own estimate in its own local NED frame, and
+        # uavx_sim.comms.station_gap is what turns it into a distance in the
+        # frame the design is frozen in.
+        self.x = None
+        self.y = None
         self.z = None
         self.z_ground = None
         self.home_alt = None
@@ -720,6 +753,8 @@ class Vehicle:
                     name = name.decode("ascii", "ignore")
                 self.params[str(name).rstrip(chr(0))] = float(message.param_value)
             elif kind == "LOCAL_POSITION_NED":
+                self.x = message.x
+                self.y = message.y
                 self.z = message.z
                 self.fresh = True
             elif kind == "EXTENDED_SYS_STATE":
@@ -968,6 +1003,19 @@ class Harness:
             self.spec = survey_spec(scenario.raw)
         except SurveyError as exc:
             raise HarnessFailure(str(exc), EXIT_ARGS) from exc
+        # Chunk 3.4, and read here for the same reason: a comms block naming a
+        # station 10 m off the frozen table costs an argument error rather
+        # than a bring-up and four minutes of flying.
+        try:
+            self.comms = comms_spec(
+                scenario.raw, list(scenario.vehicles),
+                scenario.raw.get("hover_altitudes_m") or {})
+        except CommsError as exc:
+            raise HarnessFailure(str(exc), EXIT_ARGS) from exc
+        self.ledger_dir = self.runs_dir / (self.run_id + "-ledgers")
+        self.ledger_paths = {}
+        self.delivery = None
+        self.station_seconds = 0.0
         self.scenario_relative = None
         self.nodes = []
         self.metrics_payload = None
@@ -988,6 +1036,17 @@ class Harness:
         self.elapsed_s = 0.0
         self.prep_seconds = 0.0
         self.clock_messages = 0
+
+    @property
+    def measured(self):
+        """Whether this run needs the metrics collector in its graph.
+
+        A survey needs it for coverage and a radio needs it for separation,
+        and scripts/seam_manifests.json requires `/metrics_collector` in every
+        scenario graph but the two that predate it. One property, so the two
+        reasons cannot drift into two different launch conditions.
+        """
+        return self.spec is not None or self.comms is not None
 
     # ----------------------------------------------------------- injection
     def _apply_effect(self, kind, target):
@@ -1262,7 +1321,7 @@ class Harness:
         starts, with every vehicle that could be put into offboard already
         flying its first waypoint.
         """
-        if self.spec is None:
+        if not self.measured:
             return
         manifest = self._load_spawn()
         try:
@@ -1277,20 +1336,39 @@ class Harness:
                                  EXIT_ARTIFACT)
         floor = frozen_min_separation(self.repo)
         started = time.time()
+        self.model_entries = entries
+        self.separation_floor = floor
 
-        self._start_node(COLLECTOR_LABEL, collector_command(
-            self.run_id, self.scenario_relative, self.spec, entries, floor))
+        # A survey starts the collector here, before the executors, because
+        # coverage is scored from the first pose it sees. A station-keeping
+        # run starts it after the ingress instead: the vehicles fly outward
+        # from a metre apart at layer altitudes 10 m apart, and separation
+        # measured across that describes the transit and not the scenario.
+        if self.spec is not None:
+            self._start_node(COLLECTOR_LABEL, collector_command(
+                self.run_id, self.scenario_relative, self.spec, entries, floor))
         flyers = [v for v in self.vehicles if v.state == "hold"]
         for vehicle in flyers:
             try:
-                command = mission_node_command(
-                    vehicle.name, self.spawn_of(vehicle.name),
-                    vehicle.hover_alt_m, self.spec, list(self.scenario.vehicles))
-            except SurveyError as exc:
+                if self.comms is None:
+                    command = mission_node_command(
+                        vehicle.name, self.spawn_of(vehicle.name),
+                        vehicle.hover_alt_m, self.spec,
+                        list(self.scenario.vehicles))
+                else:
+                    command = station_node_command(
+                        vehicle.name, self.spawn_of(vehicle.name),
+                        self.comms.station_of(vehicle.name),
+                        list(self.scenario.vehicles))
+            except (SurveyError, CommsError) as exc:
                 raise HarnessFailure(str(exc), EXIT_CHILD) from exc
             self._start_node(f"mission-{vehicle.name}", command)
-        print(f"  started the collector and {len(flyers)} mission "
-              f"executor(s) for {self.spec.cell_count} cells", flush=True)
+        if self.spec is not None:
+            print(f"  started the collector and {len(flyers)} mission "
+                  f"executor(s) for {self.spec.cell_count} cells", flush=True)
+        else:
+            print(f"  started {len(flyers)} station-keeping executor(s)",
+                  flush=True)
 
         settle_until = time.time() + NODE_SETTLE_S
         while time.time() < settle_until:
@@ -1301,7 +1379,7 @@ class Harness:
 
         self._set_fleet_param(flyers, started, SIM_BATTERY_FLOOR_PARAM,
                               SIM_BATTERY_FLOOR_PCT)
-        if self.spec.cruise_speed_mps is not None:
+        if self.spec is not None and self.spec.cruise_speed_mps is not None:
             self._set_fleet_param(flyers, started, CRUISE_SPEED_PARAM,
                                   self.spec.cruise_speed_mps)
 
@@ -1332,12 +1410,161 @@ class Harness:
                   flush=True)
         self._check_nodes_alive()
         self.mission_started_wall = round(time.time() - started, 1)
+        self.await_stations(flyers)
+        self.start_comms()
         if pending:
             # Not fatal on its own. The record names which vehicles surveyed
             # and the coverage figure says what it cost, so a scenario that
             # needed all four fails on its numbers rather than on a guess.
             print(f"  WARNING  {len(pending)} vehicle(s) never entered "
                   f"offboard and will hover for the run", flush=True)
+
+    # ------------------------------------------------------------- ingress
+    def await_stations(self, flyers):
+        """Hold the run at the gate until every vehicle is on its station.
+
+        Not a warning. `relay_required` is the claim that a chain of five
+        nodes at named positions delivers what a direct link cannot, and a
+        vehicle 200 m short of its station is a different topology that
+        would still fly, still deliver packets and still write a record. The
+        only thing wrong with that run would be that it is not the run
+        architecture.md describes, and no gate downstream can see it.
+        """
+        if self.comms is None:
+            return
+        if not flyers:
+            raise HarnessFailure(
+                "no vehicle reached offboard, so nobody can be flown to a "
+                "station and the topology the scenario claims does not "
+                "exist", EXIT_CHILD)
+        started = time.time()
+        deadline = started + STATION_DEADLINE_S
+        next_report = started
+        waiting = list(flyers)
+        while waiting and time.time() < deadline:
+            for vehicle in self.vehicles:
+                vehicle.drain(None)
+            waiting = [v for v in waiting
+                       if self._station_gap(v) is None
+                       or self._station_gap(v) > STATION_RADIUS_M]
+            if waiting and time.time() >= next_report:
+                next_report = time.time() + STATION_REPORT_S
+                where = ", ".join(
+                    f"{v.name} {self._gap_text(v)}" for v in waiting)
+                print(f"  ingress {time.time() - started:5.0f}s, still flying: "
+                      f"{where}", flush=True)
+            if waiting:
+                time.sleep(0.05)
+        self.station_seconds = time.time() - started
+        self._check_nodes_alive()
+        if waiting:
+            detail = ", ".join(f"{v.name} {self._gap_text(v)}" for v in waiting)
+            raise HarnessFailure(
+                f"{len(waiting)} vehicle(s) never reached the station the "
+                f"scenario freezes, after {STATION_DEADLINE_S:.0f}s: {detail}. "
+                f"The topology in architecture.md section 6 is what every "
+                f"delivery number in this run would be attributed to.",
+                EXIT_CHILD)
+        print(f"  every vehicle on station inside {STATION_RADIUS_M:.0f} m "
+              f"after {self.station_seconds:.0f}s", flush=True)
+
+    def _station_gap(self, vehicle):
+        """How far this vehicle is from its station, in the frozen frame.
+
+        Its own PX4 estimate, converted by the one module that owns the
+        conversion. Not ground truth, which the runner may read but which
+        would measure something other than what the vehicle is flying
+        against, and not a second copy of the arithmetic, because
+        uavx_mission.frames already records what goes wrong when a home is
+        subtracted in the wrong frame and the answer still looks like a
+        position.
+        """
+        if self.comms is None or vehicle.x is None or vehicle.z is None:
+            return None
+        spawn = self.spawn_of(vehicle.name)
+        if not spawn:
+            return None
+        try:
+            return station_gap((vehicle.x, vehicle.y, vehicle.z),
+                               home_of(spawn),
+                               self.comms.station_of(vehicle.name))
+        except (SurveyError, CommsError):
+            return None
+
+    def _gap_text(self, vehicle):
+        gap = self._station_gap(vehicle)
+        return "no position yet" if gap is None else f"{gap:6.1f} m out"
+
+    # --------------------------------------------------------------- radio
+    def start_comms(self):
+        """The radio, one router per vehicle, and the ground station.
+
+        Started after the ingress and never before it. Every packet these
+        nodes mint is counted against the scenario's duration at the frozen
+        rate, so traffic generated while the swarm was still in transit would
+        inflate the denominator, and in `direct_only` it would be generated
+        while `uav_4` was still close enough to the ground station to deliver
+        without any relay at all.
+        """
+        if self.comms is None:
+            return
+        self.ledger_dir.mkdir(parents=True, exist_ok=True)
+        vehicles = [v.name for v in self.vehicles]
+
+        if self.spec is None:
+            self._start_node(COLLECTOR_LABEL, collector_command_no_survey(
+                self.run_id, self.scenario_relative, self.model_entries,
+                self.separation_floor))
+
+        self.ledger_paths[LINK_LABEL] = self.ledger_dir / "link_layer.json"
+        self._start_node(LINK_LABEL, link_layer_command(
+            vehicles, self.model_entries, int(self.scenario.seed),
+            self.ledger_paths[LINK_LABEL]))
+
+        for vehicle in self.vehicles:
+            label = f"router-{vehicle.name}"
+            self.ledger_paths[label] = self.ledger_dir / f"{vehicle.name}.json"
+            self._start_node(label, router_command(
+                vehicle.name, self.spawn_of(vehicle.name),
+                self.comms.station_of(vehicle.name), self.comms,
+                self.ledger_paths[label]))
+
+        self.ledger_paths[GCS_LABEL] = self.ledger_dir / "gcs.json"
+        self._start_node(GCS_LABEL, gcs_command(
+            self.comms, self.ledger_paths[GCS_LABEL]))
+
+        settle_until = time.time() + COMMS_SETTLE_S
+        while time.time() < settle_until:
+            for vehicle in self.vehicles:
+                vehicle.drain(None)
+            time.sleep(0.05)
+        self._check_nodes_alive()
+        print(f"  radio up, {len(self.vehicles)} router(s) and the ground "
+              f"station, forwarding {self.comms.forwarding}", flush=True)
+
+    def read_delivery(self):
+        """The five delivery fields, off the files the nodes wrote.
+
+        Read after every process has exited, so a ledger half written by a
+        node still running cannot be quoted. The radio's own file is read
+        too and kept in the metrics block: a run where the delivery ratio is
+        low and the radio dropped every packet for want of a position is a
+        different fault from one where the routing was wrong.
+        """
+        if self.comms is None:
+            return None
+        routers = []
+        for vehicle in self.vehicles:
+            path = self.ledger_paths.get(f"router-{vehicle.name}")
+            if path is None:
+                continue
+            routers.append(read_ledger(path, ROUTER_LEDGER_KEYS))
+        gcs = read_ledger(self.ledger_paths[GCS_LABEL], GCS_LEDGER_KEYS)
+        self.radio_ledger = read_ledger(self.ledger_paths[LINK_LABEL],
+                                        ("node", "transmissions"))
+        self.router_ledgers = routers
+        self.delivery = delivery_from_ledgers(routers, gcs)
+        return self.delivery
 
     # ---------------------------------------------------------------- loop
     def fly_scenario(self):
@@ -1350,7 +1577,7 @@ class Harness:
                 f"what every `_s` field in the record is measured in, so a run "
                 f"without it has nothing to write down.", EXIT_CHILD)
 
-        if self.spec is not None:
+        if self.measured:
             self.clock.subscribe_metrics(self._on_metrics)
 
         self.injector = EventInjector(
@@ -1501,7 +1728,7 @@ class Harness:
         return self._spawn_cache
 
     @staticmethod
-    def _vehicle_metrics(vehicle, spawn):
+    def _vehicle_metrics(vehicle, spawn, station_gap_m=None):
         """What one vehicle did, in enough detail to argue with.
 
         The altitude the takeoff was commanded against is in here beside the
@@ -1531,6 +1758,8 @@ class Harness:
             "home_alt_m": vehicle.home_alt,
             "global_alt_m": vehicle.global_alt,
             "z_at_arm_m": vehicle.z_ground,
+            "final_x_m": vehicle.x,
+            "final_y_m": vehicle.y,
             "final_z_m": vehicle.z,
             "final_landed_state": vehicle.landed_state,
             "preparation_state": vehicle.state,
@@ -1546,6 +1775,13 @@ class Harness:
             "offboard_reason": vehicle.offboard_reason,
             "cruise_param_confirmed": vehicle.cruise_param_confirmed,
             "main_mode_at_end": vehicle.mode_name(),
+            # Chunk 3.4. How far this vehicle finished from the station the
+            # scenario freezes, in metres, or None for a run that names no
+            # stations. The whole relay claim is a claim about where these
+            # four stood, so the record says where they actually were rather
+            # than only that the run was allowed to start.
+            "station_gap_m": (None if station_gap_m is None
+                              else round(station_gap_m, 2)),
         }
 
     def metrics(self):
@@ -1562,19 +1798,30 @@ class Harness:
             "preparation_seconds_wall": round(self.prep_seconds, 1),
             "bring_up_attempts": self.bring_up_attempts,
             "vehicles_requested": len(self.scenario.vehicles),
-            "by_vehicle": {v.name: self._vehicle_metrics(v, self.spawn_of(v.name))
-                           for v in self.vehicles},
+            "by_vehicle": {
+                v.name: self._vehicle_metrics(v, self.spawn_of(v.name),
+                                              self._station_gap(v))
+                for v in self.vehicles},
             "app_packets_note": (
-                "empty on purpose. Nothing counts application packets until "
-                "the link layer exists in week 3. A surveying run's mission "
-                "executors publish observations on their own tx endpoints and "
-                "no process carries them anywhere, so a row of zeros would "
-                "claim four senders whose packets were never delivered by "
-                "anything."),
+                "empty on purpose. This scenario runs no radio, so its "
+                "mission executors publish observations on their own tx "
+                "endpoints and no process carries them anywhere. A row of "
+                "zeros would claim four senders whose packets were never "
+                "delivered by anything."
+                if self.comms is None else
+                "counted by each vehicle's own router and delivered to the "
+                "ground station over hops the link model drew. The "
+                "denominator comes from the origins and never from the "
+                "destination."),
             "resource_probe": getattr(self.sampler, "probe_source", None),
             "survey": self.spec.as_record() if self.spec is not None else None,
+            "comms": self.comms.as_record() if self.comms is not None else None,
+            "station_ingress_wall_s": round(self.station_seconds, 1),
+            "station_radius_m": STATION_RADIUS_M,
+            "radio": getattr(self, "radio_ledger", None),
+            "routers": getattr(self, "router_ledgers", None),
             "mission_started_wall_s": self.mission_started_wall,
-            "metrics_topic": METRICS_TOPIC if self.spec is not None else None,
+            "metrics_topic": METRICS_TOPIC if self.measured else None,
             "metrics_messages": self.metrics_messages,
             "metrics_final_received": self.metrics_final,
             "metrics_foreign_messages": self.metrics_foreign,
@@ -1734,6 +1981,16 @@ def run(options):
             raise HarnessFailure(f"the collector's payload does not hold up: "
                                  f"{exc}", EXIT_ARTIFACT) from exc
 
+    # Chunk 3.4. The delivery numbers come off the files the routers and the
+    # ground station wrote as they shut down, read only now that every one of
+    # them has exited. A ledger read while its node was still running would
+    # be a count of part of the run reported as the whole of it.
+    try:
+        delivery = harness.read_delivery()
+    except CommsError as exc:
+        raise HarnessFailure(f"the delivery ledgers do not hold up: {exc}",
+                             EXIT_ARTIFACT) from exc
+
     try:
         record = run_record.build_record(
             run_id=run_id,
@@ -1748,9 +2005,14 @@ def run(options):
             pose_sample_count=sum(v.samples for v in harness.vehicles),
             versions=versions,
             metrics=harness.metrics(),
-            # No swarm node exists in week 1. See metrics.app_packets_note.
-            app_packets_sent_by_node={},
-            app_packets_delivered_by_node={},
+            # Empty for a scenario with no radio. See
+            # metrics.app_packets_note, which says which case this run is.
+            app_packets_sent_by_node=(
+                {} if delivery is None
+                else delivery["app_packets_sent_by_node"]),
+            app_packets_delivered_by_node=(
+                {} if delivery is None
+                else delivery["app_packets_delivered_by_node"]),
             injected_events=harness.injector.records(),
             requested_duration_s=float(scenario.duration_s),
             elapsed_sim_s=round(harness.elapsed_s, 3),
@@ -1765,6 +2027,7 @@ def run(options):
             injected_event_count=harness.injector.count_observed(),
             graph_snapshot_sha256=graph_sha,
             coverage=coverage,
+            delivery=delivery,
         )
     except run_record.RecordError as exc:
         raise HarnessFailure(f"the run record does not hold up: {exc}",
@@ -1795,6 +2058,17 @@ def run(options):
               f"{coverage['coverage_source']}, "
               f"{coverage['coverage_cells_seen']} of "
               f"{coverage['coverage_cells_total']} cells", flush=True)
+    if delivery is not None:
+        print(f"  ok    delivery {delivery['delivery_ratio']:.4f} overall",
+              flush=True)
+        for node in sorted(delivery["app_packets_sent_by_node"]):
+            print(f"        {node:6s} "
+                  f"{delivery['app_packets_delivered_by_node'][node]:5d} of "
+                  f"{delivery['app_packets_sent_by_node'][node]:5d} = "
+                  f"{delivery['delivery_ratio_by_node'][node]:.4f}, "
+                  f"hops {delivery['delivered_hops_by_node'].get(node, '-')}, "
+                  f"edges {delivery['delivered_edges_by_node'].get(node, '-')}",
+                  flush=True)
     return EXIT_OK
 
 

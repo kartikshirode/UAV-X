@@ -110,6 +110,19 @@ MIN_DURATION_FRACTION = 0.95
 COVERAGE_FIELDS = ("coverage_fraction", "coverage_source",
                    "coverage_cells_total", "coverage_cells_seen")
 
+# Chunk 3.4. The four fields a run with its radio on carries beside the two
+# packet counts the schema has always required. All four or none, for the
+# same reason coverage is: a ratio with no per node rows cannot be argued
+# with, and rows that do not divide out to the ratio are a record somebody
+# edited.
+#
+# uavx_gcs.ledger decides what these mean and uavx_sim.comms assembles them.
+# What is enforced here is that they agree with each other and with the two
+# packet counts, which is the one thing neither of those can check: it is
+# the writer that has both halves in its hand.
+DELIVERY_FIELDS = ("delivery_ratio", "delivery_ratio_by_node",
+                   "delivered_hops_by_node", "delivered_edges_by_node")
+
 TEMP_PREFIX = ".uavx-record-"
 TEMP_SUFFIX = ".tmp"
 
@@ -465,10 +478,107 @@ def validate_record(record) -> dict:
         problems.append("ended_at is earlier than started_at")
 
     problems += _coverage_problems(record)
+    problems += _delivery_problems(record)
 
     if problems:
         raise RecordError("; ".join(problems))
     return record
+
+
+def _delivery_problems(record) -> list:
+    """The delivery block, agreeing with itself and with the packet counts.
+
+    The gate reads `delivery_ratio`, one row of `delivery_ratio_by_node` and
+    one row of `delivered_hops_by_node`, and every one of those can be right
+    while the record around it is wrong. The checks here are the ones that
+    catch that:
+
+    a ratio that is not delivered over sent, which is the shape of a ratio
+    computed against a denominator the destination supplied;
+    a per node row for a vehicle that sent nothing, which is a fraction of
+    nothing reported as a score;
+    and an edge count under its own forwarder count, which is the two hop
+    numbers having been swapped.
+    """
+    present = [key for key in DELIVERY_FIELDS if key in record]
+    if not present:
+        return []
+    if len(present) != len(DELIVERY_FIELDS):
+        missing = [key for key in DELIVERY_FIELDS if key not in record]
+        return [f"the record carries {', '.join(present)} without "
+                f"{', '.join(missing)}; the delivery block is all four "
+                f"fields or none"]
+
+    problems = []
+    ratio = record.get("delivery_ratio")
+    if not _is_number(ratio) or not 0.0 <= ratio <= 1.0:
+        problems.append(f"delivery_ratio is {ratio!r}, not a number in [0, 1]")
+
+    sent = record.get("app_packets_sent_by_node")
+    delivered = record.get("app_packets_delivered_by_node")
+    if not isinstance(sent, dict) or not isinstance(delivered, dict):
+        # Already reported by the packet count check above. Returning here
+        # keeps this from reporting the same fault a second time in
+        # different words.
+        return problems
+
+    by_node = record.get("delivery_ratio_by_node")
+    if not isinstance(by_node, dict):
+        problems.append(f"delivery_ratio_by_node is {by_node!r}, not an object")
+    else:
+        for node, value in by_node.items():
+            if not _is_number(value) or not 0.0 <= value <= 1.0:
+                problems.append(f"delivery_ratio_by_node[{node!r}] is "
+                                f"{value!r}, not a ratio")
+                continue
+            count = sent.get(node)
+            got = delivered.get(node)
+            if not _is_integer(count) or count < 1:
+                problems.append(
+                    f"delivery_ratio_by_node names {node!r}, which sent "
+                    f"{count!r} packets. A ratio over a zero denominator "
+                    f"reads as a score and is not one")
+                continue
+            if not _is_integer(got):
+                problems.append(f"app_packets_delivered_by_node[{node!r}] is "
+                                f"{got!r}, not a count")
+                continue
+            if abs(value - got / count) > 1e-9:
+                problems.append(
+                    f"delivery_ratio_by_node[{node!r}] is {value!r} and "
+                    f"{got} over {count} is {got / count!r}")
+
+    total_sent = sum(v for v in sent.values() if _is_integer(v))
+    total_got = sum(v for v in delivered.values() if _is_integer(v))
+    if total_sent and _is_number(ratio):
+        if abs(ratio - total_got / total_sent) > 1e-9:
+            problems.append(
+                f"delivery_ratio is {ratio!r} and the rows sum to {total_got} "
+                f"delivered over {total_sent} sent")
+
+    hops = record.get("delivered_hops_by_node")
+    edges = record.get("delivered_edges_by_node")
+    for name, block in (("delivered_hops_by_node", hops),
+                        ("delivered_edges_by_node", edges)):
+        if not isinstance(block, dict):
+            problems.append(f"{name} is {block!r}, not an object")
+            continue
+        for node, value in block.items():
+            if not _is_number(value) or value < 0:
+                problems.append(f"{name}[{node!r}] is {value!r}, not a count")
+            elif node not in sent:
+                problems.append(
+                    f"{name} names {node!r}, which sent nothing in this run. "
+                    f"The destination does not get to invent a sender")
+    if isinstance(hops, dict) and isinstance(edges, dict):
+        for node in sorted(set(hops) & set(edges)):
+            if _is_number(hops[node]) and _is_number(edges[node]):
+                if edges[node] < hops[node]:
+                    problems.append(
+                        f"{node} delivered over {edges[node]} edge(s) through "
+                        f"{hops[node]} forwarder(s); a path cannot have fewer "
+                        f"edges than forwarders on it")
+    return problems
 
 
 def _version_problems(versions) -> list:
@@ -553,17 +663,19 @@ def build_record(*, run_id, scenario_path, scenario_sha256, seed, commit_sha,
                  injected_events, requested_duration_s, elapsed_sim_s,
                  clock_source, source_tree_sha256, resources,
                  injected_event_observed, injected_event_count,
-                 graph_snapshot_sha256=None, coverage=None):
+                 graph_snapshot_sha256=None, coverage=None, delivery=None):
     """Assemble one record and validate it before anybody can write it.
 
     Every argument is keyword only and every one of them is required. A
     positional slot invites passing the scenario hash where the source hash
     goes, and both are 64 hex characters, so nothing downstream would notice.
 
-    `coverage` is the one optional block with content: the four fields
+    `coverage` is one of two optional blocks with content: the four fields
     uavx_sim.survey.coverage_from_payload returns for a run that surveyed,
-    or None for one that did not. They land at the top level of the record
-    because that is where the gate reads them.
+    or None for one that did not. `delivery` is the other, the four fields
+    uavx_sim.comms.delivery_from_ledgers returns for a run that carried
+    traffic. Both land at the top level of the record because that is where
+    the gate reads them.
     """
     record = {
         "run_id": run_id,
@@ -591,6 +703,39 @@ def build_record(*, run_id, scenario_path, scenario_sha256, seed, commit_sha,
     }
     if graph_snapshot_sha256 is not None:
         record["graph_snapshot_sha256"] = graph_snapshot_sha256
+    if delivery is not None:
+        if not isinstance(delivery, dict):
+            raise RecordError(f"delivery is {delivery!r}, not the block the "
+                              f"comms module produces")
+        unknown = sorted(set(delivery) - set(DELIVERY_FIELDS)
+                         - {"app_packets_sent_by_node",
+                            "app_packets_delivered_by_node"})
+        if unknown:
+            raise RecordError(
+                f"delivery carries {', '.join(unknown)}, which the record "
+                f"has no place for. A field nothing validates is a number "
+                f"nothing checks")
+        # The packet counts come out of the same block the ratios were
+        # computed from, and never from a second argument that happened to
+        # be passed alongside. A caller supplying both is held to them
+        # matching, because a numerator computed from one set of counts and
+        # written down beside another is the exact failure the per node rows
+        # exist to make visible.
+        for key in ("app_packets_sent_by_node",
+                    "app_packets_delivered_by_node"):
+            counts = delivery.get(key)
+            if counts is None:
+                continue
+            given = record.get(key)
+            if given and dict(given) != dict(counts):
+                raise RecordError(
+                    f"{key} was passed as {given!r} and the delivery block "
+                    f"holds {counts!r}. The ratios were computed from one of "
+                    f"them and the record would carry the other")
+            record[key] = dict(counts)
+        for key in DELIVERY_FIELDS:
+            if key in delivery:
+                record[key] = delivery[key]
     if coverage is not None:
         if not isinstance(coverage, dict):
             raise RecordError(f"coverage is {coverage!r}, not the four field "

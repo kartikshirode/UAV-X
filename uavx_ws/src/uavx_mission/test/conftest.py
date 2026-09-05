@@ -28,3 +28,17 @@ for extra in (PACKAGE_ROOT,
               REPO / "uavx_ws" / "src" / "uavx_sim"):
     if extra.is_dir() and str(extra) not in sys.path:
         sys.path.insert(0, str(extra))
+
+# Chunk 3.4. uavx_sim.scenario_runner now imports uavx_sim.comms, which
+# imports the ground station's delivery arithmetic and the frozen protocol
+# constants rather than restating either. Reaching POSE_HZ therefore reaches
+# those too, on a checkout with nothing built.
+#
+# Appended, never inserted. Every package here keeps its tests in a `test`
+# directory with an `__init__.py`, so a sibling root ahead of this one on
+# sys.path makes `test` resolve to somebody else's and pytest reports
+# ImportPathMismatchError on a suite that is perfectly fine.
+for sibling in ("uavx_comms", "uavx_gcs"):
+    root = REPO / "uavx_ws" / "src" / sibling
+    if root.is_dir() and str(root) not in sys.path:
+        sys.path.append(str(root))

@@ -520,3 +520,151 @@ def test_the_schema_refuses_a_coverage_label_it_does_not_know(tmp_path):
     done = subprocess.run([sys.executable, VALIDATE_RECORD, str(path)],
                          capture_output=True, text=True)
     assert done.returncode != 0, done.stdout + done.stderr
+
+
+# ------------------------------------------------- the delivery block, W3.4
+# Built per index, never written out. scripts/check_seam.sh counts distinct
+# vehicle endpoint literals per file and that rule covers tests.
+ANCHOR, FAR = VEHICLES[0], VEHICLES[3]
+
+
+def delivery(**overrides):
+    """One relay_required run, as uavx_sim.comms assembles it."""
+    base = {
+        "delivery_ratio": 1.0,
+        "delivery_ratio_by_node": {v: 1.0 for v in VEHICLES},
+        "delivered_hops_by_node": {ANCHOR: 0.0, FAR: 2.0},
+        "delivered_edges_by_node": {ANCHOR: 1.0, FAR: 3.0},
+        "app_packets_sent_by_node": {v: 1200 for v in VEHICLES},
+        "app_packets_delivered_by_node": {v: 1200 for v in VEHICLES},
+    }
+    base.update(overrides)
+    return base
+
+
+def delivered(**overrides):
+    return record(delivery=delivery(**overrides))
+
+
+def test_a_run_with_its_radio_on_carries_delivery_at_the_top_level():
+    rec = delivered()
+    assert rec["delivery_ratio"] == 1.0
+    assert rec["delivery_ratio_by_node"][FAR] == 1.0
+    assert rec["delivered_hops_by_node"][FAR] == 2.0
+    assert rec["app_packets_sent_by_node"][FAR] == 1200
+
+
+def test_a_run_with_no_radio_carries_no_delivery_fields():
+    rec = record()
+    for key in run_record.DELIVERY_FIELDS:
+        assert key not in rec
+
+
+def test_the_gate_s_own_expressions_read_off_a_real_record(tmp_path):
+    """The four the W3 gate asserts, through the checker it actually runs."""
+    path = tmp_path / f"{RUN_ID}.jsonl"
+    write_record(path, delivered())
+    expressions = ("delivery_ratio>=0.95", f"delivery_ratio_by_node.{FAR}>=0.95",
+                   f"delivered_hops_by_node.{FAR}>=2",
+                   f"app_packets_sent_by_node.{FAR}>=1080")
+    arguments = [sys.executable, VALIDATE_RECORD, str(path)]
+    for expression in expressions:
+        arguments += ["--require", expression]
+    done = subprocess.run(arguments, capture_output=True, text=True)
+    assert done.returncode == 0, done.stdout + done.stderr
+    for expression in expressions:
+        assert f"ok    {expression}" in done.stdout
+
+
+def test_the_control_s_expressions_read_off_a_control_record(tmp_path):
+    """direct_only asserts a zero, and a zero has to survive the writer."""
+    rec = record(delivery=delivery(
+        delivery_ratio=0.25,
+        delivery_ratio_by_node={ANCHOR: 1.0, VEHICLES[1]: 0.0,
+                                VEHICLES[2]: 0.0, FAR: 0.0},
+        delivered_hops_by_node={ANCHOR: 0.0},
+        delivered_edges_by_node={ANCHOR: 1.0},
+        app_packets_delivered_by_node={ANCHOR: 1200, VEHICLES[1]: 0,
+                                       VEHICLES[2]: 0, FAR: 0}))
+    path = tmp_path / f"{RUN_ID}.jsonl"
+    write_record(path, rec)
+    arguments = [sys.executable, VALIDATE_RECORD, str(path),
+                 "--require", f"delivery_ratio_by_node.{FAR}==0",
+                 "--require", f"app_packets_sent_by_node.{FAR}>=1080"]
+    done = subprocess.run(arguments, capture_output=True, text=True)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_a_ratio_that_is_not_delivered_over_sent_is_refused():
+    with pytest.raises(RecordError) as caught:
+        delivered(delivery_ratio_by_node={v: 1.0 for v in VEHICLES},
+                  app_packets_delivered_by_node={v: 600 for v in VEHICLES})
+    assert "600 over 1200" in str(caught.value)
+
+
+def test_an_overall_ratio_that_is_not_the_rows_summed_is_refused():
+    with pytest.raises(RecordError) as caught:
+        delivered(delivery_ratio=0.5)
+    assert "the rows sum to" in str(caught.value)
+
+
+def test_a_ratio_for_a_node_that_sent_nothing_is_refused():
+    with pytest.raises(RecordError) as caught:
+        delivered(delivery_ratio_by_node={"uav_9": 1.0},
+                  app_packets_sent_by_node={v: 1200 for v in VEHICLES})
+    assert "zero denominator" in str(caught.value)
+
+
+def test_a_hop_row_for_a_node_that_sent_nothing_is_refused():
+    with pytest.raises(RecordError) as caught:
+        delivered(delivered_hops_by_node={"uav_9": 2.0})
+    assert "invent a sender" in str(caught.value)
+
+
+def test_fewer_edges_than_forwarders_is_refused():
+    with pytest.raises(RecordError) as caught:
+        delivered(delivered_hops_by_node={FAR: 3.0},
+                  delivered_edges_by_node={FAR: 2.0})
+    assert "fewer edges than forwarders" in str(caught.value)
+
+
+def test_a_ratio_outside_zero_to_one_is_refused():
+    for bad in (1.5, -0.1, "1.0", True):
+        with pytest.raises(RecordError):
+            delivered(delivery_ratio=bad)
+
+
+def test_the_delivery_block_is_all_four_fields_or_none():
+    partial = delivery()
+    del partial["delivered_edges_by_node"]
+    with pytest.raises(RecordError) as caught:
+        record(delivery=partial)
+    assert "all four" in str(caught.value)
+
+
+def test_a_field_the_record_has_no_place_for_is_refused():
+    with pytest.raises(RecordError) as caught:
+        record(delivery=dict(delivery(), delivery_ratio_after_recovery=1.0))
+    assert "no place for" in str(caught.value)
+
+
+def test_a_delivery_block_that_is_not_an_object_is_refused():
+    with pytest.raises(RecordError):
+        record(delivery=[("delivery_ratio", 1.0)])
+
+
+def test_packet_counts_passed_beside_a_delivery_block_must_match_it():
+    """The runner passes both. They come from one place or the record lies."""
+    with pytest.raises(RecordError) as caught:
+        build_record(**fields(delivery=delivery(),
+                              app_packets_sent_by_node={v: 900
+                                                        for v in VEHICLES}))
+    assert "would carry the other" in str(caught.value)
+
+
+def test_matching_counts_passed_beside_the_block_are_accepted():
+    rec = build_record(**fields(
+        delivery=delivery(),
+        app_packets_sent_by_node={v: 1200 for v in VEHICLES},
+        app_packets_delivered_by_node={v: 1200 for v in VEHICLES}))
+    assert rec["app_packets_sent_by_node"][FAR] == 1200
