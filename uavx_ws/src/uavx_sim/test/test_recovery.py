@@ -28,10 +28,12 @@ Runs on a clean checkout with nothing built.
 
 import pytest
 
-from uavx_sim.recovery import (RecoveryError, destroyed_by, fault_at,
+from uavx_sim.recovery import (DELIVERY_GAP_S, RecoveryError, delivery_gaps,
+                               destroyed_by, fault_at, handback_block,
                                lost_route, outage_block, outage_window,
-                               ratio_after, recovery_block, reconnect_s,
-                               relay_slot, safety_from_payload)
+                               outages_after, ratio_after, recovery_block,
+                               reconnect_s, relay_slot, route_restored,
+                               safety_from_payload)
 
 VEHICLES = tuple(f"uav_{n}" for n in range(1, 5))
 ANCHOR, RELAY, NEAR, FAR = VEHICLES
@@ -65,6 +67,9 @@ def router(node, minted=(), returned=None, confirmed=None, slot=None,
         "recovered_at": None if confirmed is None else EPOCH + confirmed,
         "relay_slot": slot,
         "unacknowledged_ids": [],
+        "route_status": "route_up",
+        "outages": [],
+        "handback": {},
     }
     row.update(extra)
     return row
@@ -346,3 +351,142 @@ def test_what_the_dead_relay_still_held_is_excused_only_when_it_is_named():
                            destroyed=(RELAY,))
     assert with_it["missing_ids"] == []
     assert with_it["lost_with_vehicle"] == {RELAY: [ident(RELAY, 1)]}
+
+
+# --------------------------------------------------------------- the handback
+# link_loss: uav_2's radio comes back at 240, uav_4 owns the epoch, prepares
+# the relay free path, waits for the destination to acknowledge an observation
+# that arrived on it, and only then releases uav_3.
+PREPARED = [FAR, RELAY, ANCHOR, "gcs"]
+CONFIRMED_AT, RELEASED_AT = 262.0, 262.4
+
+
+def handback(**overrides):
+    row = {"epoch": 1, "epoch_owner": FAR, "staying_member": FAR,
+           "prepared_path": list(PREPARED), "prepared_path_computations": 2,
+           "confirmed_observation_id": ident(FAR, 700),
+           "confirmed_at": EPOCH + CONFIRMED_AT,
+           "release_sender": FAR, "release_at": EPOCH + RELEASED_AT,
+           "relay_role_holder": NEAR}
+    row.update(overrides)
+    return row
+
+
+def steady(first=250.0, last=280.0, step=0.2):
+    """Deliveries at the frozen rate across the handback window."""
+    out = {}
+    when = first
+    index = 1
+    while when <= last:
+        out[ident(FAR, index)] = when
+        when = round(when + step, 3)
+        index += 1
+    return out
+
+
+def handed_back(**overrides):
+    body = {"router_ledgers": routers(**{FAR: {"handback": handback()}}),
+            "gcs_ledger": gcs(steady()), "epoch_s": EPOCH}
+    body.update(overrides)
+    return handback_block(**body)
+
+
+def test_a_run_where_nothing_prepared_a_path_has_no_handback():
+    # relay_kill's relay never comes back, so there is nothing to give back.
+    assert handback_block(routers(), gcs(steady()), EPOCH) is None
+
+
+def test_the_transaction_comes_from_the_node_that_ran_it():
+    got = handed_back()
+    assert got["epoch_owner"] == FAR
+    assert got["reported_by"] == FAR
+    assert got["prepared_path"] == PREPARED
+    assert got["confirmed_at"] == CONFIRMED_AT
+    assert got["release_at"] == RELEASED_AT
+    assert got["confirmed_at"] < got["release_at"]
+
+
+def test_a_path_prepared_and_never_collected_is_refused():
+    # A swarm that parked a vehicle and did not collect it is a result. A
+    # record that omitted it would read like a run that never tried.
+    stalled = handback(confirmed_at=None, release_at=None)
+    with pytest.raises(RecoveryError) as caught:
+        handback_block(routers(**{FAR: {"handback": stalled}}),
+                       gcs(steady()), EPOCH)
+    assert "did not collect it" in str(caught.value)
+
+
+def test_two_nodes_running_one_transaction_is_refused():
+    both = routers(**{FAR: {"handback": handback()},
+                      ANCHOR: {"handback": handback(epoch_owner=ANCHOR)}})
+    with pytest.raises(RecoveryError) as caught:
+        handback_block(both, gcs(steady()), EPOCH)
+    assert "run twice" in str(caught.value)
+
+
+def test_a_handback_missing_a_field_the_schema_requires_is_refused():
+    thin = handback(confirmed_observation_id=None)
+    with pytest.raises(RecoveryError) as caught:
+        handback_block(routers(**{FAR: {"handback": thin}}), gcs(steady()),
+                       EPOCH)
+    assert "confirmed_observation_id" in str(caught.value)
+
+
+# ------------------------------------------------------- what it cost the flow
+def test_an_unbroken_stream_has_no_gaps():
+    assert handed_back()["observation_gap_count"] == 0
+
+
+def test_a_hole_in_the_stream_is_counted():
+    # Break before make: the relay leaves, the path is not carrying yet, and
+    # the destination hears nothing for four seconds.
+    quiet = {i: at for i, at in steady().items()
+             if not 263.0 < at < 267.0}
+    got = handed_back(gcs_ledger=gcs(quiet))
+    assert got["observation_gap_count"] == 1
+
+
+def test_the_gap_is_the_period_the_mesh_uses_to_lose_a_neighbour():
+    assert DELIVERY_GAP_S == 1.0
+    assert handed_back()["observation_gap_s"] == DELIVERY_GAP_S
+
+
+def test_a_window_with_nothing_in_it_is_not_a_clean_handback():
+    with pytest.raises(RecoveryError) as caught:
+        delivery_gaps(gcs(steady()), 300.0, 320.0, EPOCH)
+    assert "carried traffic through" in str(caught.value)
+
+
+# ------------------------------------------------- after the vehicle went back
+def test_an_outage_after_the_release_is_counted():
+    late = routers(**{NEAR: {"outages": [EPOCH + 130.0, EPOCH + 265.0]}})
+    assert outages_after(late, RELEASED_AT, EPOCH) == 1
+
+
+def test_the_outage_that_started_the_whole_thing_is_not_counted_again():
+    late = routers(**{NEAR: {"outages": [EPOCH + 130.0]},
+                      FAR: {"outages": [EPOCH + 130.2]}})
+    assert outages_after(late, RELEASED_AT, EPOCH) == 0
+
+
+def test_a_swarm_that_ended_with_a_route_reports_it_restored():
+    assert route_restored(routers(), KILL_AT, EPOCH) is True
+
+
+def test_a_node_that_ended_disconnected_did_not_restore():
+    broken = routers(**{FAR: {"route_status": "disconnected"}})
+    assert route_restored(broken, KILL_AT, EPOCH) is False
+
+
+def test_a_swarm_that_never_lost_a_route_restored_nothing():
+    intact = routers(**{NEAR: {"route_returned_at": EPOCH + 3.0},
+                        FAR: {"route_returned_at": EPOCH + 3.0}})
+    assert route_restored(intact, KILL_AT, EPOCH) is False
+
+
+def test_the_block_carries_the_handback_when_there_was_one():
+    got = block(router_ledgers=routers(**{FAR: {"handback": handback()}}),
+                gcs_ledger=gcs(steady()))
+    assert got["handback"]["epoch_owner"] == FAR
+    assert got["outage_count_after_release"] == 0
+    assert got["route_restored_after_blackout"] is True

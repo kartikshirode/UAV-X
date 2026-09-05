@@ -9,6 +9,10 @@ questions are harder because every one of them is about time:
     fault_at             when the fault landed, from the injector's own record
     outage_window        when the swarm lost its route and when it had one again
     outage_block         the observations block, over that window
+    handback_block       the transaction that gave the vehicle back, and the
+                         gap in the traffic it cost
+    route_restored       whether the swarm has a route again and kept it
+    outages_after        how many times anything lost its route after a moment
     reconnect_s          how long that took, against the 45 s the gate allows
     relay_slot           where the component sent the mover, from its own file
     ratio_after          what fraction of the traffic minted after the repair
@@ -35,6 +39,7 @@ from __future__ import annotations
 import math
 from typing import Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
+from uavx_comms import params as comms_params
 from uavx_gcs import ledger as led
 from uavx_roles import trace as tr
 
@@ -49,6 +54,25 @@ ROLE_TIME_KEYS = ("granted_at", "arrived_at", "released_at", "lapsed_at",
                   "returned_at")
 
 KILL = "kill"
+
+# What counts as a hole in the delivered stream during a handback.
+#
+# The swarm delivers at the frozen observation rate times the number of
+# origins, which is fifteen a second in the common geometry, so a whole second
+# without one is fifteen consecutive losses rather than a fade. It is also the
+# period the mesh itself uses to decide whether a neighbour is still there,
+# which makes it the shortest gap the design is entitled to call an outage.
+DELIVERY_GAP_S = comms_params.HELLO_PERIOD_S
+
+# The nine fields the schema requires of a handback, and the reason for the
+# object: without timestamps and a named path, break before make and make
+# before break produce identical records. Round 5 finding 1.
+HANDBACK_KEYS = ("epoch", "epoch_owner", "staying_member", "prepared_path",
+                 "confirmed_observation_id", "release_sender", "confirmed_at",
+                 "release_at", "observation_gap_count")
+
+# The times in it, in the node's clock.
+HANDBACK_TIME_KEYS = ("confirmed_at", "release_at")
 
 
 class RecoveryError(ValueError):
@@ -299,6 +323,148 @@ def outage_block(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
         raise RecoveryError(str(exc)) from exc
 
 
+def outages_after(router_ledgers: Sequence[Mapping], since_s: float,
+                  epoch_s: float = 0.0) -> int:
+    """How many times any node declared itself cut off after a moment.
+
+    The handback claim is that giving the vehicle back broke nothing. This is
+    the number that would make it false, and it is counted from the moments
+    the routers wrote down rather than from their state at shutdown, which
+    says only where they ended up.
+    """
+    offset = _offset(epoch_s)
+    start = _number(since_s)
+    if start is None:
+        raise RecoveryError(f"since_s is {since_s!r}, not a time")
+    count = 0
+    for entry in router_ledgers:
+        for when in entry.get("outages") or ():
+            value = _number(when)
+            if value is not None and value - offset > start:
+                count += 1
+    return count
+
+
+def route_restored(router_ledgers: Sequence[Mapping], fault_at_s: float,
+                   epoch_s: float = 0.0) -> bool:
+    """Whether the swarm has a route again and still had one at the end.
+
+    Two things, because either alone is satisfied by a run that does not
+    deserve it. A node that recovered and then lost the route again ends
+    disconnected, and a node that never lost it proves nothing about a
+    recovery.
+    """
+    lost = lost_route(router_ledgers, fault_at_s, epoch_s)
+    if not lost:
+        return False
+    if any(recovered is None for _, recovered in lost.values()):
+        return False
+    return all(entry.get("route_status") == "route_up"
+               for entry in router_ledgers)
+
+
+def delivery_gaps(gcs_ledger: Mapping, start_s: float, end_s: float,
+                  epoch_s: float = 0.0,
+                  gap_s: float = DELIVERY_GAP_S) -> int:
+    """Holes in the delivered stream between two moments.
+
+    The handback is the one transaction in this design that can break a link
+    on purpose, so what it has to be measured on is whether the traffic
+    stopped. Counted at the destination, because that is the only place that
+    knows whether an observation arrived.
+    """
+    offset = _offset(epoch_s)
+    first, last = _number(start_s), _number(end_s)
+    if first is None or last is None:
+        raise RecoveryError(
+            f"the handback window is ({start_s!r}, {end_s!r}) and both ends "
+            f"have to be times")
+    try:
+        arrived = led.delivered_rows(gcs_ledger)
+    except led.LedgerError as exc:
+        raise RecoveryError(str(exc)) from exc
+    times = sorted(when - offset for when in arrived.values()
+                   if first <= when - offset <= last)
+    if not times:
+        # Nothing arrived in the whole window, which is not a gap. It is the
+        # swarm delivering nothing at all, and it has to be visible as that
+        # rather than as a clean handback.
+        raise RecoveryError(
+            f"nothing was delivered between {first:.1f}s and {last:.1f}s, so "
+            f"the handback cannot be said to have carried traffic through")
+    gaps = sum(1 for a, b in zip(times, times[1:]) if b - a > gap_s)
+    if times[0] - first > gap_s:
+        gaps += 1
+    if last - times[-1] > gap_s:
+        gaps += 1
+    return gaps
+
+
+def handback_block(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
+                   epoch_s: float = 0.0,
+                   until_s: Optional[float] = None) -> Optional[dict]:
+    """The transaction that gave the vehicle back, from the node that ran it.
+
+    None when nothing prepared a path, which is every scenario but link_loss
+    and the integrated mission: relay_kill's relay never comes back, so there
+    is nothing to hand anything back to.
+
+    A prepared transaction that did not finish is refused rather than reported
+    as nothing. A swarm that parked a vehicle and never collected it is a
+    result, and a record that omitted it would read like a run where the
+    handback was never attempted.
+    """
+    offset = _offset(epoch_s)
+    traces = [(entry.get("node"), entry["handback"]) for entry in router_ledgers
+              if isinstance(entry.get("handback"), Mapping)
+              and entry["handback"].get("prepared_path")]
+    if not traces:
+        return None
+
+    complete = [(node, row) for node, row in traces
+                if _number(row.get("confirmed_at")) is not None
+                and _number(row.get("release_at")) is not None]
+    if not complete:
+        prepared = ", ".join(str(node) for node, _ in traces)
+        raise RecoveryError(
+            f"{prepared} prepared a path to hand the relay back on and no "
+            f"node has both the confirmation and the release. The swarm "
+            f"parked a vehicle and did not collect it, which is a result and "
+            f"not an absence")
+    if len(complete) > 1:
+        raise RecoveryError(
+            f"{len(complete)} nodes report running the handback: "
+            f"{', '.join(str(node) for node, _ in complete)}. One epoch has "
+            f"one owner, so two means the transaction was run twice")
+
+    node, row = complete[0]
+    out = dict(row)
+    for key in HANDBACK_TIME_KEYS:
+        when = _number(out.get(key))
+        out[key] = None if when is None else round(when - offset, 3)
+    out["reported_by"] = node
+
+    end = _number(until_s)
+    if end is None:
+        try:
+            arrived = led.delivered_rows(gcs_ledger)
+        except led.LedgerError as exc:
+            raise RecoveryError(str(exc)) from exc
+        end = max(arrived.values(), default=out["release_at"]) - offset
+    out["observation_gap_count"] = delivery_gaps(
+        gcs_ledger, out["confirmed_at"], end, epoch_s)
+    out["observation_gap_s"] = DELIVERY_GAP_S
+    out["observation_window_end_s"] = round(end, 3)
+
+    missing = [key for key in HANDBACK_KEYS if out.get(key) is None]
+    if missing:
+        raise RecoveryError(
+            f"the handback {node} reports has no {', '.join(missing)}. Every "
+            f"one of them is in the schema because without it break before "
+            f"make and make before break produce the same record")
+    return out
+
+
 # ------------------------------------------------------------ the assembly
 def _rebased(row: Mapping, offset: float) -> dict:
     out = dict(row)
@@ -335,4 +501,13 @@ def recovery_block(router_ledgers: Sequence[Mapping],
     out["delivery_ratio_after_recovery"] = ratio_after(
         router_ledgers, gcs_ledger, end, epoch_s)
     out["relay_slot"] = relay_slot(router_ledgers)
+
+    # Chunk 4.3. Only a run where the vehicle came back has these.
+    handback = handback_block(router_ledgers, gcs_ledger, epoch_s)
+    if handback is not None:
+        out["handback"] = handback
+        out["outage_count_after_release"] = outages_after(
+            router_ledgers, handback["release_at"], epoch_s)
+    out["route_restored_after_blackout"] = route_restored(
+        router_ledgers, fault_at_s, epoch_s)
     return out
