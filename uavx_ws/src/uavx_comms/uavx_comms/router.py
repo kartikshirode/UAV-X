@@ -527,6 +527,8 @@ class Router:
                 if message is None:
                     continue
             self._send_role(message, now)
+        for message in self.roles.release_when_due(now):
+            self._send_role(message, now)
         if self.roles.check_lease(now):
             self._report(now, "lease_expired")
         if self.roles.abandon_stale_prepare(now):

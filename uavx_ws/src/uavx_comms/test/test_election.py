@@ -468,7 +468,16 @@ def test_the_release_needs_two_computations_then_an_acknowledgement():
                            3.0) == []
     assert machine.current.confirmed_at is None
 
-    release = machine.confirm("uav_4:13", path, 4.0)
+    assert machine.confirm("uav_4:13", path, 4.0) == [], (
+        "the release went out in the callback that confirmed the path, so it "
+        "carries the same clock reading as the confirmation and the record "
+        "cannot show which came first")
+    assert machine.current.confirmed_at == 4.0
+    assert machine.release_when_due(4.0) == [], (
+        "the clock has not moved, so this release would be timestamped at the "
+        "same instant as the confirmation it is supposed to follow")
+
+    release = machine.release_when_due(4.1)
     assert release and release[0]["kind"] == election.RELEASE
     assert release[0]["sender_id"] == "uav_4"
 
@@ -660,3 +669,20 @@ def test_the_owner_stops_renewing_a_lease_for_a_relay_that_has_gone():
     net.run_for(params.ROLE_LEASE_S + 5.0)
     assert owner.roles.epochs[1].open() is False, (
         "epoch 1 never closed, so no later epoch could ever open")
+
+
+def test_only_the_owner_releases_and_only_once():
+    machine, path = owned_epoch_at_prepare()
+    machine.confirm("uav_4:13", path, 4.0)
+    assert machine.release_when_due(4.1)
+    machine.on_message({"kind": election.RELEASE, "epoch": 1,
+                        "sender_id": "uav_4"}, 4.2)
+    assert machine.release_when_due(4.3) == [], (
+        "the epoch is already released, so this is a second release for one "
+        "transaction")
+
+
+def test_nothing_is_released_before_a_path_is_confirmed():
+    machine, _ = owned_epoch_at_prepare()
+    assert machine.release_when_due(9.0) == []
+    assert machine.current.released is False

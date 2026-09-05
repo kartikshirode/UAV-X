@@ -450,10 +450,10 @@ class RoleMachine:
                 now: float) -> List[dict]:
         """The ground station named an id and the path it arrived on.
 
-        Only on that acknowledgement does the owner send RELEASE. An
-        acknowledgement naming a different path is not the confirmation this
-        transaction is waiting for, so it is ignored rather than treated as
-        good enough.
+        Recorded here and released by `release_when_due`, which is the tick
+        after this one at the earliest. An acknowledgement naming a different
+        path is not the confirmation this transaction is waiting for, so it is
+        ignored rather than treated as good enough.
         """
         epoch = self.current
         if epoch is None or not epoch.open() or epoch.owner != self.node_id:
@@ -464,6 +464,26 @@ class RoleMachine:
             return []
         epoch.confirmed_id = observation_id
         epoch.confirmed_at = now
+        return []
+
+    def release_when_due(self, now: float) -> List[dict]:
+        """Let the relay go, on a later reading of the clock than the confirmation.
+
+        The owner sends this the moment it can, and the moment it can is one
+        clock step after it learned the new path was carrying data. Not for
+        the protocol's sake: for the record's. The make-before-break claim is
+        an ordering, /clock advances at 10 Hz on this stack, and two events
+        inside one step of it carry the same timestamp and cannot be shown in
+        order. It costs at most that step of holding a vehicle the swarm has
+        already decided to give back.
+        """
+        epoch = self.current
+        if epoch is None or not epoch.open() or epoch.owner != self.node_id:
+            return []
+        if epoch.confirmed_at is None or epoch.released_at is not None:
+            return []
+        if now <= epoch.confirmed_at:
+            return []
         return [{"kind": RELEASE, "epoch": epoch.number,
                  "sender_id": self.node_id}]
 
