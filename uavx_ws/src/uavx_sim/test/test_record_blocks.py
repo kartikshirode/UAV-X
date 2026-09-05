@@ -244,6 +244,65 @@ def test_a_post_recovery_ratio_outside_zero_to_one_is_refused():
         recovery=recovery(delivery_ratio_after_recovery=1.4))
 
 
+# ----------------------------------------------------------- the handback
+def hand(**overrides):
+    base = {"epoch": 1, "epoch_owner": FAR, "staying_member": FAR,
+            "prepared_path": [FAR, RELAY, ANCHOR, "gcs"],
+            "confirmed_observation_id": f"{FAR}:700",
+            "release_sender": FAR, "confirmed_at": 262.0,
+            "release_at": 262.4, "observation_gap_count": 0}
+    base.update(overrides)
+    return base
+
+
+def test_the_handback_lands_whole():
+    got = built(recovery=recovery(handback=hand()))
+    assert got["handback"]["prepared_path"][0] == FAR
+
+
+def test_a_relay_released_before_the_path_was_confirmed_is_refused():
+    assert "let go and then looked" in refused(
+        recovery=recovery(handback=hand(confirmed_at=263.0)))
+
+
+def test_the_vehicle_being_released_cannot_own_the_transaction():
+    # Round 6 finding 7. The owner is the member that stays.
+    assert "round 6 finding 7" in refused(
+        recovery=recovery(relay_role_holder=FAR, handback=hand()))
+
+
+def test_a_path_that_runs_through_the_relay_is_not_a_handback_path():
+    through = hand(prepared_path=[FAR, NEAR, ANCHOR, "gcs"])
+    assert "needs the relay" in refused(recovery=recovery(handback=through))
+
+
+def test_a_handback_with_no_times_is_refused():
+    assert "came before the second" in refused(
+        recovery=recovery(handback=hand(confirmed_at=None)))
+
+
+def test_a_gap_count_that_is_not_a_count_is_refused():
+    assert "not a count" in refused(
+        recovery=recovery(handback=hand(observation_gap_count=-1)))
+
+
+def test_the_two_link_loss_flags_ride_with_the_recovery():
+    got = built(recovery=recovery(route_restored_after_blackout=True,
+                                  outage_count_after_release=0))
+    assert got["route_restored_after_blackout"] is True
+    assert got["outage_count_after_release"] == 0
+
+
+def test_a_restoration_flag_that_is_not_a_flag_is_refused():
+    assert "not a flag" in refused(
+        recovery=recovery(route_restored_after_blackout="yes"))
+
+
+def test_an_outage_count_that_is_not_a_count_is_refused():
+    assert "not a count" in refused(
+        recovery=recovery(outage_count_after_release=-2))
+
+
 def test_the_relay_slot_and_the_handback_ride_with_the_recovery():
     slot = {"commanded": [317.3, -36.8, 75.0], "clearance_m": 52.4,
             "band_reserved": True}

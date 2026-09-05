@@ -644,6 +644,68 @@ def _observation_problems(record) -> list:
     return problems
 
 
+def _handback_problems(record) -> list:
+    """The transaction that gave a vehicle back, against itself.
+
+    Round 5 finding 1: without timestamps and a named path, break before make
+    and make before break produce identical records. The schema types the
+    fields and cannot say that the confirmation came first, that the node
+    running the transaction was not the one being handed back, or that the
+    path it prepared did not run through the vehicle it was preparing to
+    release.
+    """
+    block = record.get("handback")
+    if block is None:
+        return []
+    if not isinstance(block, dict):
+        return [f"handback is {block!r}, not the transaction the epoch owner "
+                f"recorded"]
+
+    problems = []
+    confirmed = _number_or_none(block.get("confirmed_at"))
+    released = _number_or_none(block.get("release_at"))
+    if confirmed is None or released is None:
+        problems.append(
+            "the handback has no confirmation time or no release time, and "
+            "the claim it exists to carry is that the first came before the "
+            "second")
+        return problems
+    if confirmed >= released:
+        problems.append(
+            f"the path was confirmed at {confirmed} and the relay was "
+            f"released at {released}. Make before break means the new path "
+            f"carried data first, and this is the record of a swarm that let "
+            f"go and then looked")
+
+    owner = block.get("epoch_owner")
+    holder = record.get("relay_role_holder")
+    if owner and holder and owner == holder:
+        problems.append(
+            f"{owner} owns the epoch and holds the relay role. The owner is "
+            f"the member that stays, and a vehicle running the transaction "
+            f"that releases itself is round 6 finding 7")
+    path = block.get("prepared_path")
+    if not isinstance(path, (list, tuple)) or not path:
+        problems.append(
+            f"the handback prepared {path!r}, and a path is what the "
+            f"traffic moved onto before the relay left")
+    elif holder and holder in path:
+        problems.append(
+            f"the prepared path {list(path)} runs through {holder}, which is "
+            f"the vehicle being released. A route that needs the relay is not "
+            f"a route to hand the relay back on")
+
+    gaps = block.get("observation_gap_count")
+    if isinstance(gaps, bool) or not isinstance(gaps, int) or gaps < 0:
+        problems.append(
+            f"handback.observation_gap_count is {gaps!r}, not a count")
+    return problems
+
+
+def _number_or_none(value):
+    return value if _is_number(value) else None
+
+
 def _recovery_problems(record) -> list:
     """The role transfer, all six fields or none, and the holder that flew."""
     present = [key for key in RECOVERY_FIELDS if key in record]
@@ -678,6 +740,18 @@ def _recovery_problems(record) -> list:
             "the mover returned to its station and the role was never "
             "released. A vehicle that flew home while still holding the "
             "relay has abandoned the link rather than handed it back")
+
+    restored = record.get("route_restored_after_blackout")
+    if restored is not None and not isinstance(restored, bool):
+        problems.append(
+            f"route_restored_after_blackout is {restored!r}, not a flag")
+    after = record.get("outage_count_after_release")
+    if after is not None and (isinstance(after, bool)
+                              or not isinstance(after, int) or after < 0):
+        problems.append(
+            f"outage_count_after_release is {after!r}, not a count")
+
+    problems += _handback_problems(record)
 
     reconnect = record.get("time_to_reconnect_s")
     if not _is_number(reconnect) or reconnect < 0:
@@ -977,10 +1051,10 @@ def build_record(*, run_id, scenario_path, scenario_sha256, seed, commit_sha,
         for key in RECOVERY_FIELDS:
             if key in recovery:
                 record[key] = recovery[key]
-        if "relay_slot" in recovery:
-            record["relay_slot"] = recovery["relay_slot"]
-        if "handback" in recovery:
-            record["handback"] = recovery["handback"]
+        for key in ("relay_slot", "handback", "route_restored_after_blackout",
+                    "outage_count_after_release"):
+            if key in recovery:
+                record[key] = recovery[key]
     return validate_record(record)
 
 
