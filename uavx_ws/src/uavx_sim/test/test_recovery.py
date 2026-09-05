@@ -28,11 +28,13 @@ Runs on a clean checkout with nothing built.
 
 import pytest
 
-from uavx_sim.recovery import (DELIVERY_GAP_S, RecoveryError, delivery_gaps,
+from uavx_sim.recovery import (COMMAND_TOLERANCE_S, DELIVERY_GAP_S,
+                               RecoveryError, commanded_window, delivery_gaps,
                                destroyed_by, fault_at, handback_block,
                                lost_route, outage_block, outage_window,
-                               outages_after, ratio_after, recovery_block,
-                               reconnect_s, relay_slot, route_restored,
+                               outages_after, radio_confirms, ratio_after,
+                               recovery_block, reconnect_s, relay_slot,
+                               route_restored, route_return_s,
                                safety_from_payload, targets_of)
 
 VEHICLES = tuple(f"uav_{n}" for n in range(1, 5))
@@ -595,7 +597,10 @@ def test_the_drain_is_the_one_the_outage_caused():
     assert got["backlog_drain_s"] == pytest.approx(
         RETURNED[FAR] + 0.9 - RETURNED[FAR])
     assert got["drain_by_node"][NEAR] == pytest.approx(RETURNED[NEAR] + 1.2)
-    assert RELAY not in got["drain_by_node"]
+    # The gated vehicle's own store, two minutes later, is still a fact about
+    # the run. It is out of the bound and in the record.
+    assert got["drain_counted_for"] == sorted([NEAR, FAR])
+    assert got["drain_by_node"][RELAY] == pytest.approx(GATED_BACK + 3.0)
 
 
 def test_a_route_that_came_back_and_never_drained_is_refused():
@@ -649,3 +654,179 @@ def test_the_block_measures_a_blackout_over_the_members_it_cut_off():
                 exclude=(RELAY,))
     assert got["time_to_reconnect_s"] <= 45.0
     assert got["route_restored_after_blackout"] is True
+
+
+# ------------------------------------------------------ the commanded window
+#
+# queue_drain: the radio is gated at 60 and lifts its own gate at 105, which
+# is the 45 seconds the 512 packet queue is sized against. Nothing shortens
+# it, because the election is off, so the route comes back a moment after the
+# radio does rather than a moment after a relay reaches its slot.
+DRAIN_AT, DRAIN_LIFT = 60.0, 105.0
+DRAIN_SEEN = 61.1
+DRAIN_BACK = 106.5
+
+
+def drained_routers(**overrides):
+    """The four vehicles of a run nothing was allowed to rescue."""
+    out = [
+        router(ANCHOR, [(ident(ANCHOR, 1), 70.0)], returned=3.0, confirmed=5.0,
+               drained=3.1),
+        router(RELAY, [(ident(RELAY, 1), 70.0)], returned=DRAIN_BACK + 0.2,
+               confirmed=DRAIN_BACK + 3.2, drained=DRAIN_BACK + 0.4),
+        router(NEAR, [(ident(NEAR, 1), 70.0)], returned=DRAIN_BACK,
+               confirmed=DRAIN_BACK + 3.0, drained=DRAIN_BACK + 1.3),
+        router(FAR, [(ident(FAR, 1), 70.1)], returned=DRAIN_BACK,
+               confirmed=DRAIN_BACK + 3.0, drained=DRAIN_BACK + 1.1),
+    ]
+    by_node = {row["node"]: row for row in out}
+    for node, changes in overrides.items():
+        by_node[node].update(changes)
+    return out
+
+
+def radio(gated=DRAIN_AT + 0.1, lifted=DRAIN_LIFT + 0.1):
+    """The link layer's own file, in its own clock."""
+    return {"node": "link_layer", "transmissions": 4000,
+            "blackout_started_at": None if gated is None else EPOCH + gated,
+            "blackout_restored_at": None if lifted is None else EPOCH + lifted}
+
+
+def drain_events(**overrides):
+    row = {"type": "comms_blackout", "target": RELAY, "requested_t": DRAIN_AT,
+           "observed_t": DRAIN_SEEN, "restore_at_s": DRAIN_LIFT}
+    row.update(overrides)
+    return [row]
+
+
+def test_a_kill_commands_no_window():
+    # It has no end. The vehicle is gone, and the run's own arithmetic is the
+    # only thing that says when the swarm got over it.
+    assert commanded_window(events()) is None
+    assert commanded_window([]) is None
+
+
+def test_a_blackout_commands_the_window_it_was_given():
+    assert commanded_window(drain_events()) == (DRAIN_AT, DRAIN_LIFT)
+    assert commanded_window(blackout_events()) == (120.0, 240.0)
+
+
+def test_a_blackout_nobody_saw_land_commands_nothing():
+    assert commanded_window(drain_events(observed_t=None)) is None
+
+
+def test_a_blackout_with_no_end_commands_nothing():
+    assert commanded_window(drain_events(restore_at_s=None)) is None
+
+
+def test_the_radio_has_to_say_it_gated_itself_when_it_was_told_to():
+    got = radio_confirms(radio(), (DRAIN_AT, DRAIN_LIFT), EPOCH, DRAIN_BACK)
+    assert got["radio_gated_at_s"] == pytest.approx(DRAIN_AT + 0.1)
+    assert got["radio_restored_at_s"] == pytest.approx(DRAIN_LIFT + 0.1)
+
+
+def test_a_radio_that_gated_itself_somewhere_else_is_refused():
+    late = radio(gated=DRAIN_AT + COMMAND_TOLERANCE_S + 1.0)
+    with pytest.raises(RecoveryError) as caught:
+        radio_confirms(late, (DRAIN_AT, DRAIN_LIFT), EPOCH, DRAIN_BACK)
+    assert "describing different faults" in str(caught.value)
+
+
+def test_a_radio_that_never_gated_anything_is_refused():
+    with pytest.raises(RecoveryError) as caught:
+        radio_confirms(radio(gated=None), (DRAIN_AT, DRAIN_LIFT), EPOCH,
+                       DRAIN_BACK)
+    assert "no record of gating" in str(caught.value)
+
+
+def test_a_commanded_window_with_no_radio_file_is_refused():
+    """Otherwise the two numbers in the record are the two somebody typed."""
+    with pytest.raises(RecoveryError) as caught:
+        radio_confirms(None, (DRAIN_AT, DRAIN_LIFT), EPOCH, DRAIN_BACK)
+    assert "no radio ledger" in str(caught.value)
+
+
+def test_a_gate_that_never_lifted_and_nothing_outlasted_is_refused():
+    # The run ended inside its own outage. There is no window to report.
+    with pytest.raises(RecoveryError) as caught:
+        radio_confirms(radio(lifted=None), (DRAIN_AT, DRAIN_LIFT), EPOCH,
+                       None)
+    assert "never ended" in str(caught.value)
+
+
+def test_a_swarm_that_reconnected_before_the_hold_ran_out_keeps_its_own_end():
+    """link_loss. The relay reaches the slot a hundred seconds early.
+
+    The command is a ceiling on the window and never the window itself, or a
+    run that fixed itself in 20 seconds would report a two minute outage.
+    """
+    start, end = outage_window(blacked_out(), KILL_AT, EPOCH, exclude=(RELAY,),
+                               commanded=(120.0, 240.0))
+    assert start == 120.0
+    assert end == pytest.approx(RETURNED[FAR])
+
+
+def test_the_hold_closes_the_window_when_nothing_else_did():
+    """queue_drain. The route comes back 1.5 s after the radio does.
+
+    Those 1.5 seconds are the mesh hearing the neighbour again and the link
+    state travelling, which is the swarm noticing the fault ended rather than
+    any part of the fault. A window measured to them reports 46.5 s of an
+    outage that was commanded for 45.
+    """
+    start, end = outage_window(drained_routers(), DRAIN_SEEN, EPOCH,
+                               exclude=(RELAY,),
+                               commanded=(DRAIN_AT, DRAIN_LIFT))
+    assert (start, end) == (DRAIN_AT, DRAIN_LIFT)
+    assert route_return_s(drained_routers(), DRAIN_SEEN, EPOCH,
+                          exclude=(RELAY,)) == pytest.approx(DRAIN_BACK)
+
+
+def test_without_a_command_both_ends_are_still_measured():
+    start, end = outage_window(routers(), KILL_AT, EPOCH)
+    assert (start, end) == (KILL_AT, pytest.approx(RETURNED[FAR]))
+
+
+def drain_block(**kwargs):
+    delivered = {ident(ANCHOR, 1): 70.4, ident(RELAY, 1): 108.0,
+                 ident(NEAR, 1): 108.0, ident(FAR, 1): 108.0}
+    body = {"router_ledgers": drained_routers(), "gcs_ledger": gcs(delivered),
+            "fault_at_s": DRAIN_SEEN, "epoch_s": EPOCH, "exclude": (RELAY,),
+            "commanded": (DRAIN_AT, DRAIN_LIFT), "radio_ledger": radio()}
+    body.update(kwargs)
+    return outage_block(**body)
+
+
+def test_the_drain_is_measured_from_the_route_coming_back():
+    """The outage ends when the fault lifts and the queue empties later.
+
+    A queue has somewhere to empty into when the route returns, so the bound
+    the gate reads against 2.25 s is measured from there. Measuring it from
+    the end of the outage would charge the mesh's reconvergence to the
+    forward rate.
+    """
+    got = drain_block()
+    assert got["outage_start_s"] == DRAIN_AT
+    assert got["outage_end_s"] == DRAIN_LIFT
+    assert got["drain_start_s"] == pytest.approx(DRAIN_BACK)
+    assert got["backlog_drain_s"] == pytest.approx(1.3)
+    assert got["generated_during_outage"] == 4
+
+
+def test_the_block_says_which_of_the_two_ended_the_outage():
+    assert drain_block()["outage_end_source"] == "fault_lifted"
+
+    delivered = {ident(ANCHOR, 1): 200.4, ident(RELAY, 1): 100.4,
+                 ident(NEAR, 1): 200.4, ident(FAR, 1): 200.4}
+    early = outage_block(blacked_out(), gcs(delivered), KILL_AT, EPOCH,
+                         exclude=(RELAY,), commanded=(120.0, 240.0),
+                         radio_ledger=radio(gated=120.1, lifted=240.1))
+    assert early["outage_end_source"] == "route_returned"
+
+
+def test_the_block_reports_the_moments_the_window_is_not_taken_from():
+    got = drain_block()
+    assert got["outage_observed_s"] == pytest.approx(DRAIN_SEEN)
+    assert got["radio_gated_at_s"] == pytest.approx(DRAIN_AT + 0.1)
+    assert got["radio_restored_at_s"] == pytest.approx(DRAIN_LIFT + 0.1)
+

@@ -8,7 +8,11 @@ questions are harder because every one of them is about time:
     destroyed_by         which vehicles this run killed and watched die
     targets_of           which vehicles a fault was applied to at all
     fault_at             when the fault landed, from the injector's own record
-    outage_window        when the swarm lost its route and when it had one again
+    commanded_window     the window a blackout was commanded for, if any
+    radio_confirms       the radio's own account of that command, against it
+    route_return_s       when the last cut off node had a route again
+    outage_window        when the swarm lost its route and when it stopped
+                         being cut off
     outage_block         the observations block, over that window
     handback_block       the transaction that gave the vehicle back, and the
                          gap in the traffic it cost
@@ -61,6 +65,17 @@ ROLE_TIME_KEYS = ("granted_at", "arrived_at", "released_at", "lapsed_at",
                   "returned_at")
 
 KILL = "kill"
+COMMS_BLACKOUT = "comms_blackout"
+
+# How far the radio's own record of a commanded fault may sit from the moment
+# it was commanded for.
+#
+# The injector fires on its own poll of simulated time, the command travels to
+# the radio over a ROS service, and the radio applies it on its next tick of a
+# 10 Hz clock. Two seconds covers all three with room to spare. Past that the
+# run and its own scenario disagree about when the fault happened, and a
+# window taken from the scenario would be describing a different run.
+COMMAND_TOLERANCE_S = 2.0
 
 # What counts as a hole in the delivered stream during a handback.
 #
@@ -169,6 +184,83 @@ def targets_of(events: Iterable[Mapping]) -> Tuple[str, ...]:
     return tuple(sorted(out))
 
 
+def commanded_window(events: Iterable[Mapping]) -> Optional[Tuple[float, float]]:
+    """The window a blackout was commanded for, or None if nothing declared one.
+
+    Only a comms_blackout has one. A kill has no end: the vehicle is gone and
+    the run's own arithmetic is the only thing that says when the swarm got
+    over it.
+    """
+    windows = []
+    for row in events or ():
+        if not isinstance(row, Mapping) or row.get("type") != COMMS_BLACKOUT:
+            continue
+        if _number(row.get("observed_t")) is None:
+            continue
+        start = _number(row.get("requested_t"))
+        restore = _number(row.get("restore_at_s"))
+        if start is None or restore is None:
+            continue
+        if restore <= start:
+            raise RecoveryError(
+                f"a blackout was commanded at {start} and told to lift at "
+                f"{restore}, which is not a window")
+        windows.append((start, restore))
+    if not windows:
+        return None
+    return min(windows)
+
+
+def radio_confirms(radio_ledger: Optional[Mapping],
+                   commanded: Tuple[float, float], epoch_s: float = 0.0,
+                   returned_at: Optional[float] = None) -> dict:
+    """The radio's own account of a commanded blackout, against the command.
+
+    The window the block reports is the one the run asked for, so the run has
+    to show it happened. The radio writes down when it gated itself and when
+    it lifted the gate, in its own clock, and those are the only two witnesses
+    that are not the thing being measured.
+
+    `returned_at` is when the swarm got its route back. A run that reconnected
+    before the hold ran out is not required to show a restore, because it
+    ended the outage itself and the window closed at the reconnection.
+    """
+    if not isinstance(radio_ledger, Mapping):
+        raise RecoveryError(
+            "the outage window was commanded and there is no radio ledger to "
+            "confirm it with, so the two numbers in the record would be the "
+            "two somebody typed into the scenario")
+    offset = _offset(epoch_s)
+    start, restore = float(commanded[0]), float(commanded[1])
+    gated = _number(radio_ledger.get("blackout_started_at"))
+    lifted = _number(radio_ledger.get("blackout_restored_at"))
+    if gated is None:
+        raise RecoveryError(
+            f"a blackout was commanded at {start:.1f}s and the radio has no "
+            f"record of gating anything. The injector saw the effect and the "
+            f"node that produces it did not")
+    gated -= offset
+    if abs(gated - start) > COMMAND_TOLERANCE_S:
+        raise RecoveryError(
+            f"the blackout was commanded at {start:.1f}s and the radio gated "
+            f"itself at {gated:.1f}s, {abs(gated - start):.1f}s away. Past "
+            f"{COMMAND_TOLERANCE_S:.0f}s the run and its scenario are "
+            f"describing different faults")
+    if lifted is not None:
+        lifted -= offset
+        if abs(lifted - restore) > COMMAND_TOLERANCE_S:
+            raise RecoveryError(
+                f"the blackout was told to lift at {restore:.1f}s and the "
+                f"radio lifted it at {lifted:.1f}s")
+    elif returned_at is None or returned_at >= restore:
+        raise RecoveryError(
+            f"the blackout was told to lift at {restore:.1f}s, the radio "
+            f"never lifted it, and nothing reconnected before then. The "
+            f"outage the record would report never ended")
+    return {"radio_gated_at_s": round(gated, 3),
+            "radio_restored_at_s": None if lifted is None else round(lifted, 3)}
+
+
 def fault_at(events: Iterable[Mapping]) -> float:
     """When the first fault of this run was seen to land, in scenario seconds.
 
@@ -269,14 +361,14 @@ def lost_route(router_ledgers: Sequence[Mapping], after_s: float,
     return out
 
 
-def outage_window(router_ledgers: Sequence[Mapping], fault_at_s: float,
-                  epoch_s: float = 0.0,
-                  exclude: Sequence[str] = ()) -> Tuple[float, float]:
-    """When the swarm lost its route, and when the last cut off node had one.
+def route_return_s(router_ledgers: Sequence[Mapping], fault_at_s: float,
+                   epoch_s: float = 0.0,
+                   exclude: Sequence[str] = ()) -> float:
+    """When the last node the fault cut off had a route again.
 
-    The end is `route_returned_at` rather than the confirmed recovery, because
-    it is the moment a queue had somewhere to drain to. The confirmation is
-    one stability window later and is what the reconnect time is measured to.
+    `route_returned_at` rather than the confirmed recovery, because it is the
+    moment a queue had somewhere to drain to. The confirmation is one
+    stability window later and is what the reconnect time is measured to.
     """
     lost = lost_route(router_ledgers, fault_at_s, epoch_s, exclude)
     if not lost:
@@ -285,8 +377,35 @@ def outage_window(router_ledgers: Sequence[Mapping], fault_at_s: float,
             "Either the fault removed a vehicle nothing was routing through, "
             "or the mesh never noticed, and an outage window taken from the "
             "scenario instead would be a window nothing measured")
-    end = max(row["returned_at"] for row in lost.values())
-    return float(fault_at_s), end
+    return max(row["returned_at"] for row in lost.values())
+
+
+def outage_window(router_ledgers: Sequence[Mapping], fault_at_s: float,
+                  epoch_s: float = 0.0,
+                  exclude: Sequence[str] = (),
+                  commanded: Optional[Tuple[float, float]] = None
+                  ) -> Tuple[float, float]:
+    """When the swarm lost its route, and when it stopped being cut off.
+
+    Without a commanded window both ends are measured: a kill has no end
+    somebody typed, so the outage runs from the moment the fault landed to the
+    moment the last cut off node had a route again.
+
+    With one, the outage opens when the command landed and closes at whichever
+    came first, the route coming back or the command lifting the fault. The
+    reconnection wins in link_loss, where the swarm flies a relay into the gap
+    a hundred seconds before the radio returns, and the command wins in
+    queue_drain, where elections are off and the only thing that can end the
+    outage is the radio. Neither end is a number the scenario gets to assert
+    on its own: the first is checked against the radio's own file by
+    `radio_confirms`, and the second is a ceiling, so a swarm that reconnected
+    early shortens the window and fails the duration the queue is sized for.
+    """
+    returned = route_return_s(router_ledgers, fault_at_s, epoch_s, exclude)
+    if commanded is None:
+        return float(fault_at_s), returned
+    start, restore = float(commanded[0]), float(commanded[1])
+    return start, min(returned, restore)
 
 
 def reconnect_s(router_ledgers: Sequence[Mapping], fault_at_s: float,
@@ -384,16 +503,24 @@ def ratio_after(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
 def outage_block(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
                  fault_at_s: float, epoch_s: float = 0.0,
                  destroyed: Sequence[str] = (),
-                 exclude: Sequence[str] = ()) -> dict:
+                 exclude: Sequence[str] = (),
+                 commanded: Optional[Tuple[float, float]] = None,
+                 radio_ledger: Optional[Mapping] = None) -> dict:
     """The observations block for a run with a fault in it.
 
-    The window is measured rather than declared: it opens when the fault was
-    seen to land and closes when the last cut off node had a route again. A
-    window taken from the scenario would be the two numbers somebody typed,
-    and the drain bound the gate reads is the difference between them.
+    See `outage_window` for which of the two ends of the window a commanded
+    blackout gets to name. The drain is measured from the route coming back
+    either way, because that is when a queue first had somewhere to empty
+    into, and it is a later moment than the end of the outage whenever the
+    command was what ended it.
     """
     lost = lost_route(router_ledgers, fault_at_s, epoch_s, exclude)
-    start, end = outage_window(router_ledgers, fault_at_s, epoch_s, exclude)
+    returned = route_return_s(router_ledgers, fault_at_s, epoch_s, exclude)
+    start, end = outage_window(router_ledgers, fault_at_s, epoch_s, exclude,
+                               commanded)
+    radio = {}
+    if commanded is not None:
+        radio = radio_confirms(radio_ledger, commanded, epoch_s, returned)
 
     # The drain of the queues this outage filled, and of nothing else. A
     # store that ran empty on a later episode of the same node's route, or on
@@ -407,12 +534,21 @@ def outage_block(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
             f"empty on it, so there is no moment at which the backlog this "
             f"outage built had finished draining")
     try:
-        return led.observations(
-            router_ledgers, gcs_ledger, start, end, epoch_s=epoch_s,
-            destroyed=destroyed, drain_end_s=max(drained.values()),
-            drain_by_node=drained)
+        block = led.observations(
+            router_ledgers, gcs_ledger, start, end, drain_start_s=returned,
+            epoch_s=epoch_s, destroyed=destroyed,
+            drain_end_s=max(drained.values()), drain_by_node=drained)
     except led.LedgerError as exc:
         raise RecoveryError(str(exc)) from exc
+    # What the fault actually did, beside the window the record reports. The
+    # first is the moment the injector's poll saw the effect, which is up to a
+    # second behind it, and the other two are the radio's own clock.
+    block["outage_observed_s"] = round(float(fault_at_s), 3)
+    block["outage_end_source"] = (
+        "route_returned" if commanded is None or returned <= commanded[1]
+        else "fault_lifted")
+    block.update(radio)
+    return block
 
 
 def outages_after(router_ledgers: Sequence[Mapping], since_s: float,
@@ -589,7 +725,7 @@ def recovery_block(router_ledgers: Sequence[Mapping],
     except ValueError as exc:
         raise RecoveryError(str(exc)) from exc
 
-    _, end = outage_window(router_ledgers, fault_at_s, epoch_s, exclude)
+    end = route_return_s(router_ledgers, fault_at_s, epoch_s, exclude)
     out["time_to_reconnect_s"] = round(
         reconnect_s(router_ledgers, fault_at_s, epoch_s, exclude), 3)
     out["delivery_ratio_after_recovery"] = ratio_after(
