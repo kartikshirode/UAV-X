@@ -8,6 +8,7 @@ questions are harder because every one of them is about time:
     destroyed_by         which vehicles this run killed and watched die
     fault_at             when the fault landed, from the injector's own record
     outage_window        when the swarm lost its route and when it had one again
+    outage_block         the observations block, over that window
     reconnect_s          how long that took, against the 45 s the gate allows
     relay_slot           where the component sent the mover, from its own file
     ratio_after          what fraction of the traffic minted after the repair
@@ -266,8 +267,11 @@ def ratio_after(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
     start = _number(since_s)
     if start is None:
         raise RecoveryError(f"since_s is {since_s!r}, not a time")
-    minted = led.generated_rows(router_ledgers)
-    arrived = set(led.delivered_rows(gcs_ledger))
+    try:
+        minted = led.generated_rows(router_ledgers)
+        arrived = set(led.delivered_rows(gcs_ledger))
+    except led.LedgerError as exc:
+        raise RecoveryError(str(exc)) from exc
     after = [i for i, when in minted.items() if when - offset >= start]
     if not after:
         raise RecoveryError(
@@ -275,6 +279,24 @@ def ratio_after(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
             f"delivery ratio would be a fraction of nothing. The run ended "
             f"before the swarm had a chance to show it had recovered")
     return len(set(after) & arrived) / len(after)
+
+
+def outage_block(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
+                 fault_at_s: float, epoch_s: float = 0.0,
+                 destroyed: Sequence[str] = ()) -> dict:
+    """The observations block for a run with a fault in it.
+
+    The window is measured rather than declared: it opens when the fault was
+    seen to land and closes when the last cut off node had a route again. A
+    window taken from the scenario would be the two numbers somebody typed,
+    and the drain bound the gate reads is the difference between them.
+    """
+    start, end = outage_window(router_ledgers, fault_at_s, epoch_s)
+    try:
+        return led.observations(router_ledgers, gcs_ledger, start, end,
+                                epoch_s=epoch_s, destroyed=destroyed)
+    except led.LedgerError as exc:
+        raise RecoveryError(str(exc)) from exc
 
 
 # ------------------------------------------------------------ the assembly
