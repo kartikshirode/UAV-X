@@ -91,8 +91,20 @@ run_step "colcon build into a fresh prefix" \
     --build-base "${TARGET}/build" --install-base "${TARGET}/install" \
     --symlink-install
 
-run_step "the built overlay sources" \
-  bash -c "set -u; . '${TARGET}/install/setup.bash'; command -v ros2 >/dev/null"
+# Not `set -u`. colcon's setup.bash has never been `set -u` clean, and this
+# step asserted that it was: it exited 127 on COLCON_TRACE being unbound,
+# against a build that had just finished cleanly. gate-env.sh has carried
+# uavx_source for this since week 1 and this is the one place that did not
+# use it.
+#
+# And it asserts what its name claims while it is here. Finding `ros2` after
+# sourcing an overlay proves the underlay is on the path, not that anything
+# in this workspace landed where `ros2 run` looks. Chunk 3.1 shipped a
+# package whose console script installed to bin/ rather than to
+# lib/<package>/, with every test green, and the old step would have passed
+# it. Every executable the frozen scenarios invoke is checked by name.
+run_step "the built overlay sources and every executable is where ros2 run looks" \
+  bash "${UAVX_REPO}/scripts/check_overlay.sh" "${TARGET}/install"
 
 run_step "colcon test in the fresh prefix" \
   colcon test --base-paths "${UAVX_WS_SRC}" \
