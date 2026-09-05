@@ -31,6 +31,7 @@ import pytest
 from uavx_sim.comms import (CommsError, comms_spec, delivery_from_ledgers,
                             gcs_command, link_layer_command, read_ledger,
                             router_command, station_node_command)
+from uavx_sim.work import WorkError
 
 # Built per index, never written out. scripts/check_seam.sh counts distinct
 # vehicle endpoint literals per file and that rule covers tests.
@@ -151,9 +152,13 @@ def test_a_station_disagreeing_with_the_climb_is_refused():
 
 
 def test_a_vehicle_with_no_station_is_refused():
+    # Chunk 4.1 moved the reason. A station-keeping scenario is one where
+    # every vehicle's work is a point, so a vehicle left out of the block has
+    # no work at all, and uavx_sim.work says so before the points are read.
+    # The refusal is the same and the message is the more useful one.
     stations = {k: list(v) for k, v in STATIONS.items()}
     del stations[RELAY]
-    with pytest.raises(CommsError, match=RELAY):
+    with pytest.raises(WorkError, match=RELAY):
         comms_spec(block(stations=stations), VEHICLES, ALTITUDES)
 
 

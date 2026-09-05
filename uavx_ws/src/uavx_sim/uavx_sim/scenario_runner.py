@@ -98,6 +98,7 @@ from uavx_sim.graph_snapshot import (CaptureFailed, IncompleteSnapshot,
                                      write_snapshot)
 from uavx_sim.resource_sampler import ResourceSampler, ResourceSamplerError
 from uavx_sim.scenario import ScenarioError
+from uavx_sim.work import WorkError
 from uavx_sim.scenario import load as load_scenario
 from uavx_sim import video
 from uavx_sim.survey import (CRUISE_SPEED_PARAM, SurveyError,
@@ -1048,7 +1049,7 @@ class Harness:
             self.comms = comms_spec(
                 scenario.raw, list(scenario.vehicles),
                 scenario.raw.get("hover_altitudes_m") or {})
-        except CommsError as exc:
+        except (CommsError, WorkError) as exc:
             raise HarnessFailure(str(exc), EXIT_ARGS) from exc
         # Chunk 3.6. Set only for a recording run, and the whole of the
         # capture state, so a run that is not recording carries none of it.

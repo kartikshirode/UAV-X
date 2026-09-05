@@ -46,6 +46,7 @@ from uavx_comms import params as comms_params
 from uavx_gcs import ledger as led
 from uavx_mission import frames
 
+from uavx_sim import work
 from uavx_sim.survey import SurveyError, home_of, ros_args
 
 # The three roles a router will start in, as `uavx_comms.router_node` spells
@@ -168,28 +169,41 @@ def comms_spec(raw: Mapping, vehicles: Sequence[str],
             f"not fly. A role for an absent vehicle is a topology this run "
             f"cannot produce")
 
-    stations = _stations(block.get("stations"), vehicles, altitudes)
+    # Who holds a point, and who is busy elsewhere. Weeks 2 and 3 had one
+    # answer per scenario; mission_integrated has two vehicles surveying while
+    # two hold the chain up, and encounter has both of its vehicles flying
+    # lines. work.assignments is what refuses a vehicle with no job and a
+    # vehicle with two, and it runs before the points are read so a
+    # contradiction is reported as a contradiction rather than as a missing
+    # station.
+    jobs = work.assignments(raw, vehicles, altitudes)
+    held = tuple(v for v in vehicles if jobs[v] == work.STATION)
+    stations = _stations(block.get("stations"), vehicles, altitudes, held)
     return CommsSpec(forwarding=bool(block["forwarding"]),
                      elections_enabled=bool(block["elections_enabled"]),
                      roles={v: str(roles[v]) for v in vehicles},
                      stations=stations)
 
 
-def _stations(block, vehicles: Sequence[str],
-              altitudes: Mapping) -> Dict[str, Tuple[float, float, float]]:
-    """Where every vehicle stands, checked against the climb it was given.
+def _stations(block, vehicles: Sequence[str], altitudes: Mapping,
+              held: Sequence[str]) -> Dict[str, Tuple[float, float, float]]:
+    """Where the station-keeping vehicles stand, against the climb they got.
 
     The altitude appears twice in a scenario, once as the layer the runner
     climbs to and once as the height of the station. They are compared here
     rather than in the node alone, so a disagreement costs a file read and
     not a bring-up.
+
+    `held` is the vehicles whose work is a point. The rest are flying a track
+    or a survey strip and a station for one of them was refused before this
+    function was reached.
     """
     if not isinstance(block, Mapping):
         raise CommsError(
             f"comms.stations is {block!r} and must be a mapping of vehicle "
             f"id to an x, y, z in the frozen frame")
     out: Dict[str, Tuple[float, float, float]] = {}
-    for vehicle in vehicles:
+    for vehicle in held:
         point = block.get(vehicle)
         if not isinstance(point, (list, tuple)) or len(point) != 3:
             raise CommsError(
@@ -221,6 +235,18 @@ def _stations(block, vehicles: Sequence[str],
             f"comms.stations names {', '.join(extra)}, which the scenario "
             f"does not fly")
     return out
+
+
+def stations_of(spec: Optional["CommsSpec"], vehicles: Sequence[str]):
+    """The vehicles this run has to fly to a point before the clock starts.
+
+    An empty answer is a real one. `encounter` gives both of its vehicles a
+    track, so nothing holds a station and the ingress gate has nothing to
+    wait for.
+    """
+    if spec is None:
+        return ()
+    return tuple(v for v in vehicles if v in spec.stations)
 
 
 # ------------------------------------------------------------- the ingress
