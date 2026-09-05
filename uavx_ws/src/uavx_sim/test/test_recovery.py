@@ -56,15 +56,29 @@ def ident(node, sequence):
     return f"{node}:{sequence}"
 
 
-def router(node, minted=(), returned=None, confirmed=None, slot=None,
-           **extra):
-    """One router's file, in the node's own clock."""
+def router(node, minted=(), returned=None, confirmed=None, drained=None,
+           slot=None, **extra):
+    """One router's file, in the node's own clock.
+
+    The episodes are the history and the three scalars are the latest of
+    each. Both are written, because a ledger from before chunk 4.3 has only
+    the scalars and the arithmetic still has to read it.
+    """
+    episodes = []
+    if returned is not None:
+        episodes.append({
+            "returned_at": EPOCH + returned,
+            "recovered_at": None if confirmed is None else EPOCH + confirmed,
+            "drained_at": None if drained is None else EPOCH + drained,
+            "lost_at": None})
     row = {
         "node": node,
         "generated_ids": [i for i, _ in minted],
         "generated_at": {i: EPOCH + when for i, when in minted},
         "route_returned_at": None if returned is None else EPOCH + returned,
         "recovered_at": None if confirmed is None else EPOCH + confirmed,
+        "drain_end_at": None if drained is None else EPOCH + drained,
+        "route_episodes": episodes,
         "relay_slot": slot,
         "unacknowledged_ids": [],
         "route_status": "route_up",
@@ -79,16 +93,31 @@ def routers(**overrides):
     """Four vehicles: the near pair connected throughout, the far pair cut off."""
     out = [
         router(ANCHOR, [(ident(ANCHOR, 1), 200.0)], returned=3.0,
-               confirmed=5.0),
-        router(RELAY, [(ident(RELAY, 1), 100.0)], returned=3.0, confirmed=5.0),
+               confirmed=5.0, drained=3.1),
+        router(RELAY, [(ident(RELAY, 1), 100.0)], returned=3.0, confirmed=5.0,
+               drained=3.1),
         router(NEAR, [(ident(NEAR, 1), 200.0)], returned=RETURNED[NEAR],
-               confirmed=CONFIRMED[NEAR], slot=dict(SLOT)),
+               confirmed=CONFIRMED[NEAR], drained=RETURNED[NEAR] + 1.2,
+               slot=dict(SLOT)),
         router(FAR, [(ident(FAR, 1), 200.0)], returned=RETURNED[FAR],
-               confirmed=CONFIRMED[FAR]),
+               confirmed=CONFIRMED[FAR], drained=RETURNED[FAR] + 0.9),
     ]
     by_node = {row["node"]: row for row in out}
     for node, changes in overrides.items():
-        by_node[node].update(changes)
+        row = by_node[node]
+        row.update(changes)
+        # A test that moves one of the scalars means the history moved with
+        # it. Leaving the episode behind would make the fixture describe a
+        # node whose own two records of the same event disagree, which is a
+        # state no run produces.
+        if "route_episodes" not in changes and (
+                set(changes) & {"route_returned_at", "recovered_at",
+                                "drain_end_at"}):
+            row["route_episodes"] = [] if row["route_returned_at"] is None else [
+                {"returned_at": row["route_returned_at"],
+                 "recovered_at": row["recovered_at"],
+                 "drained_at": row["drain_end_at"],
+                 "lost_at": None}]
     return out
 
 
@@ -499,9 +528,19 @@ def test_the_block_carries_the_handback_when_there_was_one():
 GATED_BACK = 245.0
 
 def blacked_out():
-    """The same four vehicles, with the relay gated rather than destroyed."""
-    return routers(**{RELAY: {"route_returned_at": EPOCH + GATED_BACK,
-                              "recovered_at": EPOCH + GATED_BACK + 3.0}})
+    """The same four vehicles, with the relay gated rather than destroyed.
+
+    Its own route comes back when the hold runs out, which is the scenario's
+    timetable rather than the swarm doing anything.
+    """
+    gated = {"route_returned_at": EPOCH + GATED_BACK,
+             "recovered_at": EPOCH + GATED_BACK + 3.0,
+             "drain_end_at": EPOCH + GATED_BACK + 3.0,
+             "route_episodes": [{"returned_at": EPOCH + GATED_BACK,
+                                 "recovered_at": EPOCH + GATED_BACK + 3.0,
+                                 "drained_at": EPOCH + GATED_BACK + 3.0,
+                                 "lost_at": None}]}
+    return routers(**{RELAY: gated})
 
 
 def blackout_events():
@@ -548,19 +587,59 @@ def test_the_drain_is_the_one_the_outage_caused():
     That is a different event with a different cause, and folding the two
     together reports a two minute drain for a design that promises 2.25 s.
     """
-    late = blacked_out()
-    for row in late:
-        if row["node"] == RELAY:
-            row["drain_end_at"] = EPOCH + GATED_BACK + 3.0
-        elif row["node"] in (NEAR, FAR):
-            row["drain_end_at"] = EPOCH + RETURNED[FAR] + 1.2
     delivered = {ident(ANCHOR, 1): 200.4, ident(RELAY, 1): 100.4,
                  ident(NEAR, 1): 200.4, ident(FAR, 1): 200.4}
-    got = outage_block(late, gcs(delivered), KILL_AT, EPOCH,
+    got = outage_block(blacked_out(), gcs(delivered), KILL_AT, EPOCH,
                        exclude=(RELAY,))
-    assert got["backlog_drain_s"] == pytest.approx(1.2)
-    assert got["drain_counted_for"] == sorted([NEAR, FAR])
-    assert got["drain_by_node"][RELAY] == pytest.approx(GATED_BACK + 3.0)
+    assert got["outage_end_s"] == pytest.approx(RETURNED[FAR])
+    assert got["backlog_drain_s"] == pytest.approx(
+        RETURNED[FAR] + 0.9 - RETURNED[FAR])
+    assert got["drain_by_node"][NEAR] == pytest.approx(RETURNED[NEAR] + 1.2)
+    assert RELAY not in got["drain_by_node"]
+
+
+def test_a_route_that_came_back_and_never_drained_is_refused():
+    # There is no moment at which the backlog this outage built had finished,
+    # and the bound the gate reads is measured to that moment.
+    stuck = routers()
+    for row in stuck:
+        if row["node"] == FAR:
+            row["route_episodes"][0]["drained_at"] = None
+    with pytest.raises(RecoveryError) as caught:
+        outage_block(stuck, gcs({ident(FAR, 1): 200.4}), KILL_AT, EPOCH)
+    assert "never ran the store empty" in str(caught.value)
+
+
+def test_a_later_flap_does_not_become_the_recovery():
+    """What the episodes are for.
+
+    uav_3 got its route back at 140 s of the first complete link_loss and
+    then withdrew and recomputed once more while it was flying home at 257.
+    One field holding the latest of those read as a swarm that took 137
+    seconds to reconnect.
+    """
+    flapped = routers()
+    for row in flapped:
+        if row["node"] == NEAR:
+            row["route_episodes"].append({
+                "returned_at": EPOCH + 257.3, "recovered_at": EPOCH + 260.3,
+                "drained_at": EPOCH + 257.4, "lost_at": None})
+            row["route_returned_at"] = EPOCH + 257.3
+            row["recovered_at"] = EPOCH + 260.3
+            row["drain_end_at"] = EPOCH + 257.4
+    assert reconnect_s(flapped, KILL_AT, EPOCH) == pytest.approx(
+        CONFIRMED[FAR] - KILL_AT)
+    _, end = outage_window(flapped, KILL_AT, EPOCH)
+    assert end == pytest.approx(RETURNED[FAR])
+
+
+def test_a_ledger_from_before_the_episodes_is_still_readable():
+    older = routers()
+    for row in older:
+        del row["route_episodes"]
+    lost = lost_route(older, KILL_AT, EPOCH)
+    assert sorted(lost) == [NEAR, FAR]
+    assert lost[FAR]["recovered_at"] == pytest.approx(CONFIRMED[FAR])
 
 
 def test_the_block_measures_a_blackout_over_the_members_it_cut_off():

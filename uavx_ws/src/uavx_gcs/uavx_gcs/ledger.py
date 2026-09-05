@@ -256,7 +256,8 @@ def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
                  drain_start_s: Optional[float] = None,
                  epoch_s: float = 0.0,
                  destroyed: Sequence[str] = (),
-                 drained_by: Optional[Sequence[str]] = None) -> dict:
+                 drain_end_s: Optional[float] = None,
+                 drain_by_node: Optional[Mapping] = None) -> dict:
     """The whole observations block, from the ledgers and the outage window.
 
     The window comes from the run rather than from the files: the moment a
@@ -279,12 +280,13 @@ def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
     that window belongs to the delivery ratio rather than to the outage
     arithmetic. See RUN_START_S.
 
-    `drained_by` is the members whose queues this outage filled. The bound the
-    gate reads is about that backlog emptying, and in link_loss a second store
-    empties two minutes later when the gated vehicle's own radio comes back.
-    That is a different event with a different cause, and folding the two
-    together reports a 103 second drain for a design that promises 2.25.
-    Every node's drain is reported either way, under drain_by_node.
+    `drain_end_s` is when the queues this outage filled had emptied, worked
+    out by the caller from the route episode each member was in. A store that
+    ran empty on a later episode, or the gated vehicle's own store when its
+    radio came back two minutes afterwards, is a different event with a
+    different cause, and folding them together reports a 117 second drain for
+    a design that promises 2.25. Without it the last drain any node recorded
+    is used, which is right for a run with one outage in it.
     """
     router_ledgers = list(router_ledgers)
     start, end = _number(outage_start_s), _number(outage_end_s)
@@ -348,11 +350,16 @@ def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
         when = _number(entry.get("drain_end_at"))
         if when is not None:
             by_node[_node_of(entry)] = round(when - offset, 3)
-    counted = (set(drained_by) if drained_by is not None
-               else set(by_node))
-    ends = [when for node, when in by_node.items()
-            if node in counted and when >= drain_start]
-    drain_end = max(ends) if ends else drain_start
+    if isinstance(drain_by_node, Mapping):
+        by_node = {str(node): round(float(when), 3)
+                   for node, when in drain_by_node.items()
+                   if _number(when) is not None}
+    given = _number(drain_end_s)
+    if given is not None:
+        drain_end = given
+    else:
+        ends = [when for when in by_node.values() if when >= drain_start]
+        drain_end = max(ends) if ends else drain_start
 
     custodian = backlog_custodian(router_ledgers, during)
     held_by_custodian = []
@@ -410,7 +417,6 @@ def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
         # back. The bound is read off the members the outage cut off; the
         # rest are here so nothing is hidden by that choice.
         "drain_by_node": dict(sorted(by_node.items())),
-        "drain_counted_for": sorted(counted & set(by_node)),
         "ledger": [{"id": i, "created_at_s": round(minted[i], 3),
                     "delivered_at_s": (None if i not in arrived
                                        else round(arrived[i], 3))}

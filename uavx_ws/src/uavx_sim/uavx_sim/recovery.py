@@ -193,15 +193,54 @@ def fault_at(events: Iterable[Mapping]) -> float:
 
 
 # ------------------------------------------------------------- the outage
+def _episodes(entry: Mapping, offset: float) -> list:
+    """One node's route history, in the scenario's clock.
+
+    A ledger written before chunk 4.3 has only the three scalars, which are
+    the latest of each rather than the history. Read as one episode, which is
+    what they describe when a node lost its route once.
+    """
+    rows = entry.get("route_episodes")
+    if isinstance(rows, (list, tuple)) and rows:
+        out = []
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            returned = _number(row.get("returned_at"))
+            if returned is None:
+                continue
+            out.append({
+                "returned_at": returned - offset,
+                "recovered_at": (None if _number(row.get("recovered_at")) is None
+                                 else _number(row["recovered_at"]) - offset),
+                "drained_at": (None if _number(row.get("drained_at")) is None
+                               else _number(row["drained_at"]) - offset),
+                "lost_at": (None if _number(row.get("lost_at")) is None
+                            else _number(row["lost_at"]) - offset),
+            })
+        return sorted(out, key=lambda row: row["returned_at"])
+
+    returned = _number(entry.get("route_returned_at"))
+    if returned is None:
+        return []
+    recovered = _number(entry.get("recovered_at"))
+    drained = _number(entry.get("drain_end_at"))
+    return [{"returned_at": returned - offset,
+             "recovered_at": None if recovered is None else recovered - offset,
+             "drained_at": None if drained is None else drained - offset,
+             "lost_at": None}]
+
+
 def lost_route(router_ledgers: Sequence[Mapping], after_s: float,
                epoch_s: float = 0.0,
-               exclude: Sequence[str] = ()) -> Dict[str, Tuple[float, Optional[float]]]:
+               exclude: Sequence[str] = ()) -> Dict[str, dict]:
     """The routers that lost their route after the fault and got one back.
 
-    `route_returned_at` moves only on a transition from having no route to
-    having one, so for a node that was connected the whole run it is a moment
-    early in the bring-up. One later than the fault is that node saying it
-    was cut off and is not any more.
+    The first episode after the fault, and never the latest one. uav_3 got
+    its route back at 140 s of the first complete link_loss, and then
+    withdrew and recomputed once more while it was flying home at 257. A
+    field holding the latest of those read as a swarm that took 137 seconds
+    to reconnect.
 
     `exclude` is the vehicles the fault was applied to. A gated radio loses
     its own route the moment it is gated and gets it back the moment the
@@ -213,7 +252,7 @@ def lost_route(router_ledgers: Sequence[Mapping], after_s: float,
     start = _number(after_s)
     if start is None:
         raise RecoveryError(f"after_s is {after_s!r}, not a time")
-    out: Dict[str, Tuple[float, Optional[float]]] = {}
+    out: Dict[str, dict] = {}
     for entry in router_ledgers:
         node = entry.get("node")
         if not isinstance(node, str) or not node:
@@ -222,12 +261,11 @@ def lost_route(router_ledgers: Sequence[Mapping], after_s: float,
                 "vehicle")
         if node in skip:
             continue
-        returned = _number(entry.get("route_returned_at"))
-        if returned is None or returned - offset < start:
+        after = [row for row in _episodes(entry, offset)
+                 if row["returned_at"] >= start]
+        if not after:
             continue
-        recovered = _number(entry.get("recovered_at"))
-        out[node] = (returned - offset,
-                     None if recovered is None else recovered - offset)
+        out[node] = after[0]
     return out
 
 
@@ -247,7 +285,7 @@ def outage_window(router_ledgers: Sequence[Mapping], fault_at_s: float,
             "Either the fault removed a vehicle nothing was routing through, "
             "or the mesh never noticed, and an outage window taken from the "
             "scenario instead would be a window nothing measured")
-    end = max(returned for returned, _ in lost.values())
+    end = max(row["returned_at"] for row in lost.values())
     return float(fault_at_s), end
 
 
@@ -268,13 +306,13 @@ def reconnect_s(router_ledgers: Sequence[Mapping], fault_at_s: float,
             "the best number the gate can read and it would mean the fault "
             "did nothing")
     late = []
-    for node, (returned, recovered) in sorted(lost.items()):
-        if recovered is None:
+    for node, row in sorted(lost.items()):
+        if row["recovered_at"] is None:
             raise RecoveryError(
-                f"{node} got its route back at {returned:.1f}s and never held "
-                f"it for the stability window, so the run ended with the mesh "
-                f"still flapping")
-        late.append(recovered)
+                f"{node} got its route back at {row['returned_at']:.1f}s and "
+                f"never held it for the stability window, so the run ended "
+                f"with the mesh still flapping")
+        late.append(row["recovered_at"])
     return max(late) - float(fault_at_s)
 
 
@@ -354,13 +392,25 @@ def outage_block(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
     window taken from the scenario would be the two numbers somebody typed,
     and the drain bound the gate reads is the difference between them.
     """
+    lost = lost_route(router_ledgers, fault_at_s, epoch_s, exclude)
     start, end = outage_window(router_ledgers, fault_at_s, epoch_s, exclude)
+
+    # The drain of the queues this outage filled, and of nothing else. A
+    # store that ran empty on a later episode of the same node's route, or on
+    # the gated vehicle's own return two minutes afterwards, is a different
+    # event with a different cause.
+    drained = {node: row["drained_at"] for node, row in lost.items()}
+    never = sorted(node for node, when in drained.items() if when is None)
+    if never:
+        raise RecoveryError(
+            f"{', '.join(never)} got the route back and never ran the store "
+            f"empty on it, so there is no moment at which the backlog this "
+            f"outage built had finished draining")
     try:
         return led.observations(
             router_ledgers, gcs_ledger, start, end, epoch_s=epoch_s,
-            destroyed=destroyed,
-            drained_by=sorted(lost_route(router_ledgers, fault_at_s, epoch_s,
-                                         exclude)))
+            destroyed=destroyed, drain_end_s=max(drained.values()),
+            drain_by_node=drained)
     except led.LedgerError as exc:
         raise RecoveryError(str(exc)) from exc
 
@@ -400,7 +450,7 @@ def route_restored(router_ledgers: Sequence[Mapping], fault_at_s: float,
     lost = lost_route(router_ledgers, fault_at_s, epoch_s, exclude)
     if not lost:
         return False
-    if any(recovered is None for _, recovered in lost.values()):
+    if any(row["recovered_at"] is None for row in lost.values()):
         return False
     return all(entry.get("route_status") == "route_up"
                for entry in router_ledgers)

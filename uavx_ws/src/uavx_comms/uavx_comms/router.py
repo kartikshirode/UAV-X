@@ -134,6 +134,15 @@ class Router:
         # down again after the relay was handed back, which is a question
         # about times.
         self.outages: list = []
+        # One row per period this node had a route: when it came back, when
+        # it had held it long enough to be believed, when the store first ran
+        # empty on it, and when it went again.
+        #
+        # The three scalars above hold the latest of each, which is what the
+        # node needs to run and what the first complete link_loss found to be
+        # useless afterwards: the relay flapped once while flying home, and a
+        # run that reconnected in 23 s read as one that took 137.
+        self.route_episodes: list = []
         self.last_gcs_route: Optional[List[str]] = None
         # Set when a component has work but nowhere feasible to park a relay.
         # It suppresses further elections until the component changes, so the
@@ -672,12 +681,19 @@ class Router:
                 # the recovery is confirmed three seconds later.
                 self.route_returned_at = now
                 self.drain_end_at = None
+                self.route_episodes.append({
+                    "returned_at": round(now, 3), "recovered_at": None,
+                    "drained_at": None, "lost_at": None})
             elif (self.recovered_at is None
                   and now - self._route_present_since >= params.STABILITY_WINDOW_S):
                 self.recovered_at = now
                 self.disconnected = False
+                if self.route_episodes:
+                    self.route_episodes[-1]["recovered_at"] = round(now, 3)
             return
 
+        if self._route_present_since is not None and self.route_episodes:
+            self.route_episodes[-1]["lost_at"] = round(now, 3)
         self._route_present_since = None
         self.recovered_at = None
         if self._route_absent_since is None:
@@ -902,6 +918,8 @@ class Router:
             return
         if len(self.store) == 0 and now >= self.route_returned_at:
             self.drain_end_at = now
+            if self.route_episodes:
+                self.route_episodes[-1]["drained_at"] = round(now, 3)
 
     # -- what the run record wants -----------------------------------------
 
@@ -948,6 +966,10 @@ class Router:
             "unacknowledged_ids": sorted(
                 packet.identity_str() for packet in self.pending_ack.values()),
             "unacknowledged": len(self.pending_ack),
+            # One row per period this node had a route. Every recovery
+            # number is about the first of them after the fault, and the
+            # scalars below are only ever the latest.
+            "route_episodes": list(self.route_episodes),
             # When this node lost its route, each time it did. The handback
             # claim is that giving the vehicle back broke nothing, and an
             # outage after the release is what would make it false.
