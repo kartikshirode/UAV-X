@@ -1,0 +1,66 @@
+# The relay goes quiet and comes back. Chunk 4.3.
+#
+# The organisers name this failure twice, in the challenge statement and in
+# the FAQ: the swarm reconfigures as UAVs fail or lose connectivity. Every
+# other scenario tests the first half. A dead vehicle and a quiet one are not
+# the same fault. The quiet one still occupies airspace, and it comes back.
+#
+# architecture.md section 6: identical to relay_kill except the event and the
+# room the run leaves after it. uav_2 loses its radio at t = 120 s and gets it
+# back at t = 240 s, and the run goes on to 360 s so the handback has somewhere
+# to happen. The slot at (317.3, -36.8, 75) sits 52.4 m from the still flying
+# uav_2, far past the 15 m clearance, because the reserved band puts every
+# relay above every mission corridor.
+#
+# check_scenario.py requires this to equal the file stem.
+name: link_loss
+
+# relay_kill.yaml carries this same seed on purpose. The two scenarios are one
+# fault told twice and the comparison only means something if the fade band is
+# drawn from the same stream.
+seed: 43
+
+# 120 s of steady state, 120 s of outage and recovery, then 120 s in which the
+# radio is back and the vehicle has to be given back without breaking the link
+# that is carrying traffic.
+duration_s: 360
+
+vehicles:
+  - uav_1
+  - uav_2
+  - uav_3
+  - uav_4
+
+# The radio is gated both ways and the vehicle keeps flying. restore_at_s is
+# read by the link layer, not by the event injector: the injector fires the
+# blackout and the radio comes back on its own timetable.
+injected_events:
+  - type: comms_blackout
+    target: uav_2
+    at_s: 120
+    restore_at_s: 240
+
+headless: true
+
+hover_altitudes_m:
+  uav_1: 30
+  uav_2: 40
+  uav_3: 50
+  uav_4: 60
+
+comms:
+  enabled: true
+  forwarding: true
+  elections_enabled: true
+
+  roles:
+    uav_1: gcs_anchor
+    uav_2: relay
+    uav_3: survey
+    uav_4: survey
+
+  stations:
+    uav_1: [165.0, 0.0, 30.0]
+    uav_2: [330.0, 0.0, 40.0]
+    uav_3: [475.0, 75.0, 50.0]
+    uav_4: [475.0, -75.0, 60.0]

@@ -1,0 +1,81 @@
+# Two vehicles on a converging course. Chunk 4.5.
+#
+# architecture.md section 5 puts three layers between vehicles: distinct cruise
+# altitudes, a separation monitor at 20 Hz and a yield rule. Layers alone would
+# keep everything apart and leave the yield rule as dead code, so this scenario
+# commands both vehicles to the same altitude and crosses their paths.
+#
+# Both paths are 240 m and both vehicles start together, so without
+# intervention they reach (250, 0, 45) at the same instant and pass within 0 m.
+# uav_4 carries the higher system id, so uav_4 is the one that holds.
+#
+# encounter_noyield.yaml is this file with the rule disabled and it has to
+# record a violation. Without that control, a run where the two happened to
+# miss each other looks exactly like a run where the rule worked.
+#
+# check_scenario.py requires this to equal the file stem.
+name: encounter
+
+# encounter_noyield.yaml carries this same seed. The pair differ in the yield
+# flag and in nothing else.
+seed: 53
+
+# 20 s to take off and settle, 24 s of flying to the crossing point, and the
+# rest for the hold to clear and both vehicles to finish their paths.
+duration_s: 90
+
+# Two vehicles, not four. Nothing here is about the mesh.
+vehicles:
+  - uav_3
+  - uav_4
+
+injected_events: []
+
+headless: true
+
+# The same altitude on purpose. This is the one place in the project where two
+# vehicles are commanded into one layer.
+hover_altitudes_m:
+  uav_3: 45
+  uav_4: 45
+
+# The frozen trajectories. Straight lines at cruise speed, started together, so
+# the arithmetic of who arrives first is settled by the file and not by the
+# simulator.
+tracks:
+  uav_3:
+    start_enu: [250.0, -120.0, 45.0]
+    end_enu: [250.0, 120.0, 45.0]
+    start_s: 20.0
+    speed_mps: 10.0
+  uav_4:
+    start_enu: [130.0, 0.0, 45.0]
+    end_enu: [370.0, 0.0, 45.0]
+    start_s: 20.0
+    speed_mps: 10.0
+
+safety:
+  # The flag the pair turns on. Its control turns it off and nothing else
+  # changes, which is what makes the safe result attributable to the rule.
+  yield_enabled: true
+
+# The radio runs because the yield rule is fed by it. Relative position and
+# velocity come out of HELLO, so the predictor is late by up to one HELLO
+# period plus link latency, and safety degrades when the link degrades. That
+# is the honest behaviour and the proposal says so rather than claiming the
+# swarm has perfect state.
+comms:
+  enabled: true
+  forwarding: true
+
+  # Off. uav_3 never has a route to the ground station from where it flies,
+  # and an election here would put a relay in the air in the middle of a
+  # safety measurement.
+  elections_enabled: false
+
+  roles:
+    uav_3: survey
+    uav_4: survey
+
+  # Neither vehicle holds station. Both fly the tracks above.
+  stations: {}

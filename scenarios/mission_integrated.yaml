@@ -1,0 +1,100 @@
+# The whole task at once. Chunk 4.7.
+#
+# Every other scenario proves one subsystem and the official task couples them.
+# This one surveys, relays the observations home, loses the relay, reconfigures
+# and finishes the mission, and it is the run the proposal and the video both
+# point at.
+#
+# architecture.md section 6 freezes every number here and
+# scripts/check_geometry.py walks the trajectories at 10 Hz rather than
+# checking a handful of stationary points, which is how the previous version of
+# this scenario was found with a forbidden link sitting inside r_max and a
+# survey that finished before anything failed.
+#
+# check_scenario.py requires this to equal the file stem.
+name: mission_integrated
+
+seed: 59
+
+# 70 s to the kill, 170 s after it. The survey completes at about t = 141 s
+# with 99 s to spare, and the derived reconnect budget for this scenario is
+# 28.0 s against a gate of 45.
+duration_s: 240
+
+vehicles:
+  - uav_1
+  - uav_2
+  - uav_3
+  - uav_4
+
+# The relay dies while both surveyors are 58% of the way through their strips,
+# so there is finished work and unfinished work on both sides of the failure.
+injected_events:
+  - type: kill
+    target: uav_2
+    at_s: 70
+
+headless: true
+
+hover_altitudes_m:
+  uav_1: 30
+  uav_2: 40
+  uav_3: 50
+  uav_4: 60
+
+# The box is small and that is the point. Every survey point has to stay within
+# 175 m of uav_2 or the observations have no route home, and at least 300 m
+# from uav_1 or killing uav_2 proves nothing because the surveyors would talk
+# straight to the anchor. uav_1 and uav_2 are themselves 165.3 m apart, so the
+# triangle inequality caps the region at 350 m from the anchor. What is left is
+# a sliver of about 3,000 square metres, and the area a swarm can survey behind
+# a relay is bounded by radio geometry rather than by battery.
+survey:
+  origin_x: 465.0
+  origin_y: -60.0
+  width_m: 25.0
+  height_m: 120.0
+  cell_m: 5.0
+  footprint_m: 6.0
+
+  # Two speeds here, unlike survey_baseline, which surveys at cruise speed and
+  # needs only one. Transit to the lane start is flown at 10 m/s and the lanes
+  # themselves at 3 m/s, which are the two speeds in the section 5 table.
+  cruise_speed_mps: 10.0
+  survey_speed_mps: 3.0
+
+  # Two of the four fly it. The other two hold the chain up.
+  vehicles:
+    - uav_3
+    - uav_4
+
+  # uav_3 takes the west strip from its north end and uav_4 the east strip from
+  # its south end, so at every instant they sit either side of the centre line
+  # and exactly 12.5 m apart in x. That is not decoration. The component elects
+  # the member nearest the attachment node, and mirroring keeps uav_3 nearer by
+  # at least 13.0 m for the whole survey instead of by the 0.8 m that separates
+  # the two station-keeping candidates in relay_kill. On paper 0.8 m is
+  # deterministic; in SITL, where position hold carries its own error, it is a
+  # coin toss.
+  mirrored: true
+
+  # Takeoff and settle to t = 20, ingress to the lane start by t = 25, lanes
+  # from there.
+  start_s: 25.0
+
+comms:
+  enabled: true
+  forwarding: true
+  elections_enabled: true
+
+  roles:
+    uav_1: gcs_anchor
+    uav_2: relay
+    uav_3: survey
+    uav_4: survey
+
+  # Only the two static vehicles hold a station. The surveyors' work is the
+  # box above, and a vehicle with both would be given two places to be.
+  stations:
+    uav_1: [165.0, 0.0, 30.0]
+    uav_2: [330.0, 0.0, 40.0]

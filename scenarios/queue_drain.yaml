@@ -1,0 +1,63 @@
+# The full 45 seconds the queue is sized for. Chunk 4.4.
+#
+# The store and forward queue holds 512 packets and the 2.25 s drain bound is
+# arithmetic off a 45 second outage: two cut off origins at 5 Hz for 45 s is
+# 450 packets, and 450 at the 200 per second forward rate is 2.25 s. The two
+# accepted recoveries last 32.5 s and 28.0 s, so until this scenario nothing
+# had ever held the route down for as long as the numbers assume.
+#
+# architecture.md section 6: the same common geometry and the same fault as
+# link_loss, with the election forbidden so nothing shortens the outage. uav_2
+# goes quiet at t = 60 s and the route comes back at t = 105 s, which is 45 s
+# exactly. uav_3 is the lowest id in the disconnected component and therefore
+# the backlog custodian.
+#
+# check_scenario.py requires this to equal the file stem.
+name: queue_drain
+
+seed: 47
+
+# 60 s before the outage, 45 s of it, and 75 s afterwards for the drain and
+# for the run to show the delivered set matching the generated one.
+duration_s: 180
+
+vehicles:
+  - uav_1
+  - uav_2
+  - uav_3
+  - uav_4
+
+injected_events:
+  - type: comms_blackout
+    target: uav_2
+    at_s: 60
+    restore_at_s: 105
+
+headless: true
+
+hover_altitudes_m:
+  uav_1: 30
+  uav_2: 40
+  uav_3: 50
+  uav_4: 60
+
+comms:
+  enabled: true
+  forwarding: true
+
+  # Off, and this is the only scenario that turns them off while a vehicle is
+  # unreachable. An election would put a relay in the air inside 32.5 s and
+  # the queue would never reach the depth the design claims to survive.
+  elections_enabled: false
+
+  roles:
+    uav_1: gcs_anchor
+    uav_2: relay
+    uav_3: survey
+    uav_4: survey
+
+  stations:
+    uav_1: [165.0, 0.0, 30.0]
+    uav_2: [330.0, 0.0, 40.0]
+    uav_3: [475.0, 75.0, 50.0]
+    uav_4: [475.0, -75.0, 60.0]
