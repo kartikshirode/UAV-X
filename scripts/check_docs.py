@@ -584,7 +584,7 @@ guard(before, "every package path in the gate goes through the one source root")
 UNTYPED_GATE_PATHS = {
     # W2, the survey and evaluator fields. coverage_fraction and
     # coverage_source were typed by chunk 2.4 and left this list.
-    "vehicles_completed", "delivery_ratio",
+    "delivery_ratio",
     # W3, the communication and relay claim.
     "delivery_ratio_by_node", "relay_role_holder", "relay_role_moved",
     "time_to_reconnect_s", "observations_set_equal", "min_pairwise_separation_m",
@@ -593,7 +593,7 @@ UNTYPED_GATE_PATHS = {
     "route_restored_after_blackout", "mover_returned_to_station",
     "outage_count_after_release",
     "delivery_ratio_after_recovery", "separation_violations",
-    "collision_contacts", "yield_events_by_node", "yield_hold_seconds",
+    "collision_contacts",
     "observations.unexpected_count",
 }
 

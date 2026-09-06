@@ -130,6 +130,13 @@ DELIVERY_FIELDS = ("delivery_ratio", "delivery_ratio_by_node",
 SAFETY_FIELDS = ("min_pairwise_separation_m", "separation_violations",
                  "collision_contacts", "contact_monitor_samples")
 
+# Chunk 4.5. What each vehicle decided about separation, as opposed to what
+# the collector watched happen to it. The pair of runs the safety row rests on
+# differ in exactly one flag, so the record has to carry what the rule did and
+# not only that nobody was hurt.
+YIELD_FIELDS = ("yield_events_by_node", "yield_hold_seconds",
+                "vehicles_completed")
+
 # What a run that lost a vehicle says about getting back. relay_slot and the
 # observations block are objects the schema types; these are the flat fields
 # the gate reads beside them.
@@ -969,7 +976,8 @@ def build_record(*, run_id, scenario_path, scenario_sha256, seed, commit_sha,
                  clock_source, source_tree_sha256, resources,
                  injected_event_observed, injected_event_count,
                  graph_snapshot_sha256=None, coverage=None, delivery=None,
-                 safety=None, observations=None, recovery=None):
+                 safety=None, observations=None, recovery=None,
+                 yielding=None):
     """Assemble one record and validate it before anybody can write it.
 
     Every argument is keyword only and every one of them is required. A
@@ -1053,6 +1061,14 @@ def build_record(*, run_id, scenario_path, scenario_sha256, seed, commit_sha,
         for key in COVERAGE_FIELDS:
             if key in coverage:
                 record[key] = coverage[key]
+    if yielding is not None:
+        if not isinstance(yielding, dict):
+            raise RecordError(
+                f"yielding is {yielding!r}, not the block recovery.yield_block "
+                f"produces")
+        for key in YIELD_FIELDS:
+            if key in yielding:
+                record[key] = yielding[key]
     if safety is not None:
         if not isinstance(safety, dict):
             raise RecordError(f"safety is {safety!r}, not the block the "

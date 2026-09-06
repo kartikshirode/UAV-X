@@ -32,6 +32,7 @@ from uavx_sim.recovery import (COMMAND_TOLERANCE_S, DELIVERY_GAP_S,
                                RecoveryError, commanded_window, delivery_gaps,
                                destroyed_by, fault_at, handback_block,
                                lost_route, outage_block, outage_window,
+                               yield_block,
                                outages_after, radio_confirms, ratio_after,
                                recovery_block, reconnect_s, relay_slot,
                                route_restored, route_return_s,
@@ -886,4 +887,66 @@ def test_a_run_that_ended_with_the_route_up_still_reports_it():
     assert row["route_episodes"][0]["lost_at"] is None
     assert lost_route([row], KILL_AT, EPOCH)[NEAR]["returned_at"] == \
         pytest.approx(148.0)
+
+
+# ------------------------------------------------------ what the rule did
+def yielding(node, events=0, held=0.0):
+    return router(node, [(ident(node, 1), 200.0)], returned=3.0, confirmed=5.0,
+                  drained=3.1, yield_events=events, yield_hold_s=held)
+
+
+def test_the_block_names_every_vehicle_and_not_only_the_one_that_yielded():
+    """Zero is a real answer on the vehicle that carried on.
+
+    Both vehicles predict the same crossing and the lower id keeps going. A
+    map holding only the vehicle that stopped could not tell that run from
+    one where the rule was never fed anything at all.
+    """
+    block = yield_block([yielding(NEAR, 0, 0.0), yielding(FAR, 1, 3.2)])
+    assert block["yield_events_by_node"] == {NEAR: 0, FAR: 1}
+    assert block["yield_hold_seconds"] == pytest.approx(3.2)
+
+
+def test_the_hold_is_summed_across_the_swarm():
+    block = yield_block([yielding(NEAR, 1, 1.5), yielding(FAR, 2, 2.25)])
+    assert block["yield_hold_seconds"] == pytest.approx(3.75)
+
+
+def test_a_ledger_from_before_the_rule_reports_no_events():
+    """Rather than dropping the vehicle out of the map entirely."""
+    block = yield_block([router(NEAR, [(ident(NEAR, 1), 200.0)], returned=3.0,
+                                confirmed=5.0, drained=3.1)])
+    assert block["yield_events_by_node"] == {NEAR: 0}
+    assert block["yield_hold_seconds"] == 0.0
+
+
+def test_an_event_with_no_time_held_is_refused():
+    """An event is a vehicle deciding to stop, so it has a duration.
+
+    The pair of numbers is what the gate reads, and a rule that counted a
+    decision it never acted on would satisfy the event requirement while the
+    aircraft carried on through the crossing.
+    """
+    with pytest.raises(RecoveryError, match="changed nothing"):
+        yield_block([yielding(FAR, 1, 0.0)])
+
+
+def test_a_negative_hold_is_refused():
+    with pytest.raises(RecoveryError):
+        yield_block([yielding(FAR, 1, -1.0)])
+
+
+def test_a_count_that_is_not_a_count_is_refused():
+    with pytest.raises(RecoveryError, match="yield events"):
+        yield_block([yielding(FAR, "two", 1.0)])
+
+
+def test_the_completion_count_is_carried_when_the_runner_could_check_it():
+    block = yield_block([yielding(NEAR, 0, 0.0), yielding(FAR, 1, 3.2)], 2)
+    assert block["vehicles_completed"] == 2
+
+
+def test_a_run_with_nothing_checkable_reports_no_completion_at_all():
+    """Absent rather than zero. Zero would read as nobody finishing."""
+    assert "vehicles_completed" not in yield_block([yielding(NEAR)])
 

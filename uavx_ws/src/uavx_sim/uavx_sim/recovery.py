@@ -57,6 +57,14 @@ from uavx_roles import trace as tr
 # What the record carries about keeping vehicles apart, and what the
 # collector's payload has to supply. The gate reads all four at the top level
 # of the record, so that is where the runner puts them.
+# What the swarm did about separation, as opposed to what happened to it.
+# SAFETY_KEYS below are measured from outside by the collector, off ground
+# truth; these are what each vehicle decided, out of its own router's file.
+# A run needs both: the collector says the two never came within 10 m, and
+# these say whether that was the rule working or the pair never converging.
+YIELD_KEYS = ("yield_events_by_node", "yield_hold_seconds",
+              "vehicles_completed")
+
 SAFETY_KEYS = ("min_pairwise_separation_m", "separation_violations",
                "collision_contacts", "contact_monitor_samples")
 
@@ -259,6 +267,59 @@ def radio_confirms(radio_ledger: Optional[Mapping],
             f"outage the record would report never ended")
     return {"radio_gated_at_s": round(gated, 3),
             "radio_restored_at_s": None if lifted is None else round(lifted, 3)}
+
+
+def yield_block(router_ledgers: Sequence[Mapping],
+                completed: Optional[int] = None) -> dict:
+    """What each vehicle did about giving way, and how many finished.
+
+    Read from the routers rather than from the flight, because the claim is
+    about a rule and not about an outcome. Two vehicles that never converged
+    and two that converged and were separated by the rule both end the run
+    intact, and only the event count tells them apart. `encounter_noyield` is
+    the same flight with the rule off and it has to record a violation, which
+    is the other half of the same argument.
+
+    `vehicles_completed` is the guard against the cheapest way to satisfy the
+    rest of it. A vehicle that holds and never releases has one yield event
+    and a long hold and has stopped dead in the air, which is a safe run by
+    every other number here.
+    """
+    events, holds = {}, {}
+    for entry in router_ledgers or ():
+        node = entry.get("node")
+        if not isinstance(node, str) or not node:
+            raise RecoveryError(
+                "a router ledger with no node name cannot be attributed to a "
+                "vehicle, so its yield count belongs to nobody")
+        count = entry.get("yield_events")
+        if count is None:
+            # A ledger from before chunk 4.5. Reported as no events rather
+            # than as a missing vehicle, because the alternative is a
+            # by-node map that silently omits whoever was flying old code.
+            count = 0
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise RecoveryError(
+                f"{node} reports {count!r} yield events, which is not a count")
+        held = _number(entry.get("yield_hold_s")) or 0.0
+        if held < 0:
+            raise RecoveryError(
+                f"{node} reports a hold of {held}s, and a vehicle cannot give "
+                f"way for a negative length of time")
+        if count and held <= 0:
+            raise RecoveryError(
+                f"{node} reports {count} yield event(s) and a hold of {held}s. "
+                f"An event is a vehicle deciding to stop, so a run with one "
+                f"and no time held is a rule that changed nothing")
+        events[node] = count
+        holds[node] = held
+    block = {
+        "yield_events_by_node": dict(sorted(events.items())),
+        "yield_hold_seconds": round(sum(holds.values()), 3),
+    }
+    if completed is not None:
+        block["vehicles_completed"] = int(completed)
+    return block
 
 
 def fault_at(events: Iterable[Mapping]) -> float:
