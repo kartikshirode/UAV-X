@@ -221,6 +221,89 @@ def test_a_hold_that_is_not_a_length_of_time_is_refused(bad):
         link.Blackout(bad)
 
 
+# ------------------------------------------------------------- armed, not set
+def test_arming_a_gate_does_not_gate_anything():
+    """Round 9. The whole point is that the fault waits for the clock.
+
+    If arming gated the radio then the fault would land when the runner spoke,
+    which is the behaviour being replaced, and the lead the runner sends it
+    with would make the outage start five seconds early instead of late.
+    """
+    gate = link.Blackout(45.0)
+    assert gate.arm(["uav_2"], 560.0) == ("uav_2",)
+    assert gate.live is False
+    assert gate.nodes == set()
+    assert gate.started_at is None
+
+
+def test_an_armed_gate_lands_on_the_clock_and_not_before():
+    gate = link.Blackout(45.0)
+    gate.arm(["uav_2"], 560.0)
+    assert gate.start_due(559.9) == ()
+    assert gate.start_due(560.0) == ("uav_2",)
+    assert gate.live is True
+    assert gate.started_at == 560.0
+    assert gate.start_due(560.1) == (), "the same gate fires once"
+
+
+def test_the_hold_counts_from_the_gate_and_not_from_the_arming():
+    """A gate armed early still lasts exactly as long as the scenario said.
+
+    The runner arms five seconds ahead so the parameter call has room to find
+    the node. If the hold started there, every blackout would come back five
+    seconds early and the outage would be shorter than the queue is sized for.
+    """
+    gate = link.Blackout(45.0)
+    gate.arm(["uav_2"], 560.0)
+    gate.start_due(555.0 + 5.0)
+    assert gate.restore_due(604.9) == ()
+    assert gate.restore_due(605.0) == ("uav_2",)
+
+
+def test_a_gate_armed_for_a_moment_already_past_lands_at_once():
+    """Late is reported as late. It is not moved and it is not refused.
+
+    A runner that armed the radio after the fault was due has produced a late
+    fault, and the record says so through the radio's own gating time. Refusing
+    it here would lose the run; silently moving the deadline would hide it.
+    """
+    gate = link.Blackout(45.0)
+    gate.arm(["uav_2"], 560.0)
+    assert gate.start_due(561.4) == ("uav_2",)
+    assert gate.started_at == 561.4
+
+
+def test_arming_a_radio_that_is_already_gated_changes_nothing():
+    gate = link.Blackout(45.0)
+    gate.start(["uav_2"], 500.0)
+    assert gate.arm(["uav_2"], 560.0) == ()
+    assert gate.start_due(1e6) == ()
+    assert gate.started_at == 500.0, "one outage keeps one start"
+
+
+def test_the_record_names_a_gate_that_was_scheduled_and_never_landed():
+    """A run whose duration ends before its own fault does.
+
+    The scenario asked for something the run was too short to produce, and a
+    record that only reported the gates that fired would look like a scenario
+    with no fault in it.
+    """
+    gate = link.Blackout(45.0)
+    gate.arm(["uav_2"], 560.0)
+    row = gate.as_record()
+    assert row["blackout_armed"] == ["uav_2"]
+    assert row["blackout_armed_at"] == 560.0
+    assert row["blackout_started_at"] is None
+    gate.start_due(560.0)
+    assert gate.as_record()["blackout_armed"] == []
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), None, True, "60"])
+def test_a_gate_armed_for_something_that_is_not_a_time_is_refused(bad):
+    with pytest.raises(ValueError):
+        link.Blackout(45.0).arm(["uav_2"], bad)
+
+
 def test_a_gated_radio_is_not_an_absent_one():
     # The two faults the organisers name, and they are not the same. A gated
     # vehicle is still flying and still occupies airspace.

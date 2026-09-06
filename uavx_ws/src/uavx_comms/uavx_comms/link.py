@@ -101,6 +101,13 @@ class Blackout:
     The nodes count in simulated seconds since the simulator came up and the
     scenario counts from its own zero, and a duration means the same thing in
     both.
+
+    The start is armed rather than duration based, because the runner does
+    know where the scenario's zero sits once the run is going and can hand
+    over an instant in the clock both of them read. `arm` takes that instant
+    and `start_due` gates the radio when the clock reaches it, which is the
+    same shape as `restore_due`. `start` is still there for the scenario that
+    begins in a blackout and for anything that wants the gate now.
     """
 
     def __init__(self, hold_s: float = 0.0) -> None:
@@ -115,6 +122,12 @@ class Blackout:
         self.nodes: Set[str] = set()
         self.started_at: Optional[float] = None
         self.restored_at: Optional[float] = None
+        # The gate that has been scheduled and has not fired. Kept apart from
+        # `nodes`, which is what is gated right now: a radio that reported
+        # itself off the moment it was armed would put the fault at the time
+        # the runner spoke rather than the time the scenario asked for.
+        self.armed: Set[str] = set()
+        self.armed_at_s: Optional[float] = None
 
     @property
     def live(self) -> bool:
@@ -137,6 +150,47 @@ class Blackout:
             self.restored_at = None
         return fresh
 
+    def arm(self, nodes: Iterable[str], at_s: float) -> Tuple[str, ...]:
+        """Schedule these radios to gate themselves at `at_s`.
+
+        `at_s` is read in whatever clock `start_due` is later called with, so
+        the caller and this object have to be counting from the same zero. The
+        runner arms with an absolute simulated time because that is the clock
+        every node in the run already shares; the scenario's own zero is an
+        offset only the runner knows.
+
+        Arming a vehicle that is already gated does nothing. The run is
+        describing one outage and a second schedule over the top of it would
+        give the record two answers about when the fault landed.
+        """
+        if isinstance(at_s, bool) or not isinstance(at_s, (int, float)):
+            raise ValueError(f"at_s is {at_s!r}, not a simulated time")
+        if not math.isfinite(float(at_s)):
+            raise ValueError(
+                f"at_s is {at_s!r}. A gate scheduled for no particular moment "
+                f"is a gate that never lands, and the run would report an "
+                f"outage nothing caused")
+        wanted = {str(n) for n in nodes if str(n).strip()} - self.nodes
+        if not wanted:
+            return ()
+        self.armed = wanted
+        self.armed_at_s = float(at_s)
+        return tuple(sorted(wanted))
+
+    def start_due(self, now: float) -> Tuple[str, ...]:
+        """Gate the armed radios if the clock has reached the armed instant.
+
+        Answered once, like `restore_due`. The hold starts counting from here
+        and not from the arming, so a gate armed early still lasts exactly as
+        long as the scenario said.
+        """
+        if not self.armed or self.armed_at_s is None:
+            return ()
+        if float(now) < self.armed_at_s:
+            return ()
+        nodes, self.armed, self.armed_at_s = self.armed, set(), None
+        return self.start(nodes, now)
+
     def restore_due(self, now: float) -> Tuple[str, ...]:
         """The radios whose hold has run out. Answered once.
 
@@ -158,6 +212,11 @@ class Blackout:
             "blackout_started_at": self.started_at,
             "blackout_restored_at": self.restored_at,
             "blackout_nodes": sorted(self.nodes),
+            # Non empty at the end of a run means a fault was scheduled and
+            # the run finished before it landed, which is a scenario whose
+            # duration and whose event list disagree.
+            "blackout_armed": sorted(self.armed),
+            "blackout_armed_at": self.armed_at_s,
         }
 
 
