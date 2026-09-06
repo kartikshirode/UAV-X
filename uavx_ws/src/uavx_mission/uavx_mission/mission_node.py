@@ -44,6 +44,8 @@ from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile,
                        QoSReliabilityPolicy)
 from uavx_msgs.msg import RoleAssignment, SwarmPacket
 
+from std_msgs.msg import Bool
+
 from uavx_mission import frames, station
 from uavx_mission.boustrophedon import plan_path
 from uavx_mission.executor import MissionExecutor
@@ -51,6 +53,7 @@ from uavx_mission.partition import partition, strip_of
 from uavx_mission.survey_area import (BASELINE_CELL_M, BASELINE_SENSOR_RADIUS_M,
                                       BASELINE_SIDE_M, BASELINE_SW_CORNER_M,
                                       SurveyArea)
+from uavx_mission.track import Track
 
 # architecture.md section 6: observation packets, 5 Hz per surveying vehicle.
 OBSERVATION_HZ = 5.0
@@ -121,6 +124,24 @@ class MissionNode(Node):
         # comparison of those ids, so the collision would not look like a
         # fault; it would look like a delivery.
         self.declare_parameter("observations", True)
+        # Chunk 4.5. The straight line this vehicle flies, for the encounter
+        # pair and for nothing else. A speed of zero means this vehicle has no
+        # track, which is every vehicle in the other eight scenarios.
+        self.declare_parameter("track_start_enu", [0.0, 0.0, 0.0])
+        self.declare_parameter("track_end_enu", [0.0, 0.0, 0.0])
+        self.declare_parameter("track_start_s", 0.0)
+        self.declare_parameter("track_speed_mps", 0.0)
+        # Where the scenario's zero sits in the simulated clock this node
+        # reads. Zero means the run has not started and the vehicle waits at
+        # the head of its line.
+        #
+        # It arrives at run time rather than at launch because nothing knows
+        # it at launch: the scenario's clock starts after the ingress, and the
+        # ingress ends when the last vehicle reaches its station. Both track
+        # vehicles are given the same number, which is what makes them start
+        # together, and starting together is the whole reason neither of them
+        # arrives at the crossing first.
+        self.declare_parameter("track_epoch_s", 0.0)
 
         vehicle_id = self.get_parameter("vehicle_id").value
         if not vehicle_id:
@@ -138,6 +159,12 @@ class MissionNode(Node):
         except station.StationError as exc:
             raise ValueError(f"{self.vehicle_id}: {exc}") from exc
         self.generates = bool(self.get_parameter("observations").value)
+        self.track = self._track()
+        if self.track is not None and self.station is not None:
+            raise ValueError(
+                f"{self.vehicle_id} was given a station and a track. A "
+                f"vehicle with two jobs is given two places to be, and which "
+                f"one it flies comes down to which was read first")
 
         sw = [float(v) for v in self.get_parameter("area_sw_m").value]
         area = SurveyArea.from_corner(
@@ -146,7 +173,7 @@ class MissionNode(Node):
             float(self.get_parameter("area_height_m").value),
             float(self.get_parameter("cell_m").value),
             float(self.get_parameter("sensor_radius_m").value))
-        if self.station is None:
+        if self.station is None and self.track is None:
             strips = partition(
                 area, list(self.get_parameter("swarm_vehicles").value))
             strip = strip_of(strips, self.vehicle_id)
@@ -173,7 +200,7 @@ class MissionNode(Node):
         # properties Node has, and test_node_attributes.py now refuses
         # either name on any node in this workspace.
         self.mission = None
-        if self.station is None:
+        if self.station is None and self.track is None:
             self.mission = MissionExecutor(
                 self.vehicle_id, strip, path,
                 float(self.get_parameter("acceptance_radius_m").value))
@@ -198,6 +225,18 @@ class MissionNode(Node):
         self.create_subscription(
             RoleAssignment, f"/{self.vehicle_id}/role_slot",
             self.on_role_slot, 10)
+        # Chunk 4.5. This vehicle's own router works out whether it has to
+        # give way, because the router is the process that decodes HELLO, and
+        # says so here. A vehicle-local topic in this vehicle's namespace
+        # carrying no SwarmPacket, which is the role slot's shape and what the
+        # seam rules allow.
+        self.create_subscription(
+            Bool, f"/{self.vehicle_id}/yield_hold", self.on_yield_hold, 10)
+        self.holding = False
+        self.hold_seconds = 0.0
+        self.track_time_s = 0.0
+        self.track_complete = False
+        self._track_last_s = None
         self.slot_target = None
         self.slot_commands = 0
         self.slot_errors = 0
@@ -214,6 +253,14 @@ class MissionNode(Node):
         if self.station is not None:
             self.last_setpoint = [float(v) for v in
                                   frames.frozen_to_px4(self.station, self.home)]
+        if self.track is not None:
+            # The head of the line, which is also where the ingress flew it.
+            # Holding here until the scenario's clock arrives is what keeps
+            # the pair together: whichever of the two is told first waits for
+            # the same instant as the other.
+            self.last_setpoint = [float(v) for v in
+                                  frames.frozen_to_px4(self.track.start,
+                                                       self.home)]
         if self.generates:
             self.create_timer(1.0 / OBSERVATION_HZ, self.publish_observation)
         self.create_timer(1.0 / CONTROL_MODE_HZ, self.publish_control_mode)
@@ -222,12 +269,73 @@ class MissionNode(Node):
                 f"{self.vehicle_id} surveying strip {strip.index}, "
                 f"x {strip.x_min:.3f} to {strip.x_max:.3f}, "
                 f"{len(path)} waypoints, observations {self.generates}")
+        elif self.track is not None:
+            self.get_logger().info(
+                f"{self.vehicle_id} flying a track, "
+                f"{self.track.length_m:.1f} m at "
+                f"{self.track.speed_mps:.1f} m/s from t="
+                f"{self.track.start_s:.1f}s, observations {self.generates}")
         else:
             self.get_logger().info(
                 f"{self.vehicle_id} holding station "
                 f"{self.station[0]:.1f}, {self.station[1]:.1f}, "
                 f"{self.station[2]:.1f} in the frozen frame, "
                 f"observations {self.generates}")
+
+    def _track(self):
+        """The straight line this vehicle flies, or None if it has no track.
+
+        A speed of zero is the answer for every vehicle in eight of the nine
+        scenarios. It is checked rather than the endpoints, because a track
+        from a point to itself and a track at no speed are both a vehicle
+        commanded to fly nowhere and only one of them is easy to spot.
+        """
+        speed = float(self.get_parameter("track_speed_mps").value)
+        if speed <= 0.0:
+            return None
+        start = tuple(float(v) for v
+                      in self.get_parameter("track_start_enu").value)
+        end = tuple(float(v) for v in self.get_parameter("track_end_enu").value)
+        return Track(start=start, end=end,
+                     start_s=float(self.get_parameter("track_start_s").value),
+                     speed_mps=speed)
+
+    def on_yield_hold(self, msg: Bool) -> None:
+        """This vehicle's router saying whether it has to give way."""
+        self.holding = bool(msg.data)
+
+    def advance_track(self, now: float) -> None:
+        """Move the commanded point along the line, unless the vehicle is held.
+
+        The hold is the clock stopping and not a different setpoint. `t` is
+        the scenario time this vehicle has been allowed to spend flying, so a
+        held vehicle keeps the point it already had and then carries on from
+        there. The leg after the hold is the same leg, later by exactly the
+        length of the hold, which is why a vehicle that gives way still
+        finishes its line.
+        """
+        if self.track is None:
+            return
+        epoch = float(self.get_parameter("track_epoch_s").value)
+        if epoch <= 0.0:
+            return
+        if self._track_last_s is None:
+            self._track_last_s = now
+        elapsed = max(0.0, now - self._track_last_s)
+        self._track_last_s = now
+        if self.holding:
+            self.hold_seconds += elapsed
+        self.track_time_s = now - epoch - self.hold_seconds
+        if self.track_time_s >= self.track.arrival_s:
+            self.track_complete = True
+        if self.slot_target is not None:
+            # A role manager has sent this vehicle somewhere. The clock still
+            # runs, because the track is a schedule and not a queue, but the
+            # setpoint belongs to whoever took the aircraft.
+            return
+        point = self.track.position_at(self.track_time_s)
+        self.last_setpoint = [float(v) for v in
+                              frames.frozen_to_px4(point, self.home)]
 
     def stamp(self) -> int:
         """Microseconds, the way every PX4 message here is timestamped."""
@@ -242,6 +350,12 @@ class MissionNode(Node):
         republished, which holds the vehicle where it finished rather than
         handing PX4 nothing to fly to.
         """
+        # The track advances here, on this node's own timer, and not in the
+        # position callback. The callback depends on PX4 publishing; a gap in
+        # that topic would stop a track vehicle mid leg and the record would
+        # read it as a yield.
+        self.advance_track(self.get_clock().now().nanoseconds / 1e9)
+
         mode = OffboardControlMode()
         mode.timestamp = self.stamp()
         mode.position = True

@@ -17,6 +17,7 @@
   <depend>rclpy</depend>
   <depend>uavx_msgs</depend>
   <exec_depend>px4_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
 
   <!-- The tests read the frozen pose rate out of the runner that samples at
        it, rather than writing 20 Hz down a third time. -->
