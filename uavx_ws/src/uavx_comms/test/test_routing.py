@@ -836,3 +836,41 @@ def test_a_deep_observation_backlog_does_not_delay_control():
     drain(net, 4.0)
     assert far.control_max_delay_s <= 0.05
     assert far.control_served > 0
+
+
+# ------------------------------------------- noticing a neighbour come back
+def test_a_neighbour_coming_back_is_acted_on_without_waiting_for_a_period():
+    """Round 9 finding 3. The other half of "immediately on any change".
+
+    The radio is gated and lifted with nothing told either way, so the swarm
+    finds out by hearing a HELLO again. Waiting a period to flood that and
+    another to route over it puts two periods of observations into a queue
+    whose drain is bounded at 2.25 s.
+    """
+    net = frozen_net(elections_enabled=False)
+    net.run_for(CONVERGENCE_S)
+    net.blackout("uav_2")
+    net.run_for(10.0)
+    assert net.installed_route("uav_4") is None, (
+        "uav_4 still has a route with the relay's radio gated")
+
+    net.restore("uav_2")
+    net.run_for(params.HELLO_PERIOD_S + 3 * params.NEIGHBOUR_TIMEOUT_S / 3)
+    back = net.installed_route("uav_4")
+    assert back is not None, (
+        "uav_4 had not routed again one hello period plus a settle after the "
+        "radio came back, so the swarm is waiting for a timer rather than "
+        "for the neighbour")
+
+
+def test_hearing_a_neighbour_we_already_had_changes_no_timer():
+    # Every hello would otherwise reset the flood and computation clocks, and
+    # a mesh that recomputes on every hello is not using its periods at all.
+    net = settled_net()
+    net.run_for(4.0)
+    router = net.router("uav_3")
+    lsa_at, compute_at = router._next_lsa_at, router._next_compute_at
+    net.run_for(params.HELLO_PERIOD_S + 0.1)
+    assert router._next_lsa_at >= lsa_at
+    assert router._next_compute_at >= compute_at
+

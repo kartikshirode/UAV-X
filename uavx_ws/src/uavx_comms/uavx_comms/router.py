@@ -146,6 +146,12 @@ class Router:
         # caught up, and a node that named itself for a tenth of a second is
         # not the custodian of anything.
         self.custodian_seconds: Dict[str, float] = {}
+        # What this node was holding at the moment its route came back, and
+        # what is left of it. The backlog an outage built is that set and
+        # nothing else; a surveying vehicle mints into the same queue while it
+        # drains, so the store itself never runs empty on the backlog's
+        # timetable.
+        self._backlog: Set[Tuple[str, int]] = set()
         # The custodian this node has already handed its backlog to. Cleared
         # when a route returns, so the next outage hands over again.
         self._handed_to: Optional[str] = None
@@ -285,8 +291,18 @@ class Router:
             # is the difference between a swarm that has to relay and one whose
             # anchor turns out to be adjacent to every surveyor.
             self.position_cache[sender] = tuple(body["position"])
-            self.neighbours.hello(sender, body["position"], now, body["seq"])
+            fresh = self.neighbours.hello(sender, body["position"], now,
+                                          body["seq"])
             self.lost_neighbours.discard(sender)
+            if fresh:
+                # A neighbour arriving is a topology change and the design
+                # promises the link state goes out immediately on any of
+                # them. Only the leaving half was wired, so a radio coming
+                # back waited up to one LSA period to be told about and one
+                # computation period to be routed over, with the queue that
+                # is waiting for the route filling through both.
+                self._next_lsa_at = now
+                self._next_compute_at = now
             self._relay_flood(incoming, now)
             return
         if not self._fresh_flood(incoming):
@@ -748,9 +764,16 @@ class Router:
                 # the recovery is confirmed three seconds later.
                 self.route_returned_at = now
                 self.drain_end_at = None
+                self._backlog = {key for key in self.store.identities()}
                 self.route_episodes.append({
                     "returned_at": round(now, 3), "recovered_at": None,
-                    "drained_at": None, "lost_at": None})
+                    "drained_at": None, "lost_at": None,
+                    # The backlog this node was holding when it got somewhere
+                    # to send it, and when the last of that set left. The
+                    # bound the gate reads is measured between the two.
+                    "backlog": len(self._backlog),
+                    "backlog_cleared_at": (round(now, 3) if not self._backlog
+                                           else None)})
             elif (self.recovered_at is None
                   and now - self._route_present_since >= params.STABILITY_WINDOW_S):
                 self.recovered_at = now
@@ -990,7 +1013,18 @@ class Router:
             self._emit(out)
             if held.identity() in self.pending_ack:
                 self._sent_at[held.identity()] = now
+            self._note_backlog(held.identity(), now)
         self._note_drain(now)
+
+    def _note_backlog(self, key, now: float) -> None:
+        """One backlog packet has left. Stamp the episode when the last does."""
+        if not self._backlog:
+            return
+        self._backlog.discard(key)
+        if self._backlog or not self.route_episodes:
+            return
+        if self.route_episodes[-1].get("backlog_cleared_at") is None:
+            self.route_episodes[-1]["backlog_cleared_at"] = round(now, 3)
 
     def _note_drain(self, now: float) -> None:
         """The first moment the store was empty after the route returned.
