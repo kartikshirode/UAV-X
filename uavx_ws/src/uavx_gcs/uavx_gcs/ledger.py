@@ -332,12 +332,21 @@ def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
         raise LedgerError(
             f"epoch_s is {epoch_s!r}, not the simulated time the scenario "
             f"started at")
-    minted = {i: when - offset for i, when in
+    # Round 9 finding 4, found by the checker it added. Every time in this
+    # block is written to three decimals and the window ends were not, so a
+    # record said 440 observations were minted inside an outage whose own rows
+    # showed 436: four of them were created at 121.1000000000001, went into
+    # the count at full precision, and came out of the ledger rounded to
+    # 121.1, which is below a start of 121.10000000000001. A record has to be
+    # checkable from its own contents, so the window and the rows are put on
+    # one grid here rather than compared across two.
+    minted = {i: round(when - offset, 3) for i, when in
               generated_rows(router_ledgers).items()}
-    arrived = {i: when - offset for i, when in
+    arrived = {i: round(when - offset, 3) for i, when in
                delivered_rows(gcs_ledger).items()}
-    born = {i: when - offset for i, when in
+    born = {i: round(when - offset, 3) for i, when in
             created_rows(gcs_ledger).items()}
+    start, end = round(start, 3), round(end, 3)
 
     # Scoped to the run, on both sides and by the same rule. See RUN_START_S.
     # The delivered side is scoped by the destination's own copy of the

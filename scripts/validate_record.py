@@ -37,6 +37,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
 from jsonschema_mini import validate                        # noqa: E402
+from record_semantics import observation_problems            # noqa: E402
 
 SCHEMA = REPO / "scenarios" / "run-record.schema.json"
 
@@ -218,6 +219,14 @@ def semantic_errors(record: dict) -> list[str]:
     vehicles = record.get("vehicle_ids_observed")
     if isinstance(vehicles, list) and len(set(vehicles)) != len(vehicles):
         errors.append("vehicle_ids_observed contains duplicate ids")
+
+    # Round 9 finding 4. Everything the observations block claims, recomputed
+    # from the rows it was counted from. This ran only in the final package
+    # check, so a chunk and a week could go green on a record the package
+    # would reject: custody set to 450 with ids nothing generated and the
+    # drain typed down to 2.2 passed the schema and all 22 of chunk 4.4's
+    # requirements while the ledger still held 900 outage ids.
+    errors.extend(observation_problems(record))
 
     if requested is not None:
         for index, event in enumerate(record.get("injected_events") or []):

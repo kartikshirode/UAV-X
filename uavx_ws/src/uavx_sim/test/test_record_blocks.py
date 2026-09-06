@@ -82,7 +82,18 @@ def recovery(**overrides):
 
 
 def built(**kwargs):
-    return build_record(**fields(**kwargs))
+    """One record carrying the week 4 blocks, over a run long enough for them.
+
+    The base fields come from the week 1 harness example, which is a 60 s run,
+    and every block here describes an outage that ends at 105 and a last
+    delivery at 106.8. Round 9 finding 4 added the check that catches a record
+    whose last observation arrived after the run ended, and it caught this
+    fixture first: the times were never made to agree because nothing read
+    them together.
+    """
+    body = {"requested_duration_s": 180.0, "elapsed_sim_s": 180.0}
+    body.update(kwargs)
+    return build_record(**fields(**body))
 
 
 def refused(**kwargs):
