@@ -301,12 +301,19 @@ def _episodes(entry: Mapping, offset: float) -> list:
             returned = _number(row.get("returned_at"))
             if returned is None:
                 continue
+            cleared = _number(row.get("backlog_cleared_at"))
             out.append({
                 "returned_at": returned - offset,
                 "recovered_at": (None if _number(row.get("recovered_at")) is None
                                  else _number(row["recovered_at"]) - offset),
                 "drained_at": (None if _number(row.get("drained_at")) is None
                                else _number(row["drained_at"]) - offset),
+                # The backlog this node held when the route came back, and
+                # when the last of it left. A ledger from before chunk 4.4
+                # has neither, and falls back to the store running empty.
+                "backlog": row.get("backlog"),
+                "backlog_cleared_at": (None if cleared is None
+                                       else cleared - offset),
                 "lost_at": (None if _number(row.get("lost_at")) is None
                             else _number(row["lost_at"]) - offset),
             })
@@ -320,6 +327,8 @@ def _episodes(entry: Mapping, offset: float) -> list:
     return [{"returned_at": returned - offset,
              "recovered_at": None if recovered is None else recovered - offset,
              "drained_at": None if drained is None else drained - offset,
+             "backlog": None,
+             "backlog_cleared_at": None,
              "lost_at": None}]
 
 
@@ -526,6 +535,13 @@ def outage_block(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
     # store that ran empty on a later episode of the same node's route, or on
     # the gated vehicle's own return two minutes afterwards, is a different
     # event with a different cause.
+    #
+    # The backlog is what a node was holding when it got a route again, and
+    # the bound is when the last of that set left. Not the store running
+    # empty: a surveying vehicle mints into the same queue while it drains, so
+    # the last thing out of the store is always something made after the
+    # outage was over. Both are reported, and `drain_by_node` is still the
+    # store.
     drained = {node: row["drained_at"] for node, row in lost.items()}
     never = sorted(node for node, when in drained.items() if when is None)
     if never:
@@ -533,11 +549,23 @@ def outage_block(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
             f"{', '.join(never)} got the route back and never ran the store "
             f"empty on it, so there is no moment at which the backlog this "
             f"outage built had finished draining")
+    cleared = {node: row["backlog_cleared_at"] for node, row in lost.items()
+               if row.get("backlog_cleared_at") is not None}
+    stuck = sorted(node for node, row in lost.items()
+                   if row.get("backlog") and row.get("backlog_cleared_at") is None)
+    if stuck:
+        raise RecoveryError(
+            f"{', '.join(stuck)} got the route back holding a backlog and "
+            f"never cleared it, so the run ended with the outage's data still "
+            f"on the aircraft that was holding it")
     try:
         block = led.observations(
             router_ledgers, gcs_ledger, start, end, drain_start_s=returned,
             epoch_s=epoch_s, destroyed=destroyed,
-            drain_end_s=max(drained.values()), drain_by_node=drained)
+            drain_end_s=max(cleared.values()) if cleared else max(drained.values()),
+            drain_by_node=drained,
+            backlog_by_node={node: row["backlog"] for node, row in lost.items()
+                             if row.get("backlog") is not None})
     except led.LedgerError as exc:
         raise RecoveryError(str(exc)) from exc
     # What the fault actually did, beside the window the record reports. The

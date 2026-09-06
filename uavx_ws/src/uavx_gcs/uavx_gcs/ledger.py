@@ -284,7 +284,8 @@ def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
                  epoch_s: float = 0.0,
                  destroyed: Sequence[str] = (),
                  drain_end_s: Optional[float] = None,
-                 drain_by_node: Optional[Mapping] = None) -> dict:
+                 drain_by_node: Optional[Mapping] = None,
+                 backlog_by_node: Optional[Mapping] = None) -> dict:
     """The whole observations block, from the ledgers and the outage window.
 
     The window comes from the run rather than from the files: the moment a
@@ -451,6 +452,13 @@ def observations(router_ledgers: Sequence[Mapping], gcs_ledger: Mapping,
         # nobody can argue with.
         "drain_by_node": dict(sorted(by_node.items())),
         "drain_counted_for": sorted(counted),
+        # How many observations each cut off member was still holding when it
+        # got a route again. The bound above is the time the largest of those
+        # took to leave, and this is the size it was measured over.
+        "backlog_by_node": {str(node): int(size) for node, size
+                            in sorted((backlog_by_node or {}).items())},
+        "backlog": max([int(v) for v in (backlog_by_node or {}).values()]
+                       or [0]),
         "ledger": [{"id": i, "created_at_s": round(minted[i], 3),
                     "delivered_at_s": (None if i not in arrived
                                        else round(arrived[i], 3))}
