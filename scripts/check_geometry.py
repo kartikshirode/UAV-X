@@ -65,6 +65,11 @@ RECONNECT_GATE = 45.0
 # `route_key` returns. Fewer hops always wins. Relay count only ever decides a
 # tie. No weight to pick, and nothing to be wrong at a larger relay count.
 MIN_SEPARATION = 10.0
+# How far ahead the yield rule looks. architecture.md section 5. At the 10 m/s
+# cruise a closing pair covers 80 m in this time, so the rule sees a crossing
+# long before the 10 m floor is in danger and the hold is a slow one rather
+# than an emergency stop.
+YIELD_HORIZON = 4.0
 
 # A relay slot has to clear every vehicle that is still flying, by more than the
 # separation floor. The extra 5 m is for staleness: a node that has lost its

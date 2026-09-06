@@ -81,6 +81,10 @@ SLOT_CEILING_M = 95.0
 # --- section 5, safety and motion ------------------------------------------
 CRUISE_SPEED_MPS = 10.0
 MIN_SEPARATION_M = 10.0
+# How far ahead the yield rule looks, in seconds. A pair whose predicted
+# separation inside this window drops under MIN_SEPARATION_M is a conflict,
+# and the higher system id holds until it clears.
+YIELD_HORIZON_S = 4.0
 
 # The ground station is a node in the graph like any other. Round 2 found that
 # leaving it out invited an implementer to wire it straight to every router.
