@@ -1606,8 +1606,18 @@ class Harness:
             print(f"  started the collector and {len(flyers)} mission "
                   f"executor(s) for {self.spec.cell_count} cells", flush=True)
         else:
-            print(f"  started {len(flyers)} station-keeping executor(s)",
-                  flush=True)
+            # Named by what they were actually given, because "station
+            # keeping" was printed over two vehicles flying 240 m lines and a
+            # reader checking the log against the scenario would have found
+            # the run doing something else.
+            tracked = sum(1 for v in flyers
+                          if self.comms.track_of(v.name) is not None)
+            kinds = []
+            if tracked:
+                kinds.append(f"{tracked} track")
+            if len(flyers) - tracked:
+                kinds.append(f"{len(flyers) - tracked} station-keeping")
+            print(f"  started {' and '.join(kinds)} executor(s)", flush=True)
 
         settle_until = time.time() + NODE_SETTLE_S
         while time.time() < settle_until:
