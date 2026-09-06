@@ -37,6 +37,7 @@ from typing import Optional
 
 import rclpy
 from px4_msgs.msg import VehicleLocalPosition
+from std_msgs.msg import Bool
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile,
@@ -114,6 +115,12 @@ class RouterNode(Node):
             "false for queue_drain, which holds the outage open on purpose."))
         self.declare_parameter("observations", True, _described(
             "whether this vehicle generates observations at the frozen rate."))
+        self.declare_parameter("yield_enabled", True, _described(
+            "whether this vehicle gives way. False is the encounter_noyield "
+            "control, which is the same flight with the rule switched off and "
+            "a separation violation required. A run where the two vehicles "
+            "happened to miss each other is indistinguishable from one where "
+            "the rule worked unless the control fails."))
         self.declare_parameter("ledger_path", "", _described(
             "where to write this node's counters. Empty writes nothing."))
 
@@ -142,6 +149,7 @@ class RouterNode(Node):
             forwarding=bool(self.get_parameter("forwarding").value),
             elections_enabled=bool(
                 self.get_parameter("elections_enabled").value),
+            yield_enabled=bool(self.get_parameter("yield_enabled").value),
         )
         self.generates = bool(self.get_parameter("observations").value)
         self.ledger_path = str(self.get_parameter("ledger_path").value)
@@ -153,6 +161,18 @@ class RouterNode(Node):
         self.create_subscription(
             VehicleLocalPosition, px4 + "/out/vehicle_local_position",
             self.on_position, PX4_QOS)
+        # Where the yield decision goes. A vehicle-local topic in this
+        # vehicle's own namespace carrying no SwarmPacket, which is what the
+        # role slot already does and what the seam rules allow: the radio
+        # carries swarm traffic, and this is one process on an aircraft
+        # telling another that the aircraft is not to move.
+        #
+        # The decision is made here rather than in the mission executor
+        # because this is the node that decodes HELLO. uavx_comms depends on
+        # uavx_mission for the frame conversion, so the dependency cannot run
+        # the other way without a cycle colcon refuses to order.
+        self.yield_hold = self.create_publisher(
+            Bool, "/" + self.vehicle_id + "/yield_hold", 10)
 
         self._last_tick: Optional[float] = None
         # Nothing is acted on before the simulated clock is live.
@@ -245,6 +265,13 @@ class RouterNode(Node):
         dt = max(0.0, now - self._last_tick)
         self._last_tick = now
         self.router.tick(now, dt)
+        # Every tick and not only on a change. The mission executor holds
+        # while this says so, so a single dropped message on a change would
+        # leave the aircraft flying into a conflict or stopped for the rest of
+        # the run, depending on which edge was lost.
+        hold = Bool()
+        hold.data = bool(self.router.yield_rule.holding)
+        self.yield_hold.publish(hold)
         self.publish()
 
     def observe(self) -> None:

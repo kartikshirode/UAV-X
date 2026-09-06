@@ -44,6 +44,7 @@ from collections import deque
 from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
 from . import election, graph, packet as pk, params, routing, slots
+from . import yield_rule
 
 # Why a received packet went nowhere. Counted rather than swallowed: a drop
 # nobody can name is the failure this package exists to make impossible.
@@ -65,7 +66,8 @@ class Router:
                  destination: str = params.GCS_ID,
                  forwarding: bool = True,
                  elections_enabled: bool = True,
-                 queue_capacity: int = params.QUEUE_CAPACITY) -> None:
+                 queue_capacity: int = params.QUEUE_CAPACITY,
+                 yield_enabled: bool = True) -> None:
         self.node_id = node_id
         self.position = tuple(position)
         # Zero until PX4 says otherwise, which is honest: a vehicle that has
@@ -81,6 +83,13 @@ class Router:
         # nothing, so the control has to be a real switch in the real code.
         self.forwarding = forwarding
         self.elections_enabled = elections_enabled
+
+        # architecture.md section 5. Fed from HELLO in `_on_hello` and asked
+        # on every tick, which is 20 Hz and is the rate the design names for
+        # the separation monitor. encounter_noyield.yaml is the same flight
+        # with this disabled and a violation required, so the flag is a real
+        # switch in the real code and not a branch in the harness.
+        self.yield_rule = yield_rule.YieldRule(node_id, enabled=yield_enabled)
 
         self.neighbours = routing.NeighbourTable()
         self.lsdb = graph.LinkStateDatabase()
@@ -310,6 +319,13 @@ class Router:
             fresh = self.neighbours.hello(sender, body["position"], now,
                                           body["seq"])
             self.lost_neighbours.discard(sender)
+            # The direct beacon only, which is the same rule the neighbour
+            # table uses. A relayed HELLO is a hop older than one that came
+            # straight over the air, and the whole difficulty of predicting
+            # from beacons is that they are already late.
+            self.yield_rule.sighting(sender, body["position"],
+                                     body.get("velocity", (0.0, 0.0, 0.0)),
+                                     body.get("sent_at", now))
             if fresh:
                 # A neighbour arriving is a topology change and the design
                 # promises the link state goes out immediately on any of
@@ -611,6 +627,11 @@ class Router:
 
         self._track_connectivity(now)
         self._note_custodian(dt)
+        # Every tick, at the router's own 20 Hz. Nothing else in this method
+        # depends on the answer: the rule reports it and the node publishes
+        # it to the mission executor, which is the process that owns where
+        # this aircraft goes.
+        self.yield_rule.update(now, self.position, self.velocity)
 
         if now >= self._next_hello_at:
             self._next_hello_at = now + params.HELLO_PERIOD_S
@@ -1123,6 +1144,12 @@ class Router:
             "unacknowledged_ids": sorted(
                 packet.identity_str() for packet in self.pending_ack.values()),
             "unacknowledged": len(self.pending_ack),
+            # What this node did about separation. Every field is here on
+            # every vehicle in every scenario, including the eight that never
+            # cross anything, because a run whose record simply lacked them
+            # would make the comparison between encounter and its control a
+            # comparison of two differently shaped records.
+            **self.yield_rule.as_record(),
             # One row per period this node had a route. Every recovery
             # number is about the first of them after the fault, and the
             # scalars below are only ever the latest.
