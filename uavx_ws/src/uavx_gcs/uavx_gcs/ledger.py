@@ -89,10 +89,18 @@ def ratio_by_node(generated_by_node: Mapping[str, Sequence[str]],
     The gate reads the far surveyor's row on its own, because a swarm average
     stays comfortable while the one vehicle that needs the relay is delivering
     nothing at all.
+
+    A node that generated nothing has no row. Round 9 finding 1 gave
+    queue_drain two surveying origins, so its anchor and its gated relay send
+    no observations at all, and a ratio over an empty denominator reads as a
+    score of zero while meaning "this vehicle was not asked to do anything".
+    The record writer already refuses that and it is right to: the honest
+    answer is the absence of a row, and app_packets_sent_by_node still carries
+    the zero so the vehicle does not vanish from the record.
     """
     arrived = set(delivered_ids)
     return {node: delivery_ratio(ids, arrived)
-            for node, ids in sorted(generated_by_node.items())}
+            for node, ids in sorted(generated_by_node.items()) if ids}
 
 
 # --------------------------------------------------------- the outage block

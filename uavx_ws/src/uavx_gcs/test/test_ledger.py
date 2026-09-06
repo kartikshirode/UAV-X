@@ -157,3 +157,18 @@ def test_the_ground_station_never_supplies_its_own_denominator():
                                     "generated_ids": [ident(FAR, n)
                                                       for n in range(4)]}])
     assert ratio_by_node(generated, arrived) == {FAR: 0.25}
+
+
+def test_a_vehicle_that_was_not_asked_to_observe_has_no_ratio():
+    """queue_drain gives two of its four vehicles no observation timer.
+
+    A ratio over an empty denominator reads as a score of zero and means "this
+    one was not asked to do anything". The record writer refuses it, so the
+    honest answer is no row at all; app_packets_sent_by_node still carries the
+    zero and the vehicle stays in the record.
+    """
+    got = ratio_by_node({"uav_1": [], "uav_3": ["uav_3:1", "uav_3:2"]},
+                        ["uav_3:1"])
+    assert "uav_1" not in got
+    assert got["uav_3"] == pytest.approx(0.5)
+
