@@ -332,6 +332,22 @@ def _episodes(entry: Mapping, offset: float) -> list:
              "lost_at": None}]
 
 
+def _held(row: Mapping) -> bool:
+    """Did this route last long enough to be a route.
+
+    An episode carries `recovered_at` when the node held the route for the
+    stability window, and `lost_at` when it gave it up. Both set is a route
+    that was taken, held and later lost, which is a real one. `lost_at` set
+    with no `recovered_at` is a route that came and went inside the window,
+    which is a flap.
+
+    Neither set is the run ending while the node still had the route, and that
+    counts: it is the ordinary shape of the last episode of a healthy run.
+    """
+    return not (row.get("lost_at") is not None
+                and row.get("recovered_at") is None)
+
+
 def lost_route(router_ledgers: Sequence[Mapping], after_s: float,
                epoch_s: float = 0.0,
                exclude: Sequence[str] = ()) -> Dict[str, dict]:
@@ -347,6 +363,10 @@ def lost_route(router_ledgers: Sequence[Mapping], after_s: float,
     its own route the moment it is gated and gets it back the moment the
     scenario's hold runs out, and neither of those is the swarm recovering
     from anything.
+
+    A route that was withdrawn before it was ever confirmed is skipped. See
+    `_held`: it is the link state converging, not a reconnection, and taking
+    it as one reported a 45 second outage as three.
     """
     offset = _offset(epoch_s)
     skip = set(exclude)
@@ -363,7 +383,7 @@ def lost_route(router_ledgers: Sequence[Mapping], after_s: float,
         if node in skip:
             continue
         after = [row for row in _episodes(entry, offset)
-                 if row["returned_at"] >= start]
+                 if row["returned_at"] >= start and _held(row)]
         if not after:
             continue
         out[node] = after[0]

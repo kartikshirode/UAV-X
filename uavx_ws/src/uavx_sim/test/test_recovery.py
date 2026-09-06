@@ -830,3 +830,60 @@ def test_the_block_reports_the_moments_the_window_is_not_taken_from():
     assert got["radio_gated_at_s"] == pytest.approx(DRAIN_AT + 0.1)
     assert got["radio_restored_at_s"] == pytest.approx(DRAIN_LIFT + 0.1)
 
+
+# ------------------------------------------------- a route that never held
+def flapping(node, flap_at, real_at, confirmed_at):
+    """One router that took a route, dropped it, and took a real one later.
+
+    Live queue_drain, 6 September. uav_2's HELLOs time out on uav_3 before
+    they time out on uav_4, so for one hop time uav_4 is still advertising
+    uav_2 and a path through that advertisement exists. uav_3 took it at 63.0
+    and gave it up at 63.1.
+    """
+    row = router(node, [(ident(node, 1), 200.0)], returned=real_at,
+                 confirmed=confirmed_at, drained=real_at + 0.4)
+    row["route_episodes"] = [
+        {"returned_at": EPOCH + flap_at, "recovered_at": None,
+         "drained_at": EPOCH + flap_at, "lost_at": EPOCH + flap_at + 0.1},
+    ] + row["route_episodes"]
+    return row
+
+
+def test_a_route_taken_and_dropped_again_is_not_a_reconnection():
+    """The 0.1 s episode is skipped and the real one is reported.
+
+    Taking the flap reported a 45 second outage as three: 30 observations
+    generated inside it, 30 delivered after, and a backlog that drained in
+    0.00 s while the custodian's queue was holding 468 packets.
+    """
+    ledgers = [flapping(NEAR, 63.0, 106.1, 109.1),
+               flapping(FAR, 63.0, 106.1, 109.1)]
+    lost = lost_route(ledgers, 61.1, EPOCH)
+    assert sorted(lost) == [NEAR, FAR] or sorted(lost) == sorted([NEAR, FAR])
+    assert lost[NEAR]["returned_at"] == pytest.approx(106.1)
+    assert route_return_s(ledgers, 61.1, EPOCH) == pytest.approx(106.1)
+
+
+def test_a_route_that_was_held_and_later_lost_is_still_a_reconnection():
+    """Both times set is the ordinary shape of a route that worked.
+
+    The rule has to separate a flap from a node that reconnected, held the
+    route for the stability window and lost it again later, which is what
+    every vehicle in link_loss does when it flies home.
+    """
+    row = router(NEAR, [(ident(NEAR, 1), 200.0)], returned=148.0,
+                 confirmed=151.0, drained=148.3)
+    row["route_episodes"][0]["lost_at"] = EPOCH + 240.0
+    lost = lost_route([row], KILL_AT, EPOCH)
+    assert lost[NEAR]["returned_at"] == pytest.approx(148.0)
+
+
+def test_a_run_that_ended_with_the_route_up_still_reports_it():
+    """Neither time set is the last episode of a healthy run, not a flap."""
+    row = router(NEAR, [(ident(NEAR, 1), 200.0)], returned=148.0,
+                 drained=148.3)
+    assert row["route_episodes"][0]["recovered_at"] is None
+    assert row["route_episodes"][0]["lost_at"] is None
+    assert lost_route([row], KILL_AT, EPOCH)[NEAR]["returned_at"] == \
+        pytest.approx(148.0)
+
