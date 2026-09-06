@@ -56,6 +56,16 @@ comms:
     uav_3: survey
     uav_4: survey
 
+  # The two the queue arithmetic is about, and the only scenario that names
+  # this. 45 s at 5 Hz from these two is the 450 observations the 512 packet
+  # queue is sized for. With the anchor and the relay minting as well the run
+  # produces 900 ids inside the outage window and the custody claim, which is
+  # about one member holding the component's whole backlog, is a claim about
+  # half of them.
+  observation_origins:
+    - uav_3
+    - uav_4
+
   stations:
     uav_1: [165.0, 0.0, 30.0]
     uav_2: [330.0, 0.0, 40.0]

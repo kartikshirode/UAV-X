@@ -482,3 +482,61 @@ def test_observing_a_gate_reads_it_back_off_the_radio():
     command = gated_radios_command()
     assert command[:4] == ["ros2", "param", "get", "/link_layer"]
     assert "--hide-type" in command
+
+
+# ------------------------------------------------------ who is surveying
+def test_every_vehicle_observes_unless_the_scenario_says_otherwise():
+    # Eight of the nine scenarios. The mesh is scored on the traffic the
+    # whole swarm makes, so an absent key cannot quietly narrow it.
+    body = spec()
+    assert body.observation_origins is None
+    for vehicle in VEHICLES:
+        assert body.observes(vehicle)
+        command = router_command(vehicle, SPAWN, STATIONS[vehicle], body,
+                                 "/tmp/x.json")
+        assert "observations:=true" in " ".join(command).lower()
+
+
+def test_a_scenario_can_name_the_surveying_origins():
+    """queue_drain, and the reason it is the only one.
+
+    Its claim is a queue depth, and the depth is 45 s at 5 Hz from the two
+    origins the outage cuts off. With the anchor and the relay minting too the
+    run makes 900 ids inside the window and the custody claim is about half of
+    them.
+    """
+    body = comms_spec(block(observation_origins=[NEAR, FAR]), VEHICLES,
+                      ALTITUDES)
+    assert body.observation_origins == (NEAR, FAR)
+    assert body.observes(NEAR) and body.observes(FAR)
+    assert not body.observes(ANCHOR) and not body.observes(RELAY)
+    quiet = " ".join(router_command(ANCHOR, SPAWN, STATIONS[ANCHOR], body,
+                                    "/tmp/x.json")).lower()
+    assert "observations:=false" in quiet
+
+
+def test_the_record_says_who_was_surveying_either_way():
+    assert spec().as_record()["observation_origins"] is None
+    named = comms_spec(block(observation_origins=[NEAR]), VEHICLES, ALTITUDES)
+    assert named.as_record()["observation_origins"] == [NEAR]
+
+
+def test_a_run_where_nothing_observes_is_refused():
+    with pytest.raises(CommsError) as caught:
+        comms_spec(block(observation_origins=[]), VEHICLES, ALTITUDES)
+    assert "no traffic to measure" in str(caught.value)
+
+
+def test_an_origin_the_scenario_does_not_fly_is_refused():
+    with pytest.raises(CommsError) as caught:
+        comms_spec(block(observation_origins=[NEAR, "uav_9"]), VEHICLES,
+                   ALTITUDES)
+    assert "does not fly" in str(caught.value)
+
+
+def test_the_same_origin_twice_is_refused():
+    with pytest.raises(CommsError) as caught:
+        comms_spec(block(observation_origins=[NEAR, NEAR]), VEHICLES,
+                   ALTITUDES)
+    assert "twice" in str(caught.value)
+

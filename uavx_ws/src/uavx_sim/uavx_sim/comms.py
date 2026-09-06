@@ -110,6 +110,20 @@ class CommsSpec:
     elections_enabled: bool
     roles: Mapping[str, str]
     stations: Mapping[str, Tuple[float, float, float]]
+    # The vehicles that mint observations, or None for all of them.
+    #
+    # None is what every scenario but queue_drain wants: traffic from every
+    # aircraft is the load the mesh is scored on. queue_drain is the one run
+    # whose claim is about a queue depth, and that arithmetic is written for
+    # the two surveying origins the outage cuts off. With the anchor and the
+    # relay minting as well, the run produces twice the outage ids the custody
+    # claim is about.
+    observation_origins: Optional[Tuple[str, ...]] = None
+
+    def observes(self, vehicle_id: str) -> bool:
+        if self.observation_origins is None:
+            return True
+        return vehicle_id in self.observation_origins
 
     def role_of(self, vehicle_id: str) -> str:
         try:
@@ -137,6 +151,11 @@ class CommsSpec:
             "roles": dict(sorted(self.roles.items())),
             "stations": {name: list(point)
                          for name, point in sorted(self.stations.items())},
+            # Named in the record either way. A reader working out why a run
+            # generated what it did should not have to know that an absent
+            # key means everybody.
+            "observation_origins": (None if self.observation_origins is None
+                                    else list(self.observation_origins)),
         }
 
 
@@ -201,7 +220,36 @@ def comms_spec(raw: Mapping, vehicles: Sequence[str],
     return CommsSpec(forwarding=bool(block["forwarding"]),
                      elections_enabled=bool(block["elections_enabled"]),
                      roles={v: str(roles[v]) for v in vehicles},
-                     stations=stations)
+                     stations=stations,
+                     observation_origins=_origins(
+                         block.get("observation_origins"), vehicles))
+
+
+def _origins(block, vehicles: Sequence[str]) -> Optional[Tuple[str, ...]]:
+    """Which vehicles mint observations, or None for every one of them.
+
+    Absent is the answer for eight of the nine scenarios: the mesh is scored
+    on the traffic the whole swarm makes. queue_drain names two, because its
+    claim is a queue depth and the depth is arithmetic over the origins the
+    outage cuts off.
+    """
+    if block is None:
+        return None
+    if not isinstance(block, (list, tuple)) or not block:
+        raise CommsError(
+            f"comms.observation_origins is {block!r}. It is a list of the "
+            f"vehicles that survey, and a run where nothing observes carries "
+            f"no traffic to measure")
+    named = [str(v) for v in block]
+    unknown = sorted(set(named) - set(vehicles))
+    if unknown:
+        raise CommsError(
+            f"comms.observation_origins names {', '.join(unknown)}, which "
+            f"the scenario does not fly")
+    if len(set(named)) != len(named):
+        raise CommsError(
+            f"comms.observation_origins names a vehicle twice: {named}")
+    return tuple(sorted(named))
 
 
 def _stations(block, vehicles: Sequence[str], altitudes: Mapping,
@@ -325,7 +373,7 @@ def router_command(vehicle_id: str, spawn_row, station, spec: CommsSpec,
         "role": spec.role_of(vehicle_id),
         "forwarding": spec.forwarding,
         "elections_enabled": spec.elections_enabled,
-        "observations": True,
+        "observations": spec.observes(vehicle_id),
         "ledger_path": str(ledger_path),
     }
     return (["ros2", "run", "uavx_comms", "router"]
