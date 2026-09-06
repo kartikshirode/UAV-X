@@ -55,6 +55,15 @@ from uavx_mission.survey_area import (BASELINE_CELL_M, BASELINE_SENSOR_RADIUS_M,
                                       SurveyArea)
 from uavx_mission.track import Track
 
+# What one vehicle has been given to do. Exactly one of these, decided once in
+# the constructor from the parameters, because the question used to be asked
+# three times as `station is None` and the third one was wrong the moment a
+# third kind of work existed. uavx_sim.work is the scenario side of the same
+# three and refuses a vehicle with none or with two.
+SURVEY = "survey"
+STATION = "station"
+TRACK = "track"
+
 # architecture.md section 6: observation packets, 5 Hz per surveying vehicle.
 OBSERVATION_HZ = 5.0
 
@@ -165,6 +174,8 @@ class MissionNode(Node):
                 f"{self.vehicle_id} was given a station and a track. A "
                 f"vehicle with two jobs is given two places to be, and which "
                 f"one it flies comes down to which was read first")
+        self.work = (TRACK if self.track is not None else
+                     STATION if self.station is not None else SURVEY)
 
         sw = [float(v) for v in self.get_parameter("area_sw_m").value]
         area = SurveyArea.from_corner(
@@ -173,7 +184,7 @@ class MissionNode(Node):
             float(self.get_parameter("area_height_m").value),
             float(self.get_parameter("cell_m").value),
             float(self.get_parameter("sensor_radius_m").value))
-        if self.station is None and self.track is None:
+        if self.work == SURVEY:
             strips = partition(
                 area, list(self.get_parameter("swarm_vehicles").value))
             strip = strip_of(strips, self.vehicle_id)
@@ -200,7 +211,7 @@ class MissionNode(Node):
         # properties Node has, and test_node_attributes.py now refuses
         # either name on any node in this workspace.
         self.mission = None
-        if self.station is None and self.track is None:
+        if self.work == SURVEY:
             self.mission = MissionExecutor(
                 self.vehicle_id, strip, path,
                 float(self.get_parameter("acceptance_radius_m").value))
@@ -250,10 +261,10 @@ class MissionNode(Node):
         # vehicle has said anything and the heartbeat can start flying it
         # there the moment PX4 grants offboard.
         self.last_setpoint = None
-        if self.station is not None:
+        if self.work == STATION:
             self.last_setpoint = [float(v) for v in
                                   frames.frozen_to_px4(self.station, self.home)]
-        if self.track is not None:
+        if self.work == TRACK:
             # The head of the line, which is also where the ingress flew it.
             # Holding here until the scenario's clock arrives is what keeps
             # the pair together: whichever of the two is told first waits for
@@ -264,12 +275,12 @@ class MissionNode(Node):
         if self.generates:
             self.create_timer(1.0 / OBSERVATION_HZ, self.publish_observation)
         self.create_timer(1.0 / CONTROL_MODE_HZ, self.publish_control_mode)
-        if self.station is None:
+        if self.work == SURVEY:
             self.get_logger().info(
                 f"{self.vehicle_id} surveying strip {strip.index}, "
                 f"x {strip.x_min:.3f} to {strip.x_max:.3f}, "
                 f"{len(path)} waypoints, observations {self.generates}")
-        elif self.track is not None:
+        elif self.work == TRACK:
             self.get_logger().info(
                 f"{self.vehicle_id} flying a track, "
                 f"{self.track.length_m:.1f} m at "
@@ -314,7 +325,7 @@ class MissionNode(Node):
         length of the hold, which is why a vehicle that gives way still
         finishes its line.
         """
-        if self.track is None:
+        if self.work != TRACK:
             return
         epoch = float(self.get_parameter("track_epoch_s").value)
         if epoch <= 0.0:
@@ -384,10 +395,10 @@ class MissionNode(Node):
             # here would fight the command every time a position arrived, and
             # the vehicle would sit between the two.
             return
-        if self.mission is None:
-            # Station-keeping. The setpoint was decided before the vehicle
-            # reported anything and does not depend on where it is now, so
-            # there is nothing here to advance.
+        if self.work != SURVEY:
+            # A station was decided before the vehicle reported anything and a
+            # track advances on its own timer, so neither depends on where the
+            # aircraft is now and neither has anything to advance here.
             return
         here = frames.px4_to_frozen((msg.x, msg.y, msg.z), self.home)
         target = self.mission.update(here)
@@ -438,9 +449,12 @@ class MissionNode(Node):
         # Withdrawn. A station-keeping vehicle has one place to go back to and
         # knows it; a surveyor's next waypoint is whatever its plan says, and
         # the next position report will produce it.
-        if self.station is not None:
+        if self.work == STATION:
             self.last_setpoint = [float(v) for v in
                                   frames.frozen_to_px4(self.station, self.home)]
+        # A track vehicle needs nothing here. advance_track stops deferring to
+        # the slot on its next tick and puts the commanded point back on the
+        # line, at the place the schedule says it should be by now.
         self.get_logger().info(
             f"{self.vehicle_id} released, back to its own work")
 
