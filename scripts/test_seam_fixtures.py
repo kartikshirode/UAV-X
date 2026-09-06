@@ -181,6 +181,38 @@ def _c1(g):
     return harness_graph()
 
 
+@case("a vehicle-local yield hold in its own namespace", "mission_integrated",
+      4, None)
+def _own_yield_hold(g):
+    """Chunk 4.5. The router tells its own executor to give way.
+
+    Allowed for the same reason the role slot is: it is this vehicle's own
+    namespace and it carries no SwarmPacket. Written down as a fixture rather
+    than left to the reader of the namespace rule, because the alternative
+    was a service between two processes on one aircraft, which the graph
+    cannot show carrying anything.
+    """
+    g["/uav_3/router"]["publishers"].append(
+        ep("/uav_3/yield_hold", "std_msgs/msg/Bool"))
+    g["/uav_3/mission_executor"]["subscribers"].append(
+        ep("/uav_3/yield_hold", "std_msgs/msg/Bool"))
+    return g
+
+
+@case("a yield hold reaching into another vehicle", "mission_integrated", 4,
+      "the namespace of uav_4")
+def _other_yield_hold(g):
+    """One aircraft commanding another to stop is not a vehicle-local topic.
+
+    The same message on the same kind of topic, one namespace over. If the
+    rule that allows the case above were about the topic name rather than
+    about whose namespace it is in, this would pass too.
+    """
+    g["/uav_3/router"]["publishers"].append(
+        ep("/uav_4/yield_hold", "std_msgs/msg/Bool"))
+    return g
+
+
 @case("a harness graph with no runner in it", "harness_check", 1,
       "/scenario_runner is absent")
 def _no_runner(g):
