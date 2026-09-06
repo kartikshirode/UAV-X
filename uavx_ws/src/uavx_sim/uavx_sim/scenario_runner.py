@@ -2503,10 +2503,15 @@ def run(options):
         print(f"  ok    delivery {delivery['delivery_ratio']:.4f} overall",
               flush=True)
         for node in sorted(delivery["app_packets_sent_by_node"]):
+            # A vehicle the scenario did not ask to observe sends nothing and
+            # has no ratio, because a fraction over an empty denominator reads
+            # as a score of zero. It is still printed, with the reason.
+            ratio = delivery["delivery_ratio_by_node"].get(node)
+            share = "not observing" if ratio is None else f"{ratio:.4f}"
             print(f"        {node:6s} "
                   f"{delivery['app_packets_delivered_by_node'][node]:5d} of "
                   f"{delivery['app_packets_sent_by_node'][node]:5d} = "
-                  f"{delivery['delivery_ratio_by_node'][node]:.4f}, "
+                  f"{share}, "
                   f"hops {delivery['delivered_hops_by_node'].get(node, '-')}, "
                   f"edges {delivery['delivered_edges_by_node'].get(node, '-')}",
                   flush=True)
