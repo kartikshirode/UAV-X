@@ -43,6 +43,7 @@ from typing import Dict, List, Optional, Tuple
 from gazebo_msgs.msg import ModelStates
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from uavx_msgs.msg import SwarmPacket
 
 from rcl_interfaces.msg import SetParametersResult
@@ -95,6 +96,18 @@ class LinkLayerNode(Node):
             "names the moment the radio comes back and this is that moment "
             "minus the moment it went: a duration, because the nodes count "
             "from bring-up and the scenario counts from its own zero."))
+        self.declare_parameter("blackout_nodes", [""], _described(
+            "the vehicles a blackout scheduled by this scenario is for. Set "
+            "at launch beside the hold, because the scenario knows both. "
+            "Naming them here rather than at fire time is what lets the gate "
+            "be one parameter carrying a time instead of two that have to "
+            "arrive in the right order."))
+        self.declare_parameter("radio_off_at_s", 0.0, _described(
+            "the simulated time blackout_nodes are to be gated at, absolute "
+            "and not scenario relative, because that is the clock this node "
+            "reads. Zero is unarmed. The runner sets it ahead of the fault so "
+            "the gate lands on the clock rather than whenever a parameter "
+            "call finished finding this node over DDS."))
         self.declare_parameter("ledger_path", "", _described(
             "where to write what this radio did. Empty writes nothing."))
 
@@ -133,6 +146,16 @@ class LinkLayerNode(Node):
         # HELLOs stop arriving. That is the whole fault.
         self.blackout = link.Blackout(
             float(self.get_parameter("blackout_hold_s").value))
+        self.blackout_nodes = tuple(
+            str(v) for v in self.get_parameter("blackout_nodes").value
+            if str(v).strip())
+        unknown = sorted(set(self.blackout_nodes) - set(self.nodes))
+        if unknown:
+            raise ValueError(
+                f"this radio carries {', '.join(self.nodes)} and a blackout "
+                f"in this scenario is scheduled for {', '.join(unknown)}. A "
+                f"fault aimed at a vehicle nobody is flying lands nowhere and "
+                f"the run reports an outage it never had")
         self.add_on_set_parameters_callback(self._on_parameters)
         self.ledger_path = str(self.get_parameter("ledger_path").value)
 
@@ -265,6 +288,9 @@ class LinkLayerNode(Node):
         observed.
         """
         for parameter in parameters:
+            if parameter.name == "radio_off_at_s":
+                self._arm(float(parameter.value or 0.0))
+                continue
             if parameter.name != "radio_off":
                 continue
             wanted = {str(v) for v in (parameter.value or []) if str(v).strip()}
@@ -286,6 +312,59 @@ class LinkLayerNode(Node):
                 self.get_logger().info(f"{node_id} radio restored at {now:.1f}")
         return SetParametersResult(successful=True)
 
+    def _arm(self, at_s: float) -> None:
+        """Schedule the scenario's blackout. Nothing is gated by this call.
+
+        The vehicles came from the scenario at launch and the time comes from
+        the runner, which is the only thing that knows where scenario zero
+        sits in this clock. Zero disarms, which is the value the parameter
+        starts at.
+        """
+        if at_s <= 0:
+            self.blackout.armed, self.blackout.armed_at_s = set(), None
+            return
+        if not self.blackout_nodes:
+            self.get_logger().warning(
+                f"a blackout was armed for t={at_s:.1f} and this scenario "
+                f"named no vehicles for one, so nothing will be gated")
+            return
+        armed = self.blackout.arm(self.blackout_nodes, at_s)
+        if not armed:
+            return
+        late = at_s - self.now_s()
+        self.get_logger().info(
+            f"{', '.join(armed)} radio armed for t={at_s:.1f}, "
+            f"{late:.1f}s from now")
+        if late < 0:
+            self.get_logger().warning(
+                f"the gate was armed {-late:.1f}s after the moment it was "
+                f"due, so it lands late and the record will say so")
+
+    def _gate_when_due(self, now: float) -> None:
+        """The radio goes off on the clock, at the instant it was armed for."""
+        for node_id in self.blackout.start_due(now):
+            self.model.gate_radio(node_id)
+            self.get_logger().warning(
+                f"{node_id} radio gated at {now:.1f}, "
+                f"hold {self.blackout.hold_s:.0f}s")
+
+    def _publish_radio_off(self) -> None:
+        """Keep the parameter in step with the radio it describes.
+
+        The injector confirms a comms_blackout by reading `radio_off` back off
+        this node, which is the whole point of observing an effect on the
+        target rather than trusting the request. A radio that gated itself and
+        left the parameter saying otherwise would be a fault that happened and
+        was never seen, and `injected_event_observed` would be false on a run
+        that did exactly what the scenario asked.
+        """
+        gated = sorted(self.model.radio_off)
+        if gated == [v for v in self.get_parameter("radio_off").value
+                     if str(v).strip()]:
+            return
+        self.set_parameters([Parameter("radio_off",
+                                       Parameter.Type.STRING_ARRAY, gated)])
+
     def _lift_when_due(self, now: float) -> None:
         """The radio comes back on its own timetable and tells nobody."""
         for node_id in self.blackout.restore_due(now):
@@ -296,7 +375,9 @@ class LinkLayerNode(Node):
 
     def drain(self) -> None:
         """Release every delivery whose hop latency has elapsed."""
+        self._gate_when_due(self.now_s())
         self._lift_when_due(self.now_s())
+        self._publish_radio_off()
         if not self._pending:
             return
         now = self.now_s()
