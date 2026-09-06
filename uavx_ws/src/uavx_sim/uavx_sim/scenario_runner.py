@@ -95,18 +95,19 @@ from uavx_sim.comms import (COMMS_BLACKOUT, KILL, CommsError,
                             gcs_command, link_layer_command, read_ledger,
                             role_manager_command, role_managers_of,
                             router_command, station_gap, station_node_command,
+                            track_epoch_command, track_node_command,
                             GCS_LEDGER_KEYS, ROLE_LEDGER_KEYS,
                             ROUTER_LEDGER_KEYS)
 from uavx_sim.recovery import (RecoveryError, commanded_window, destroyed_by,
                                fault_at, outage_block, recovery_block,
-                               safety_from_payload, targets_of)
+                               safety_from_payload, targets_of, yield_block)
 from uavx_sim.event_injector import EventInjector
 from uavx_sim.graph_snapshot import (CaptureFailed, IncompleteSnapshot,
                                      capture_snapshot, sha256_of, utc_stamp,
                                      write_snapshot)
 from uavx_sim.resource_sampler import ResourceSampler, ResourceSamplerError
 from uavx_sim.scenario import ScenarioError
-from uavx_sim.work import WorkError
+from uavx_sim.work import WorkError, yield_enabled
 from uavx_sim.scenario import load as load_scenario
 from uavx_sim import video
 from uavx_sim.survey import (CRUISE_SPEED_PARAM, SurveyError,
@@ -1571,10 +1572,16 @@ class Harness:
         flyers = [v for v in self.vehicles if v.state == "hold"]
         for vehicle in flyers:
             try:
+                line = (None if self.comms is None
+                        else self.comms.track_of(vehicle.name))
                 if self.comms is None:
                     command = mission_node_command(
                         vehicle.name, self.spawn_of(vehicle.name),
                         vehicle.hover_alt_m, self.spec,
+                        list(self.scenario.vehicles))
+                elif line is not None:
+                    command = track_node_command(
+                        vehicle.name, self.spawn_of(vehicle.name), line,
                         list(self.scenario.vehicles))
                 else:
                     command = station_node_command(
@@ -1639,6 +1646,72 @@ class Harness:
             # needed all four fails on its numbers rather than on a guess.
             print(f"  WARNING  {len(pending)} vehicle(s) never entered "
                   f"offboard and will hover for the run", flush=True)
+
+    # -------------------------------------------------------------- tracks
+    def start_tracks(self):
+        """Tell every track executor where the scenario's zero is.
+
+        Nothing knows that until now. The nodes were launched during bring-up
+        and the ingress runs for as long as the last vehicle takes to reach
+        its station, so the executors have been holding at the heads of their
+        lines waiting for this. All of them are given the same instant, in the
+        simulated clock they all read, which is what makes the pair start
+        together rather than a parameter call apart.
+
+        The scenario's own `start_s` is counted from the number sent here, so
+        a call that takes two seconds to arrive costs nothing: the vehicles
+        have 20 s of scenario time before either of them is due to move.
+        """
+        if self.comms is None or not self.comms.tracks:
+            return
+        for vehicle in sorted(self.comms.tracks):
+            done = self._run_tool(track_epoch_command(vehicle, self.zero_s))
+            if done is None or done.returncode != 0:
+                detail = "" if done is None else (done.stdout + done.stderr).strip()
+                why = detail or "the parameter set did not finish"
+                raise HarnessFailure(
+                    f"could not start {vehicle}'s track: {why}", EXIT_CHILD)
+        print(f"  {len(self.comms.tracks)} track(s) started together at "
+              f"scenario zero", flush=True)
+
+    def track_completion(self):
+        """How many vehicles finished the work the scenario gave them.
+
+        Counted where the runner can check it, which is the work that ends at
+        a named point: a station, or the far end of a track. A vehicle flying
+        a survey strip is not counted here, because whether the strip is done
+        is the executor's answer and not a position.
+
+        For the encounter pair this is the number that matters. Both legs are
+        240 m, so a vehicle at the end of its line flew the whole thing, and a
+        run where one of them stopped in the middle and never resumed reports
+        one rather than two. That is the failure a yield rule with no release
+        would produce, and without this count it would look like a safe run.
+        """
+        if self.comms is None:
+            return None
+        checkable = [v for v in self.vehicles
+                     if v.name in self.comms.stations]
+        if not checkable:
+            return None
+        done = 0
+        for vehicle in checkable:
+            line = self.comms.track_of(vehicle.name)
+            target = (self.comms.station_of(vehicle.name) if line is None
+                      else line.end)
+            if vehicle.x is None or vehicle.z is None:
+                continue
+            spawn = self.spawn_of(vehicle.name)
+            if not spawn:
+                continue
+            try:
+                gap = station_gap((vehicle.x, vehicle.y, vehicle.z),
+                                  home_of(spawn), target)
+            except (SurveyError, CommsError):
+                continue
+            if gap <= STATION_RADIUS_M:
+                done += 1
+        return done
 
     # ------------------------------------------------------------- ingress
     def await_stations(self, flyers):
@@ -1750,7 +1823,8 @@ class Harness:
             self._start_node(label, router_command(
                 vehicle.name, self.spawn_of(vehicle.name),
                 self.comms.station_of(vehicle.name), self.comms,
-                self.ledger_paths[label]))
+                self.ledger_paths[label],
+                yield_enabled=yield_enabled(self.scenario.raw)))
 
         # One role executive per vehicle, and only in a run with an election.
         # It holds this vehicle's tx endpoint for exactly one message, the
@@ -1951,6 +2025,7 @@ class Harness:
 
         self.sampler = ResourceSampler(root_pid=os.getpid())
         self.zero_s = first
+        self.start_tracks()
         self.sim_now = 0.0
         self.open_capture()
         next_pose = 0.0
@@ -2391,6 +2466,21 @@ def run(options):
                 f"the collector cannot answer for separation: {exc}",
                 EXIT_ARTIFACT) from exc
 
+    # Chunk 4.5. What each vehicle decided about giving way, out of its own
+    # router's file, beside how many of them finished the work they were
+    # given. Present on every run with a radio, because a by-node map that
+    # only appeared in the two encounter scenarios would make every other
+    # record a different shape.
+    yielding = None
+    if harness.router_ledgers:
+        try:
+            yielding = yield_block(harness.router_ledgers,
+                                   harness.track_completion())
+        except RecoveryError as exc:
+            raise HarnessFailure(
+                f"the run cannot say what it did about separation: {exc}",
+                EXIT_ARTIFACT) from exc
+
     # And the two blocks a run with a fault in it carries. Both are computed
     # from the ledgers and the moment the injector watched the fault land.
     # The one thing taken from the scenario is the window a blackout was
@@ -2463,6 +2553,7 @@ def run(options):
             coverage=coverage,
             delivery=delivery,
             safety=safety,
+            yielding=yielding,
             observations=observations,
             recovery=recovery,
         )
