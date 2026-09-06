@@ -32,6 +32,12 @@ import math
 from dataclasses import dataclass
 from typing import Dict, Mapping, Sequence, Tuple
 
+# One definition, imported rather than copied. The mission executor flies
+# these and this module validates them, and two interpolations that agreed
+# until somebody fixed a rounding in one of them would score a run against a
+# line it did not fly.
+from uavx_mission.track import Track
+
 Point = Tuple[float, float, float]
 
 STATION = "station"
@@ -65,59 +71,6 @@ def _finite(value) -> bool:
         return math.isfinite(float(value))
     except (TypeError, ValueError):
         return False
-
-
-@dataclass(frozen=True)
-class Track:
-    """A straight line at a constant speed, started at a stated time.
-
-    The encounter pair is frozen as two of these. Both are 240 m and both
-    start together, so neither vehicle arrives at the crossing point first and
-    the safe outcome cannot come from one of them happening to be late.
-    """
-
-    start: Point
-    end: Point
-    start_s: float
-    speed_mps: float
-
-    @property
-    def length_m(self) -> float:
-        return math.dist(self.start, self.end)
-
-    @property
-    def duration_s(self) -> float:
-        return self.length_m / self.speed_mps
-
-    @property
-    def arrival_s(self) -> float:
-        return self.start_s + self.duration_s
-
-    def position_at(self, t_s: float) -> Point:
-        """Where an unimpeded vehicle would be at `t_s`.
-
-        Unimpeded is the word that matters. This is the commanded path and
-        not the flown one: a vehicle that yields is behind it, which is what
-        makes the encounter run different from its control.
-        """
-        if t_s <= self.start_s:
-            return self.start
-        travelled = (t_s - self.start_s) * self.speed_mps
-        if travelled >= self.length_m:
-            return self.end
-        f = travelled / self.length_m
-        return tuple(a + (b - a) * f            # type: ignore[return-value]
-                     for a, b in zip(self.start, self.end))
-
-    def as_record(self) -> dict:
-        return {
-            "start_enu": list(self.start),
-            "end_enu": list(self.end),
-            "start_s": self.start_s,
-            "speed_mps": self.speed_mps,
-            "length_m": round(self.length_m, 3),
-            "arrival_s": round(self.arrival_s, 3),
-        }
 
 
 def _point(raw, where: str) -> Point:
