@@ -164,6 +164,7 @@ class EventInjector:
         events: Iterable[Any],
         apply_effect: Callable[[str, str], None],
         effect_visible: Callable[[str, str], bool],
+        lead_s: Optional[Mapping[str, float]] = None,
     ) -> None:
         if not callable(apply_effect):
             raise TypeError("apply_effect must be callable")
@@ -171,9 +172,42 @@ class EventInjector:
             raise TypeError("effect_visible must be callable")
         self._apply_effect = apply_effect
         self._effect_visible = effect_visible
+        self._lead_s = self._as_leads(lead_s)
         self._tracked: List[_Tracked] = [
             _Tracked(event=self._as_event(item)) for item in events
         ]
+
+    @staticmethod
+    def _as_leads(lead_s: Optional[Mapping[str, float]]) -> dict:
+        """How early each kind of effect is applied, by event type.
+
+        Zero for everything by default, which is what a fault the runner can
+        simply do wants: kill the vehicle at the moment the scenario said.
+
+        A comms_blackout is the other kind. The effect is produced by the
+        radio and the runner only schedules it, so the scheduling has to reach
+        the radio before the fault is due or the arrival of the message is
+        what decides when the fault lands. A lead moves the message and not
+        the fault: `requested_t` is still the scenario's `at_s` and
+        `poll_observations` still refuses to stamp an observation before it.
+        """
+        if lead_s is None:
+            return {}
+        out = {}
+        for kind, value in dict(lead_s).items():
+            if kind not in EVENT_TYPES:
+                raise ValueError(
+                    f"a lead was given for event type {kind!r}. "
+                    f"architecture.md section 1b allows "
+                    f"{', '.join(EVENT_TYPES)}")
+            lead = _finite_time(value, f"the lead for a {kind!r} event")
+            if lead < 0:
+                raise ValueError(
+                    f"the lead for a {kind!r} event is {lead}. An effect is "
+                    f"applied early or on time, and a negative lead would be "
+                    f"a fault applied after the moment it is recorded at")
+            out[kind] = lead
+        return out
 
     @staticmethod
     def _as_event(item: Any) -> PendingEvent:
@@ -192,13 +226,18 @@ class EventInjector:
 
         `sim_time_s` is ROS simulated time with zero at scenario start. Returns
         the events fired on this call, in scenario order, for the runner to log.
+
+        An event type with a lead fires that many seconds early, because the
+        runner is arming something rather than doing it. What fires early is
+        the request, never the record: `requested_t` is the scenario's time
+        both ways.
         """
         now = _finite_time(sim_time_s, "sim_time_s")
         fired = []
         for tracked in self._tracked:
             if tracked.fired_at_s is not None:
                 continue
-            if now < tracked.event.at_s:
+            if now < tracked.event.at_s - self._lead_s.get(tracked.event.type, 0.0):
                 continue
             # Marked before the call, so a callable that raises cannot be
             # retried on the next tick. Injecting the same fault twice would
@@ -221,18 +260,23 @@ class EventInjector:
         for tracked in self._tracked:
             if tracked.fired_at_s is None or tracked.observed_t is not None:
                 continue
-            if not self._effect_visible(tracked.event.type, tracked.event.target):
-                continue
-            earliest = max(tracked.event.at_s, tracked.fired_at_s)
-            if now < earliest:
+            if now < tracked.fired_at_s:
                 # Never write an observation that precedes its own request. The
                 # only route here is a clock that ran backwards, and a silently
                 # clamped timestamp would make that unfindable afterwards.
                 raise ValueError(
                     f"cannot observe {tracked.event.type} on {tracked.event.target} "
-                    f"at t={now}, earlier than the t={earliest} it was requested "
-                    "and fired at. Simulated time went backwards."
+                    f"at t={now}, earlier than the t={tracked.fired_at_s} it was "
+                    "fired at. Simulated time went backwards."
                 )
+            if now < tracked.event.at_s:
+                # An effect that was armed early and is not due yet. Asked
+                # before the visibility check and not after it, because that
+                # check reaches the target over the network and the answer
+                # here is known without asking: the fault has not happened.
+                continue
+            if not self._effect_visible(tracked.event.type, tracked.event.target):
+                continue
             tracked.observed_t = now
             observed.append(tracked.event)
         return tuple(observed)

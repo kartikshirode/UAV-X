@@ -32,12 +32,17 @@ class FakeWorld:
 
     def __init__(self):
         self.applied = []
+        self.asked = []
         self._visible = set()
 
     def apply(self, event_type, target):
         self.applied.append((event_type, target))
 
     def is_visible(self, event_type, target):
+        # Recorded, because reaching the target costs a subprocess in the
+        # runner and an injector that polls for a fault it has not requested
+        # yet spends wall time the run needs for its clock.
+        self.asked.append((event_type, target))
         return (event_type, target) in self._visible
 
     def becomes_visible(self, event_type, target):
@@ -403,4 +408,93 @@ def test_a_fault_told_to_lift_before_it_starts_is_refused():
         PendingEvent(type="comms_blackout", target="uav_2", at_s=60.0,
                      restore_at_s=45.0)
     assert "not a window" in str(caught.value)
+
+
+# ------------------------------------------------------------------ the lead
+def test_an_effect_with_a_lead_is_applied_before_it_is_due():
+    """Round 9. A blackout is scheduled on the radio, not done to it.
+
+    The radio gates itself on the clock, so the parameter call carrying the
+    instant has to arrive before the instant. What moves early is the request.
+    """
+    world = FakeWorld()
+    injector = EventInjector(
+        [{"type": "comms_blackout", "target": "uav_2", "at_s": 60.0,
+          "restore_at_s": 105.0}],
+        world.apply, world.is_visible, lead_s={"comms_blackout": 5.0})
+    injector.tick(54.9)
+    assert world.applied == []
+    injector.tick(55.0)
+    assert world.applied == [("comms_blackout", "uav_2")]
+
+
+def test_a_lead_moves_the_request_and_not_the_record():
+    world = FakeWorld()
+    injector = EventInjector(
+        [{"type": "comms_blackout", "target": "uav_2", "at_s": 60.0,
+          "restore_at_s": 105.0}],
+        world.apply, world.is_visible, lead_s={"comms_blackout": 5.0})
+    injector.tick(55.0)
+    assert injector.records()[0]["requested_t"] == 60.0, (
+        "requested_t is what the scenario asked for. An injector that wrote "
+        "the arming time here would move the fault five seconds earlier in "
+        "every window measured off it")
+
+
+def test_an_armed_effect_is_not_observed_before_the_moment_it_is_about():
+    """Visible early is still not observed. It is a scheduled gate, not a gate.
+
+    The runner's own visibility check reads the radio's parameter back, and
+    that parameter says which vehicles are gated right now. This covers the
+    case where something else answers yes before the fault is due: the
+    observation waits, rather than stamping a fault before its own request.
+    """
+    world = FakeWorld()
+    injector = EventInjector(
+        [{"type": "comms_blackout", "target": "uav_2", "at_s": 60.0,
+          "restore_at_s": 105.0}],
+        world.apply, world.is_visible, lead_s={"comms_blackout": 5.0})
+    injector.tick(55.0)
+    world.becomes_visible("comms_blackout", "uav_2")
+    assert injector.poll_observations(57.0) == ()
+    assert injector.records()[0]["observed_t"] is None
+    assert injector.all_observed() is False
+    observed = injector.poll_observations(60.0)
+    assert len(observed) == 1
+    assert injector.records()[0]["observed_t"] == 60.0
+
+
+def test_an_effect_that_is_not_due_is_not_polled_for():
+    world = FakeWorld()
+    injector = EventInjector(
+        [{"type": "comms_blackout", "target": "uav_2", "at_s": 60.0,
+          "restore_at_s": 105.0}],
+        world.apply, world.is_visible, lead_s={"comms_blackout": 5.0})
+    injector.tick(55.0)
+    for when in (55.0, 56.0, 57.0, 58.0, 59.0):
+        injector.poll_observations(when)
+    assert world.asked == [], (
+        "the answer is known without asking and asking costs a ros2 param get")
+    injector.poll_observations(60.0)
+    assert world.asked == [("comms_blackout", "uav_2")]
+
+
+def test_an_event_type_with_no_lead_still_fires_at_its_own_time():
+    world = FakeWorld()
+    injector = EventInjector(
+        [kill_at(30.0)], world.apply, world.is_visible,
+        lead_s={"comms_blackout": 5.0})
+    injector.tick(29.9)
+    assert world.applied == []
+    injector.tick(30.0)
+    assert world.applied == [("kill", "uav_2")]
+
+
+@pytest.mark.parametrize("bad", [{"teleport": 5.0}, {"comms_blackout": -1.0},
+                                 {"comms_blackout": float("nan")},
+                                 {"comms_blackout": "soon"}])
+def test_a_lead_that_is_not_a_length_of_time_is_refused(bad):
+    with pytest.raises(ValueError):
+        EventInjector([kill_at(30.0)], FakeWorld().apply,
+                      FakeWorld().is_visible, lead_s=bad)
 
