@@ -173,6 +173,63 @@ def test_rejects_a_zero_denominator(repo, baseline, write_record):
     assert "zero" in problem and "uav_4" in problem
 
 
+def surveying(record, *vehicles):
+    """A record of a scenario that asked only these vehicles to mint.
+
+    Both halves, because they are one fact. Naming the origins and leaving
+    every vehicle's packet count where it was would describe a run whose
+    launcher ignored the scenario, which is a different fault with its own
+    test below.
+    """
+    record.setdefault("metrics", {}).setdefault("comms", {})[
+        "observation_origins"] = list(vehicles)
+    for node in list(record["app_packets_sent_by_node"]):
+        if node in vehicles:
+            continue
+        record["app_packets_sent_by_node"][node] = 0
+        record["app_packets_delivered_by_node"][node] = 0
+        record.get("delivery_ratio_by_node", {}).pop(node, None)
+    return record
+
+
+def test_a_vehicle_that_was_not_asked_to_observe_may_send_nothing(
+        repo, baseline, write_record):
+    """queue_drain names two surveying origins and its other two send zero.
+
+    The queue arithmetic is written for the origins the outage cuts off. With
+    every vehicle minting, that run produced 900 observations inside a window
+    whose custody claim is about 450, so the scenario now says who surveys.
+    Reading the anchor's zero as a broken run would fail the one scenario the
+    whole queue depth claim rests on.
+    """
+    record = surveying(baseline, "uav_3", "uav_4")
+    assert record["app_packets_sent_by_node"]["uav_1"] == 0
+    assert reasons(repo, write_record(record)) == []
+
+
+def test_a_vehicle_the_scenario_asked_for_still_may_not_send_zero(
+        repo, baseline, write_record):
+    record = surveying(baseline, "uav_3", "uav_4")
+    record["app_packets_sent_by_node"]["uav_4"] = 0
+    record.get("delivery_ratio_by_node", {}).pop("uav_4", None)
+    problem = only(reasons(repo, write_record(record)))
+    assert "zero" in problem and "uav_4" in problem
+
+
+def test_a_vehicle_that_was_not_asked_and_minted_anyway_is_a_fault(
+        repo, baseline, write_record):
+    """The launcher minting on its own initiative, which is how this started.
+
+    observations:=true went to every router regardless of what the scenario
+    said, and the run carried twice the traffic its own claims were written
+    for. A record that says who was asked can be checked against who did.
+    """
+    record = surveying(baseline, "uav_3", "uav_4")
+    record["metrics"]["comms"]["observation_origins"] = ["uav_4"]
+    problem = only(reasons(repo, write_record(record)))
+    assert "did not ask" in problem and "uav_3" in problem
+
+
 def test_rejects_a_run_shorter_than_it_asked_for(repo, baseline, write_record):
     """A 20 second run can meet a packet minimum and claim completion."""
     baseline["elapsed_sim_s"] = baseline["requested_duration_s"] / 2

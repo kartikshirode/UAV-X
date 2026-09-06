@@ -230,6 +230,48 @@ def normalise_scenario(path_text, repo=None) -> str:
     return text.rstrip("/")
 
 
+
+def _origin_problems(record) -> list:
+    """Who was asked to mint observations, against who actually did.
+
+    A vehicle that sent nothing used to be a fault on its own, because every
+    vehicle in every scenario minted and a zero could only mean a router that
+    never started. queue_drain names two surveying origins, so its anchor and
+    its gated relay are supposed to send nothing, and reading that as a broken
+    run would fail the one scenario the queue arithmetic is written for.
+
+    The check did not go away, it got a denominator. A vehicle the scenario
+    asked to observe still may not send zero. A vehicle it did not ask still
+    may not send anything at all: that is the launcher minting on its own
+    initiative, which is what produced 900 observations inside an outage whose
+    custody claim was about 450.
+    """
+    sent = record.get("app_packets_sent_by_node")
+    if not isinstance(sent, dict):
+        return []
+    origins = ((record.get("metrics") or {}).get("comms") or {}) \
+        .get("observation_origins")
+    asked = set(sent) if origins is None else {str(v) for v in origins}
+    problems = []
+    zeroes = sorted(node for node, count in sent.items()
+                    if count == 0 and node in asked)
+    if zeroes:
+        problems.append(
+            f"app_packets_sent_by_node is zero for {', '.join(zeroes)}, and "
+            f"this scenario asked {'them' if len(zeroes) > 1 else 'it'} to "
+            f"observe. A zero denominator makes that node's delivery ratio "
+            f"meaningless, and nothing over nothing reads as a perfect "
+            f"score.")
+    spare = sorted(node for node, count in sent.items()
+                   if node not in asked and isinstance(count, int)
+                   and not isinstance(count, bool) and count > 0)
+    if spare:
+        problems.append(
+            f"{', '.join(spare)} minted observations and this scenario did "
+            f"not ask for any. The traffic a run is measured over has to be "
+            f"the traffic it was designed around.")
+    return problems
+
 def _parse_stamp(text):
     try:
         moment = datetime.fromisoformat(str(text).replace("Z", "+00:00"))
@@ -316,15 +358,7 @@ def provenance_errors(repo: Path, record: dict, record_path: Path,
             f"{len(unfired)} injected event(s) never took effect ({named}). The "
             f"fault this run claims to survive did not happen.")
 
-    sent = record.get("app_packets_sent_by_node")
-    if isinstance(sent, dict):
-        zeroes = sorted(node for node, count in sent.items() if count == 0)
-        if zeroes:
-            problems.append(
-                f"app_packets_sent_by_node is zero for {', '.join(zeroes)}. A "
-                f"zero denominator makes that node's delivery ratio "
-                f"meaningless, and nothing over nothing reads as a perfect "
-                f"score.")
+    problems.extend(_origin_problems(record))
 
     started = _parse_stamp(record.get("started_at"))
     if started is not None:
