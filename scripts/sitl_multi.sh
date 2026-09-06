@@ -400,11 +400,13 @@ missing="pending"
 while [ -n "$missing" ]; do
   missing=""
   topics="$(timeout 30 ros2 topic list --no-daemon 2>/dev/null || true)"
-  i=1
-  while [ "$i" -le "$VEHICLES" ]; do
-    n="$(printf '%s\n' "$topics" | grep -c "^/uav_${i}/" || true)"
-    [ "${n:-0}" -gt 0 ] || missing="${missing} uav_${i}"
-    i=$((i + 1))
+  # The namespaces this launcher actually gave them, which since chunk 4.5
+  # are the scenario ids rather than uav_1..uav_N. Looking for names it did
+  # not use is how the first encounter bring-up put two healthy aircraft in
+  # the air and then died waiting for topics under uav_1 and uav_2.
+  for ns in "${UAVX_IDS[@]}"; do
+    n="$(printf '%s\n' "$topics" | grep -c "^/${ns}/" || true)"
+    [ "${n:-0}" -gt 0 ] || missing="${missing} ${ns}"
   done
   [ -n "$missing" ] || break
   waited=$(( $(date +%s) - discovery_started ))
@@ -412,11 +414,9 @@ while [ -n "$missing" ]; do
     || gdie "no ROS 2 topics under namespace(s):${missing} after ${waited}s of DDS discovery. Check PX4_UXRCE_DDS_NS and the agent log."
   sleep 3
 done
-i=1
-while [ "$i" -le "$VEHICLES" ]; do
-  n="$(printf '%s\n' "$topics" | grep -c "^/uav_${i}/" || true)"
-  printf '  uav_%d topics       %s\n' "$i" "${n:-0}"
-  i=$((i + 1))
+for ns in "${UAVX_IDS[@]}"; do
+  n="$(printf '%s\n' "$topics" | grep -c "^/${ns}/" || true)"
+  printf '  %s topics       %s\n' "$ns" "${n:-0}"
 done
 printf '  discovery took     %ss\n' "$(( $(date +%s) - discovery_started ))"
 
