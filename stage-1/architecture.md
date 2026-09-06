@@ -195,6 +195,25 @@ unique ids), `injected_events` (a list), and `headless` (true). Every event has
 vehicles), and `at_s` between zero and `duration_s`. Unknown keys are allowed so
 Stage 2 can add disturbances, but these keys cannot change meaning.
 
+**When a fault lands.** Every event carries the time the scenario asked for and
+the time the effect was seen on the target. Those are different claims and the
+record keeps them apart. A `kill` is applied at the moment it is due, because
+the runner destroys the model itself and the effect is its own evidence. A
+`comms_blackout` is armed instead. The radio is handed the instant its gate is
+due, in the simulated clock every node already reads, and it gates itself when
+the clock gets there.
+
+Round 9 finding 1a. The radio had always lifted its own gate this way:
+`blackout_hold_s` goes in at launch and the restore lands on the clock exactly,
+while the start was a `ros2 param set` that had to find the node over DDS
+first. In the 6 September `queue_drain` run that took 1.8 s, and the record
+charged all of it to an outage the radio had spent carrying traffic. Five
+observations went to the ground station normally inside a window the custody
+claim says one vehicle was holding alone. Arming makes both ends of one outage
+land the same way. The parameter goes out 5 s ahead so the call has room to
+arrive, `requested_t` is still the scenario's `at_s`, and the lead moves the
+message rather than the fault.
+
 The writer emits one JSON object as one UTF-8 line in
 `<runs-dir>/<run_id>.jsonl`. It then publishes `latest.jsonl` and
 `latest-graph.json` by atomic rename, only after every process has exited. The
