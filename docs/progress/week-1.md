@@ -3,9 +3,14 @@
 30 August to 5 September. Built 31 August and 1 September.
 
 All seven chunks are implemented and every check in the repository passes.
-The week is **not accepted**, because acceptance is `bash scripts/gate.sh 1`
-and that cannot run until `submission/human-preflight.json` exists. See the
-bottom of this file.
+The week was accepted on 4 September, the first day `bash scripts/gate.sh 1`
+could run, once `submission/human-preflight.json` existed. The run behind it
+is at the bottom of this file.
+
+That paragraph used to say the week was not accepted, and it stayed that way
+after the gate passed, which round 9 finding 11 caught: an opening and a
+closing section of one file disagreeing about the same fact, in a repository
+an unattended supervisor reads to decide what to do next.
 
 ## What landed
 

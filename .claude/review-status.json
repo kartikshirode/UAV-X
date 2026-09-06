@@ -56,24 +56,24 @@
   },
   "build_state": {
     "week": 4,
-    "chunks_built": "4.1 to 4.3; 4.4 blocked",
+    "chunks_built": "4.1 to 4.3 accepted on live runs; 4.4 rebuilt against round 9 findings 1 to 4 and not yet re-flown; 4.5 to 4.8 not started",
     "accepted": false,
     "why_not_accepted": "W4.4 cannot satisfy its written queue scope and drain bound yet. W4.5 to W4.8 have not run.",
     "evidence": "runs/latest.jsonl is the uncommitted queue_drain run and fails custodied and drain requirements; use it for diagnosis, not submission evidence.",
     "suites": {
-      "package_tests": 178,
-      "seam_fixtures": 48,
+      "package_tests": 1025,
+      "seam_fixtures": 51,
       "submission_checks": 49,
       "rehearsal_checks": 20,
       "preflight_decisions": 8,
-      "gate_expressions": 113,
-      "shell_scripts": 21
+      "gate_expressions": 119,
+      "shell_scripts": 26
     },
-    "carried_into_week_2": [
-      "uav_3, PX4 instance 2, has never reached its 50 m layer inside the 120 s climb budget across seven runs. Week 2's survey depends on it.",
-      "--record is validated and not implemented, exits 40. No headless capture path exists on this stack. Chunk 3.6 owns it and rehearse_recording.sh fails until then.",
-      "The ROS 2 CLI daemon wedges and answers topic list with an empty stdout. The runner restarts it and retries; sitl_multi.sh unchanged."
-    ],
-    "defects_found_in_the_harness": 12
+    "defects_found_in_the_harness": 12,
+    "carried_into_week_4": [
+      "All five accepted run records name a source tree hash older than the current one, and check_submission.py requires the nine it packages to match the frozen source. Every scenario has to be re-flown after the source settles. Round 9 finding 9.",
+      "link_loss's 5 September record is in runs/superseded: it is honest and it cannot be verified from its own contents, so chunk 4.3 re-flies with the rest.",
+      "The proposal owes its week 1 and week 2 sections, which those weeks were supposed to draft and did not. Round 9 finding 10."
+    ]
   }
 }
