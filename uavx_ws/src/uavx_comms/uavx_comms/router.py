@@ -298,11 +298,19 @@ class Router:
                 # A neighbour arriving is a topology change and the design
                 # promises the link state goes out immediately on any of
                 # them. Only the leaving half was wired, so a radio coming
-                # back waited up to one LSA period to be told about and one
-                # computation period to be routed over, with the queue that
-                # is waiting for the route filling through both.
+                # back waited up to one LSA period to be told about, and the
+                # queue that is waiting for the route filled through it.
+                #
+                # The flood only. Hearing a neighbour says this node has an
+                # edge again; it says nothing about what the neighbour can
+                # reach, and the database still holds whatever that neighbour
+                # advertised before it went quiet. Recomputing here installs a
+                # route over an edge that stopped existing 45 seconds ago: the
+                # 6 September queue_drain did exactly that, took a route at
+                # 223.1 and withdrew it at 223.3 when the real link state
+                # arrived. The computation is triggered by that arrival
+                # instead, in _on_lsa.
                 self._next_lsa_at = now
-                self._next_compute_at = now
             self._relay_flood(incoming, now)
             return
         if not self._fresh_flood(incoming):
@@ -324,6 +332,12 @@ class Router:
             return
         if self.lsdb.accept(lsa):
             self._last_topology_change = self.lsdb.accepted
+            # News, so the graph this node routes over has just changed. This
+            # is the moment to recompute: the alternative is waiting out the
+            # rest of a period holding a route the new link state may have
+            # already broken, or acting on a hello, which says a neighbour is
+            # back and nothing about what it can reach.
+            self._next_compute_at = now
             self._relay_flood(incoming, now)
 
     def _on_role(self, incoming: pk.Packet, now: float) -> None:
