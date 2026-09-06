@@ -30,6 +30,12 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${HERE}/gate-env.sh"
 
 VEHICLES=4
+# The ids to give them, in spawn order, or empty for uav_1..uav_N. Only
+# encounter.yaml and its control need this: they fly two vehicles and the pair
+# architecture.md freezes is uav_3 and uav_4, so a launcher that always counts
+# from one would spawn the wrong two aircraft and the runner would have no
+# spawn row for either of the vehicles it was about to fly.
+IDS=""
 MODEL=iris
 # The world this repository carries, resolved below. PX4's own empty.world
 # is still reachable by name for anyone who wants to compare against it.
@@ -85,6 +91,7 @@ END { if (!seen) exit 1 }'
 while [ $# -gt 0 ]; do
   case "$1" in
     --vehicles) VEHICLES="$2"; shift 2 ;;
+    --ids)      IDS="$2";      shift 2 ;;
     --model)    MODEL="$2";    shift 2 ;;
     --world)    WORLD="$2";    shift 2 ;;
     --hold)     HOLD="$2";     shift 2 ;;
@@ -201,12 +208,34 @@ GZ_PID=$!
 sleep 6
 kill -0 "$GZ_PID" 2>/dev/null || gdie "gzserver died on startup, see /tmp/uavx-gzserver.log"
 
-gsay "spawning ${VEHICLES} x ${MODEL}"
+# One id per vehicle, in spawn order. Read into an array before the loop so a
+# mismatch between the two arguments is a refusal here rather than an empty
+# namespace forty seconds into a bring-up.
+if [ -n "$IDS" ]; then
+  IFS=',' read -r -a UAVX_IDS <<< "$IDS"
+  [ "${#UAVX_IDS[@]}" -eq "$VEHICLES" ] \
+    || gdie "asked for ${VEHICLES} vehicles and given ${#UAVX_IDS[@]} id(s): ${IDS}"
+  for id in "${UAVX_IDS[@]}"; do
+    [ -n "$id" ] || gdie "an empty vehicle id in: ${IDS}"
+  done
+else
+  UAVX_IDS=()
+  i=0
+  while [ "$i" -lt "$VEHICLES" ]; do
+    UAVX_IDS+=("uav_$((i + 1))")
+    i=$((i + 1))
+  done
+fi
+
+gsay "spawning ${VEHICLES} x ${MODEL} as ${UAVX_IDS[*]}"
 i=0
 spawn_rows=""
 spawn_sep=""
 while [ "$i" -lt "$VEHICLES" ]; do
-  ns="uav_$((i + 1))"
+  # The namespace is the scenario's id and everything else on this line stays
+  # keyed on the instance. See the spacing comment below: the positions are
+  # what this launcher had to learn, and they come from the ordinal.
+  ns="${UAVX_IDS[$i]}"
   workdir="${BUILD}/rootfs/${i}"
   mkdir -p "$workdir"
 

@@ -533,10 +533,18 @@ class Launcher:
     reimplementing either here would mean two launchers to keep in step.
     """
 
-    def __init__(self, repo, launcher, vehicles, hold_s, log_path, world=None):
+    def __init__(self, repo, launcher, vehicles, hold_s, log_path, world=None,
+                 ids=()):
         self._repo = repo
         self._launcher = launcher
         self._vehicles = vehicles
+        # Chunk 4.5. The ids to spawn them under, in order. The launcher
+        # counted from uav_1 and encounter.yaml flies uav_3 and uav_4, so a
+        # two vehicle run put up the wrong pair and the runner had no spawn
+        # row for either vehicle it was about to fly. The names carry the
+        # claim: giving way is decided by system id and the gate requires the
+        # yield to name uav_4.
+        self._ids = tuple(str(v) for v in ids)
         self._hold_s = hold_s
         self._log_path = Path(log_path)
         # Chunk 3.6. None means the launcher's own default, which is the world
@@ -554,6 +562,8 @@ class Launcher:
             command = ["bash", str(self._launcher),
                        "--vehicles", str(self._vehicles),
                        "--hold", str(int(self._hold_s))]
+            if self._ids:
+                command += ["--ids", ",".join(self._ids)]
             if self._world:
                 command += ["--world", str(self._world)]
             self.process = subprocess.Popen(
@@ -1342,7 +1352,8 @@ class Harness:
             self.launcher = Launcher(
                 self.repo, launcher_script, len(self.scenario.vehicles),
                 hold_s, log_path,
-                world=video.RECORD_WORLD if self.recording else None)
+                world=video.RECORD_WORLD if self.recording else None,
+                ids=list(self.scenario.vehicles))
             self.launcher.start()
             if self.launcher.wait_ready(READY_TIMEOUT_S):
                 print(f"  launcher reported {len(self.scenario.vehicles)} "
