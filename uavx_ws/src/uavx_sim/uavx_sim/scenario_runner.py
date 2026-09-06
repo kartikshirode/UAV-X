@@ -88,9 +88,10 @@ from pathlib import Path
 
 from uavx_sim import run_record
 from uavx_sim.comms import (COMMS_BLACKOUT, KILL, CommsError,
+                            arm_radio_command, blackout_at_s, blackout_nodes,
                             blackout_hold_s, collector_command_no_survey,
                             comms_spec, delivery_from_ledgers,
-                            gate_radio_command, gated_radios_command,
+                            gated_radios_command,
                             gcs_command, link_layer_command, read_ledger,
                             role_manager_command, role_managers_of,
                             router_command, station_gap, station_node_command,
@@ -240,6 +241,18 @@ TOOL_TIMEOUT_S = 10.0
 # seconds. One HELLO period: the swarm cannot notice a blackout faster than
 # that either.
 RADIO_POLL_S = 1.0
+
+# Round 9. How far ahead of a blackout the radio is armed, in simulated
+# seconds. The gate itself lands on the clock, so this is only how much room
+# the parameter call gets to find the node over DDS and come back, and it is
+# sized off TOOL_TIMEOUT_S rather than off anything the fault cares about.
+#
+# It used to be zero, in the sense that the runner gated the radio at the
+# moment the fault was due and the call took as long as it took. The last
+# queue_drain run gated 1.8 s late, and the record charged that 1.8 s of
+# working radio to the outage: five observations were delivered normally
+# inside a window the custody claim says one vehicle was holding alone.
+RADIO_ARM_LEAD_S = 5.0
 
 # Chunk 4.2. How long before an injected event the ROS graph is captured.
 # The snapshot is the evidence that the system is wired the way the seam
@@ -1241,13 +1254,23 @@ class Harness:
         return f"'{target}'" in done.stdout or f'"{target}"' in done.stdout
 
     def _gate_radio(self, target):
-        """Cut this vehicle's radio, both ways, and leave it flying.
+        """Tell the radio when to cut this vehicle off, and leave it flying.
 
         Set on the radio and never on the vehicle. The swarm is told nothing:
-        the gated node does not know its own radio is off, its neighbours find
-        out when the HELLOs stop, and the record's reconnect time is measured
-        from the moment this landed rather than from the moment it was asked
-        for.
+        the gated node does not know its own radio is off, and its neighbours
+        find out when the HELLOs stop.
+
+        Armed rather than applied. This call carries the instant the fault is
+        due, in the simulated clock the runner and the radio both read, and
+        the radio gates itself when the clock gets there. It is sent
+        RADIO_ARM_LEAD_S early for that reason: what the lead buys is that a
+        `ros2 param set` spending a second finding the node over DDS no longer
+        decides when the fault lands. The scenario decides.
+
+        The other half of the window was already like this. The radio lifts
+        its own gate after a frozen hold, so the restore has always landed on
+        the clock, and the start being a subprocess is why the two ends of one
+        outage were measured to different precisions.
         """
         if self.comms is None:
             raise HarnessFailure(
@@ -1255,7 +1278,13 @@ class Harness:
                 f"A blackout in a scenario with communications disabled is a "
                 f"fault with nothing to fail.", EXIT_CHILD)
         self._vehicle(target)
-        done = self._run_tool(gate_radio_command([target]))
+        due = blackout_at_s(self.scenario.raw)
+        if due is None:
+            raise HarnessFailure(
+                f"the runner was asked to gate {target}'s radio and the "
+                f"scenario schedules no blackout, so there is no moment to "
+                f"arm it for.", EXIT_CHILD)
+        done = self._run_tool(arm_radio_command(self.zero_s + due))
         if done is None or done.returncode != 0:
             detail = "" if done is None else (done.stdout + done.stderr).strip()
             # Built outside the message. A multi-line expression inside an
@@ -1263,7 +1292,9 @@ class Harness:
             # nothing here would have found that before the run.
             why = detail or "the parameter set did not finish"
             raise HarnessFailure(
-                f"could not gate {target}'s radio: {why}", EXIT_CHILD)
+                f"could not arm {target}'s radio: {why}", EXIT_CHILD)
+        print(f"  radio armed for {target} at t={due:.1f}s, "
+              f"{RADIO_ARM_LEAD_S:.0f}s ahead")
 
     def _run_tool(self, command):
         """One short ros2 command line call, or None if it could not run."""
@@ -1710,7 +1741,8 @@ class Harness:
         self._start_node(LINK_LABEL, link_layer_command(
             vehicles, self.model_entries, int(self.scenario.seed),
             self.ledger_paths[LINK_LABEL],
-            hold_s=blackout_hold_s(self.scenario.raw)))
+            hold_s=blackout_hold_s(self.scenario.raw),
+            gated=blackout_nodes(self.scenario.raw)))
 
         for vehicle in self.vehicles:
             label = f"router-{vehicle.name}"
@@ -1914,7 +1946,8 @@ class Harness:
             [{"type": event.type, "target": event.target, "at_s": event.at_s,
               "restore_at_s": event.raw.get("restore_at_s")}
              for event in self.scenario.injected_events],
-            self._apply_effect, self._effect_visible)
+            self._apply_effect, self._effect_visible,
+            lead_s={COMMS_BLACKOUT: RADIO_ARM_LEAD_S})
 
         self.sampler = ResourceSampler(root_pid=os.getpid())
         self.zero_s = first
