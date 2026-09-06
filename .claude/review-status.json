@@ -1,11 +1,11 @@
 {
   "_why": "Round 4 finding 9. Review state was written into prose in four documents, and prose does not update itself. handoff.md said round 3 had not run after round 3 had run and been fixed, and listed three of its findings as still open. decisions.md still had round 2 outstanding. The autonomous loop hands those files to a week-agent, which has no way to tell which sentence is current. So the state lives here, in one place, and check_docs.py fails any document that states it in prose.",
-  "latest_round": 8,
+  "latest_round": 9,
   "reviewer": "Codex",
-  "verdict": "READY TO EXECUTE",
-  "findings": 19,
-  "findings_addressed": 19,
-  "state": "round 8 complete. All 19 problems found in the fix round were addressed, and all ten required checks pass. The human preflight remains the intentional external block.",
+  "verdict": "ON TRACK WITH THE FIXES ABOVE",
+  "findings": 11,
+  "findings_addressed": 0,
+  "state": "round 9 complete. Eleven problems remain open. The queue scope and drain contract, the week-level record checker and the final evidence reruns come first. The human preflight remains the intentional external block.",
   "review_files": [
     "_plan-review-round1.md",
     "_plan-review-round2.md",
@@ -14,9 +14,23 @@
     "_plan-review-round5.md",
     "_plan-review-round6.md",
     "_plan-review-round7.md",
-    "_plan-review-round8.md"
+    "_plan-review-round8.md",
+    "_plan-review-round9.md",
+    "_design-options-round9.md"
   ],
-  "open_findings": [],
+  "open_findings": [
+    "queue_drain counts 900 producers against a 450-ID custody proof",
+    "physical queue emptying cannot meet the 2.25 second bound",
+    "fresh neighbours do not trigger the promised immediate LSA",
+    "uavx_eval accepts ledger and summary contradictions",
+    "relay_kill safety can pass with zero monitor samples",
+    "direct_only has no positive anchor delivery witness",
+    "encounter_noyield has no track completion floor",
+    "deferred packets are not included in the queue-capacity gate",
+    "accepted evidence hashes are stale for the final source",
+    "the submission tail has no authoring time or artifact path",
+    "review status and the W1 progress note disagree"
+  ],
   "source_verified": {
     "date": "2026-08-31",
     "how": "scripts/check_competition_spec.py against techfest.org/api/compis/",
@@ -41,11 +55,11 @@
     "why": "the first four days produced no implementation, so the packaging tail was distributed into the weeks rather than cutting scope. W4 keeps 5 build days for the 45% of the rubric that lives there."
   },
   "build_state": {
-    "week": 1,
-    "chunks_built": "1.1 to 1.7, all seven",
+    "week": 4,
+    "chunks_built": "4.1 to 4.3; 4.4 blocked",
     "accepted": false,
-    "why_not_accepted": "gate.sh 1 calls gate_preflight, which refuses to start without submission/human-preflight.json. Every check the chunk gates run has been run directly and passes; none of that is acceptance.",
-    "evidence": "runs/harness_check_20260901T095331Z.jsonl, made against the tree at 24a4f78 so its source_tree_sha256 covers the runner",
+    "why_not_accepted": "W4.4 cannot satisfy its written queue scope and drain bound yet. W4.5 to W4.8 have not run.",
+    "evidence": "runs/latest.jsonl is the uncommitted queue_drain run and fails custodied and drain requirements; use it for diagnosis, not submission evidence.",
     "suites": {
       "package_tests": 178,
       "seam_fixtures": 48,
