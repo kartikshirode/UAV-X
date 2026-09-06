@@ -456,6 +456,77 @@ def blackout_hold_s(raw: Mapping) -> float:
     return holds[0]
 
 
+def blackout_nodes(raw: Mapping) -> Tuple[str, ...]:
+    """The vehicles this scenario schedules a blackout for.
+
+    Read at launch and passed to the radio beside the hold, because the radio
+    needs to know who before it can be handed a bare time. The alternative was
+    two parameter sets at fire time whose order decided whether the gate landed
+    when it was asked for or the moment the first one arrived.
+    """
+    events = raw.get("injected_events") if isinstance(raw, Mapping) else None
+    named = []
+    for event in events or ():
+        if not isinstance(event, Mapping) or event.get("type") != COMMS_BLACKOUT:
+            continue
+        target = event.get("target")
+        if not isinstance(target, str) or not target.strip():
+            raise CommsError(
+                f"a comms_blackout in this scenario is aimed at {target!r}. A "
+                f"fault needs a vehicle or it lands nowhere")
+        named.append(target.strip())
+    return tuple(sorted(set(named)))
+
+
+def blackout_at_s(raw: Mapping) -> Optional[float]:
+    """When this scenario's blackout is due, in scenario seconds.
+
+    None when nothing is gated. Every blackout in one scenario has to be due
+    at the same moment for the same reason the hold does: the radio is armed
+    once, with one time, and two would mean one of the faults lands at a
+    moment nothing chose.
+    """
+    events = raw.get("injected_events") if isinstance(raw, Mapping) else None
+    times = set()
+    for event in events or ():
+        if not isinstance(event, Mapping) or event.get("type") != COMMS_BLACKOUT:
+            continue
+        at = event.get("at_s")
+        if not _finite(at):
+            raise CommsError(
+                f"a comms_blackout is due at {at!r}, which is not a time")
+        times.add(float(at))
+    if not times:
+        return None
+    if len(times) > 1:
+        raise CommsError(
+            f"this scenario gates radios at {sorted(times)}. One instant is "
+            f"armed on the radio, so two would mean one of the blackouts "
+            f"starts when a parameter call happened to arrive")
+    return times.pop()
+
+
+def arm_radio_command(at_s: float) -> list:
+    """`ros2 param set` handing the radio the instant its gate is due.
+
+    Absolute simulated seconds and not scenario relative. Both this process
+    and the radio read `/clock`; only the runner knows where the scenario's
+    zero sits in it, so the conversion happens here and the radio is given a
+    time it can compare against its own clock with no arithmetic.
+
+    One call, sent ahead of the fault. That is the whole point: a `ros2 param
+    set` spends a second or two finding the node over DDS, and a gate applied
+    when the call returns lands whenever the network felt like it. A gate
+    given a time lands on the time.
+    """
+    if not _finite(at_s) or at_s <= 0:
+        raise CommsError(
+            f"the radio was armed for t={at_s!r}. A gate is due at a positive "
+            f"simulated time, and zero is the value that means unarmed")
+    return ["ros2", "param", "set", LINK_LAYER_NODE, "radio_off_at_s",
+            f"{float(at_s):.6f}"]
+
+
 def gate_radio_command(vehicles: Sequence[str]) -> list:
     """`ros2 param set` on the radio, gating exactly these vehicles.
 
@@ -487,7 +558,8 @@ def gated_radios_command() -> list:
 
 
 def link_layer_command(vehicles: Sequence[str], model_entries: Sequence[str],
-                       seed: int, ledger_path, hold_s: float = 0.0) -> list:
+                       seed: int, ledger_path, hold_s: float = 0.0,
+                       gated: Sequence[str] = ()) -> list:
     """`ros2 run uavx_comms link_layer`, the one radio for the whole swarm.
 
     No namespace. The graph names it `/link_layer`, which is the exact name
@@ -510,6 +582,11 @@ def link_layer_command(vehicles: Sequence[str], model_entries: Sequence[str],
         raise CommsError(
             f"the blackout hold is {hold_s!r}. A radio holds a gate for a "
             f"length of time, or for the rest of the run if that is zero")
+    unknown = sorted(set(gated) - set(vehicles))
+    if unknown:
+        raise CommsError(
+            f"a blackout is scheduled for {', '.join(unknown)}, which this "
+            f"run does not fly")
     parameters = {
         "use_sim_time": True,
         "vehicles": list(vehicles),
@@ -518,6 +595,10 @@ def link_layer_command(vehicles: Sequence[str], model_entries: Sequence[str],
         "blackout_hold_s": float(hold_s),
         "ledger_path": str(ledger_path),
     }
+    # Only when there is one. The node declares the empty default itself, and
+    # _yaml_scalar has no rendering for an empty list.
+    if gated:
+        parameters["blackout_nodes"] = list(gated)
     return (["ros2", "run", "uavx_comms", "link_layer"]
             + ros_args(parameters))
 

@@ -28,7 +28,8 @@ import json
 
 import pytest
 
-from uavx_sim.comms import (CommsError, blackout_hold_s, comms_spec,
+from uavx_sim.comms import (CommsError, arm_radio_command, blackout_at_s,
+                            blackout_hold_s, blackout_nodes, comms_spec,
                             delivery_from_ledgers, gate_radio_command,
                             gated_radios_command, gcs_command,
                             link_layer_command, read_ledger,
@@ -452,6 +453,77 @@ def test_a_run_with_no_blackout_still_says_so():
     command = link_layer_command(VEHICLES, ["iris_0=" + ANCHOR], 24,
                                  "/tmp/l.json")
     assert "blackout_hold_s:=0.000000" in command
+
+
+# ---------------------------------------------------------- arming the radio
+def test_the_scenario_names_who_a_blackout_is_for():
+    assert blackout_nodes(gated()) == (RELAY,)
+    assert blackout_nodes({}) == ()
+    assert blackout_nodes({"injected_events": [
+        {"type": "kill", "target": RELAY, "at_s": 120}]}) == ()
+
+
+def test_the_radio_learns_who_at_launch():
+    """Beside the hold, because the scenario knows both at that point.
+
+    Naming them at launch is what lets the gate be one parameter carrying a
+    time. Two parameters at fire time, one for who and one for when, would
+    land in whichever order DDS delivered them, and the wrong order gates the
+    radio the moment the first one arrives.
+    """
+    command = link_layer_command(VEHICLES, ["iris_0=" + ANCHOR], 24,
+                                 "/tmp/l.json", hold_s=120.0, gated=[RELAY])
+    assert f"blackout_nodes:=[{RELAY}]" in command
+
+
+def test_a_run_with_no_blackout_names_nobody():
+    command = link_layer_command(VEHICLES, ["iris_0=" + ANCHOR], 24,
+                                 "/tmp/l.json")
+    assert not any(arg.startswith("blackout_nodes:=") for arg in command), (
+        "the node declares the empty default itself, and an empty list is not "
+        "a value the parameter renderer has a spelling for")
+
+
+def test_a_blackout_aimed_at_a_vehicle_that_is_not_flying_is_refused():
+    with pytest.raises(CommsError, match="does not fly"):
+        link_layer_command(VEHICLES, ["iris_0=" + ANCHOR], 24, "/tmp/l.json",
+                           gated=["uav_9"])
+
+
+def test_the_scenario_names_when_a_blackout_is_due():
+    assert blackout_at_s(gated()) == 120.0
+    assert blackout_at_s({}) is None
+
+
+def test_two_blackouts_due_at_different_moments_are_refused():
+    # One instant is armed on the radio. Two would mean one of the faults
+    # lands when a parameter call happened to arrive, which is the behaviour
+    # the arming replaced.
+    body = gated()
+    body["injected_events"].append({"type": "comms_blackout", "target": NEAR,
+                                    "at_s": 130, "restore_at_s": 250})
+    with pytest.raises(CommsError, match="one of the blackouts"):
+        blackout_at_s(body)
+
+
+def test_the_gate_is_armed_with_an_absolute_simulated_time():
+    """Scenario seconds are the runner's own count and mean nothing here.
+
+    The radio reads /clock and the scenario counts from its own zero. Only the
+    runner knows the offset between them, so the conversion happens before the
+    command is built and the radio is handed a number it can compare against
+    its own clock with no arithmetic.
+    """
+    command = arm_radio_command(683.45)
+    assert command[:5] == ["ros2", "param", "set", "/link_layer",
+                           "radio_off_at_s"]
+    assert command[5] == "683.450000"
+
+
+@pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), float("inf"), None])
+def test_a_gate_armed_for_no_particular_moment_is_refused(bad):
+    with pytest.raises(CommsError, match="armed"):
+        arm_radio_command(bad)
 
 
 @pytest.mark.parametrize("bad", [-1.0, float("nan"), None])
