@@ -187,6 +187,12 @@ class RouterNode(Node):
         """This vehicle's own estimate, in the frame the design is frozen in."""
         here = frames.px4_to_frozen((message.x, message.y, message.z), self.home)
         self.router.set_position(here)
+        # The velocity is reflected and never translated. A home is a place
+        # and a velocity is not, so subtracting one here would put a vehicle's
+        # own spawn offset into its speed. That is why this calls ned_to_enu
+        # and not px4_to_frozen.
+        self.router.set_velocity(
+            frames.ned_to_enu((message.vx, message.vy, message.vz)))
         self.positions_seen += 1
 
     # ------------------------------------------------------------ the radio

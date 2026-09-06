@@ -68,6 +68,11 @@ class Router:
                  queue_capacity: int = params.QUEUE_CAPACITY) -> None:
         self.node_id = node_id
         self.position = tuple(position)
+        # Zero until PX4 says otherwise, which is honest: a vehicle that has
+        # not reported a velocity is one nothing can predict, and a neighbour
+        # reading this out of a HELLO gets the current separation and no
+        # extrapolation at all.
+        self.velocity: Tuple[float, float, float] = (0.0, 0.0, 0.0)
         self.destination = destination
         self.is_destination = node_id == destination
 
@@ -207,6 +212,17 @@ class Router:
         self.last_slot: Optional[slots.SlotDecision] = None
 
     # -- what the node itself knows ----------------------------------------
+
+    def set_velocity(self, velocity: Sequence[float]) -> None:
+        """This vehicle's own velocity, in the frozen frame, metres a second.
+
+        Carried in HELLO so a neighbour can work out where this vehicle will
+        be rather than only where it was. Nothing in the routing reads it: a
+        link is scored on distance and a route on hops, and both are about the
+        present. It is the yield rule's input and the one thing in HELLO that
+        is about the future.
+        """
+        self.velocity = tuple(velocity)
 
     def set_position(self, position: Sequence[float]) -> None:
         """Own ground truth, from this node's own PX4 namespace and nowhere else."""
@@ -887,7 +903,7 @@ class Router:
                            {"sender_id": self.node_id,
                             "sent_at": now,
                             "position": self.position,
-                            "velocity": (0.0, 0.0, 0.0),
+                            "velocity": self.velocity,
                             "seq": self._hello_seq},
                            sequence=self._hello_seq)
         self._queue_control(hello, now)
