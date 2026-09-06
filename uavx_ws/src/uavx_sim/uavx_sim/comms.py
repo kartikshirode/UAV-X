@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Mapping, Optional, Sequence, Tuple
 
@@ -119,6 +119,15 @@ class CommsSpec:
     # relay minting as well, the run produces twice the outage ids the custody
     # claim is about.
     observation_origins: Optional[Tuple[str, ...]] = None
+    # The straight lines the encounter pair fly, empty for every other
+    # scenario. Held here because the runner needs three things from them and
+    # gets them in three different places: where to fly each vehicle before
+    # the run starts, what to launch its executor with, and what to compare
+    # its finishing position against.
+    tracks: Mapping[str, work.Track] = field(default_factory=dict)
+
+    def track_of(self, vehicle_id: str):
+        return self.tracks.get(vehicle_id)
 
     def observes(self, vehicle_id: str) -> bool:
         if self.observation_origins is None:
@@ -156,6 +165,8 @@ class CommsSpec:
             # key means everybody.
             "observation_origins": (None if self.observation_origins is None
                                     else list(self.observation_origins)),
+            "tracks": {name: line.as_record()
+                       for name, line in sorted(self.tracks.items())},
         }
 
 
@@ -216,13 +227,23 @@ def comms_spec(raw: Mapping, vehicles: Sequence[str],
     # station.
     jobs = work.assignments(raw, vehicles, altitudes)
     held = tuple(v for v in vehicles if jobs[v] == work.STATION)
+    tracks = work.tracks_of(raw, vehicles, altitudes)
     stations = _stations(block.get("stations"), vehicles, altitudes, held)
+    # A track vehicle's station is the head of its own line. The ingress flies
+    # every vehicle to a station and refuses to start the run until they are
+    # all on one, so a vehicle with a track and no station would hold the run
+    # at the gate until the deadline and fail there. The head of the line is
+    # also the only place it can be when the run starts, or the two legs are
+    # no longer the same length and the pair no longer arrive together.
+    for vehicle, line in tracks.items():
+        stations[vehicle] = line.start
     return CommsSpec(forwarding=bool(block["forwarding"]),
                      elections_enabled=bool(block["elections_enabled"]),
                      roles={v: str(roles[v]) for v in vehicles},
                      stations=stations,
                      observation_origins=_origins(
-                         block.get("observation_origins"), vehicles))
+                         block.get("observation_origins"), vehicles),
+                     tracks=tracks)
 
 
 def _origins(block, vehicles: Sequence[str]) -> Optional[Tuple[str, ...]]:
@@ -354,8 +375,67 @@ def station_node_command(vehicle_id: str, spawn_row, station,
             + ros_args(parameters, namespace=vehicle_id))
 
 
+def track_node_command(vehicle_id: str, spawn_row, track,
+                       vehicles: Sequence[str]) -> list:
+    """`ros2 run uavx_mission mission_executor`, flying one straight line.
+
+    The third kind of executor, beside the survey and the station. It carries
+    the same `observations: false` for the same reason: the router on this
+    vehicle mints the identities, and identity is `(origin_id, sequence)`, so
+    two processes on one aircraft counting from zero would collide.
+
+    `track_epoch_s` is not here. Nothing knows where the scenario's zero sits
+    until the ingress has finished, so it is set on this node during the run
+    and the vehicle waits at the head of its line until it arrives.
+
+    `use_sim_time` is on, and this is the only mission executor that has it.
+    The epoch handed to this node is an absolute simulated time, so a node
+    reading a wall clock would compare two different clocks and start its leg
+    at whatever the real time factor happened to be. It matters here and only
+    here because starting together is what makes the pair arrive together:
+    the survey and station executors have nothing to be on time for.
+
+    Not switched on for the other two in this chunk. It would change the
+    timestamp every mission executor puts on its PX4 setpoints and the rate
+    its offboard heartbeat runs at, in all nine scenarios, and that is a
+    change to prove with flights rather than to make in passing.
+    """
+    parameters = {
+        "use_sim_time": True,
+        "vehicle_id": vehicle_id,
+        "swarm_vehicles": list(vehicles),
+        "survey_altitude_m": float(track.start[2]),
+        "track_start_enu": [float(v) for v in track.start],
+        "track_end_enu": [float(v) for v in track.end],
+        "track_start_s": float(track.start_s),
+        "track_speed_mps": float(track.speed_mps),
+        "observations": False,
+        "home_enu": list(home_of(spawn_row)),
+    }
+    return (["ros2", "run", "uavx_mission", "mission_executor"]
+            + ros_args(parameters, namespace=vehicle_id))
+
+
+def track_epoch_command(vehicle_id: str, epoch_s: float) -> list:
+    """`ros2 param set` telling one executor where the scenario's zero is.
+
+    Absolute simulated seconds, because that is the clock the node reads.
+    Both track vehicles are given the same number and neither flies until it
+    arrives, which is what makes them start together. Two legs of the same
+    length started together is the whole reason neither of them reaches the
+    crossing first, and a pair that started a second apart would pass safely
+    with the rule doing nothing.
+    """
+    if not _finite(epoch_s) or epoch_s <= 0:
+        raise CommsError(
+            f"the scenario zero is {epoch_s!r}. It is a positive simulated "
+            f"time, and zero is the value that means the run has not started")
+    return ["ros2", "param", "set", f"/{vehicle_id}/mission_executor",
+            "track_epoch_s", f"{float(epoch_s):.6f}"]
+
+
 def router_command(vehicle_id: str, spawn_row, station, spec: CommsSpec,
-                   ledger_path) -> list:
+                   ledger_path, yield_enabled: bool = True) -> list:
     """`ros2 run uavx_comms router` for one vehicle.
 
     `use_sim_time` is on, and that is the decision worth naming. Every `_s`
@@ -374,6 +454,11 @@ def router_command(vehicle_id: str, spawn_row, station, spec: CommsSpec,
         "forwarding": spec.forwarding,
         "elections_enabled": spec.elections_enabled,
         "observations": spec.observes(vehicle_id),
+        # architecture.md section 5. False is the encounter_noyield control,
+        # which is the same flight with the rule switched off. It reaches the
+        # router rather than the executor because the router is the node that
+        # decodes HELLO and therefore the node that decides.
+        "yield_enabled": bool(yield_enabled),
         "ledger_path": str(ledger_path),
     }
     return (["ros2", "run", "uavx_comms", "router"]

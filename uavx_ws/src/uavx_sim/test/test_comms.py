@@ -34,7 +34,8 @@ from uavx_sim.comms import (CommsError, arm_radio_command, blackout_at_s,
                             gated_radios_command, gcs_command,
                             link_layer_command, read_ledger,
                             role_manager_command, role_managers_of,
-                            router_command, station_node_command)
+                            router_command, station_node_command,
+                            track_epoch_command, track_node_command)
 from uavx_sim.work import WorkError
 
 # Built per index, never written out. scripts/check_seam.sh counts distinct
@@ -611,4 +612,112 @@ def test_the_same_origin_twice_is_refused():
         comms_spec(block(observation_origins=[NEAR, NEAR]), VEHICLES,
                    ALTITUDES)
     assert "twice" in str(caught.value)
+
+
+# ------------------------------------------------------------- the encounter
+# The frozen pair, architecture.md section 6. Both legs are 240 m and both
+# start at t = 20 s, so neither vehicle reaches (250, 0, 45) first.
+CROSSING = {NEAR: {"start_enu": [250.0, -120.0, 45.0],
+                   "end_enu": [250.0, 120.0, 45.0],
+                   "start_s": 20.0, "speed_mps": 10.0},
+            FAR: {"start_enu": [130.0, 0.0, 45.0],
+                  "end_enu": [370.0, 0.0, 45.0],
+                  "start_s": 20.0, "speed_mps": 10.0}}
+CROSSING_ALTITUDES = {NEAR: 45, FAR: 45}
+
+
+def crossing(**overrides):
+    """encounter.yaml, in the shape comms_spec reads."""
+    body = block(roles={NEAR: "survey", FAR: "survey"}, stations={},
+                 elections_enabled=False)
+    body["tracks"] = {k: dict(v) for k, v in CROSSING.items()}
+    body.update(overrides)
+    return body
+
+
+def crossing_spec():
+    return comms_spec(crossing(), (NEAR, FAR), CROSSING_ALTITUDES)
+
+
+def test_the_encounter_pair_load_as_two_tracks():
+    got = crossing_spec()
+    assert sorted(got.tracks) == sorted([NEAR, FAR])
+    assert got.track_of(NEAR).length_m == 240.0
+    assert got.track_of(FAR).length_m == 240.0
+    assert got.track_of(NEAR).arrival_s == got.track_of(FAR).arrival_s, (
+        "both legs are the same length and both start together, which is why "
+        "neither vehicle arrives at the crossing first")
+
+
+def test_a_track_vehicle_stands_at_the_head_of_its_own_line():
+    """The ingress flies every vehicle to a station and waits for all of them.
+
+    A vehicle with a track and no station would hold the run at the gate
+    until the deadline and fail there, and the head of the line is the only
+    place it can start from without changing the length of its leg.
+    """
+    got = crossing_spec()
+    assert got.station_of(NEAR) == (250.0, -120.0, 45.0)
+    assert got.station_of(FAR) == (130.0, 0.0, 45.0)
+
+
+def test_a_scenario_with_no_tracks_has_none():
+    assert spec().tracks == {}
+    assert spec().track_of(FAR) is None
+
+
+def test_the_record_names_the_lines_that_were_flown():
+    row = crossing_spec().as_record()["tracks"]
+    assert row[FAR]["start_enu"] == [130.0, 0.0, 45.0]
+    assert row[FAR]["length_m"] == 240.0
+    assert row[FAR]["arrival_s"] == 44.0
+
+
+def test_the_track_executor_carries_the_line_and_the_clock():
+    command = track_node_command(FAR, SPAWN, crossing_spec().track_of(FAR),
+                                 (NEAR, FAR))
+    assert command[:4] == ["ros2", "run", "uavx_mission", "mission_executor"]
+    assert "track_start_enu:=[130.000000, 0.000000, 45.000000]" in command
+    assert "track_end_enu:=[370.000000, 0.000000, 45.000000]" in command
+    assert "track_speed_mps:=10.000000" in command
+    assert "track_start_s:=20.000000" in command
+    assert "use_sim_time:=true" in command, (
+        "the epoch it is given later is an absolute simulated time, and a "
+        "node on a wall clock would compare two different clocks")
+
+
+def test_the_track_executor_mints_nothing():
+    """Identity is (origin_id, sequence) and the router already counts.
+
+    Two processes on one aircraft counting from zero produce colliding ids,
+    and delivered-once is a comparison of those ids, so the collision would
+    read as a delivery rather than as a fault.
+    """
+    command = track_node_command(FAR, SPAWN, crossing_spec().track_of(FAR),
+                                 (NEAR, FAR))
+    assert "observations:=false" in command
+
+
+def test_the_epoch_is_set_on_the_executor_in_its_own_namespace():
+    command = track_epoch_command(FAR, 683.45)
+    assert command == ["ros2", "param", "set", f"/{FAR}/mission_executor",
+                       "track_epoch_s", "683.450000"]
+
+
+@pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), None])
+def test_an_epoch_that_is_not_a_moment_is_refused(bad):
+    with pytest.raises(CommsError, match="scenario zero"):
+        track_epoch_command(FAR, bad)
+
+
+def test_the_router_is_told_whether_this_run_gives_way():
+    """The control differs in one flag and the flag reaches the real code."""
+    on = router_command(FAR, SPAWN, STATIONS[FAR], spec(), "/tmp/r.json")
+    off = router_command(FAR, SPAWN, STATIONS[FAR], spec(), "/tmp/r.json",
+                         yield_enabled=False)
+    assert "yield_enabled:=true" in on
+    assert "yield_enabled:=false" in off
+    assert [a for a in on if not a.startswith("yield_enabled")] == \
+        [a for a in off if not a.startswith("yield_enabled")], (
+            "encounter and its control differ in this and in nothing else")
 
