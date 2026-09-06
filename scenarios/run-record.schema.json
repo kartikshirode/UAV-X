@@ -288,6 +288,25 @@
           "type": "integer",
           "minimum": 0
         },
+        "deferred": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Observations pushed out of a queue that were not lost, because the node that minted them still held them until the destination acknowledged them. Reported beside evicted rather than folded into it: a queue too small for the outage it was given and a design that loses data produce the same number otherwise. queue_drain requires zero, because that is the scenario whose outage the queue is sized for; link_loss holds the route down for 120 s against a queue sized for 45 and defers 703, which is the honest report of a queue being asked for more than it was built for."
+        },
+        "backlog": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The largest number of observations any cut off member was still holding at the moment its route came back. backlog_drain_s is the time the last of that set took to leave, so this is the size the bound was measured over."
+        },
+        "backlog_by_node": {
+          "type": "object",
+          "description": "The same count per member, so a backlog that split across two nodes instead of funnelling to one is visible rather than hidden inside a maximum."
+        },
+        "drain_counted_for": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "The members the drain bound was measured over, which are the ones the outage cut off. drain_by_node carries every node, including the gated vehicle whose own store empties when its radio returns; that is a different event with a different cause and folding it in reports a two minute drain for a design that promises 2.25 s."
+        },
         "peak_queue_depth": {
           "type": "integer",
           "minimum": 0,

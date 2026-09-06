@@ -567,9 +567,18 @@ w3_relay() {
 }
 
 w3_control() {
+  # Round 9 finding 6. The control asked only that uav_4 sent plenty and
+  # delivered none of it, and a run where every data path was broken satisfies
+  # both. The claim is that forwarding is the thing that makes the far
+  # surveyor reachable, so the anchor has to be delivering in the same run.
+  # Without that, turning off forwarding and turning off the radio produce the
+  # same record. Codex mutated the accepted record's uav_1 delivery to zero and
+  # both requirements still passed.
   run_scenario scenarios/direct_only.yaml
   check_run scenarios/direct_only.yaml \
     --require "delivery_ratio_by_node.uav_4==0" \
+    --require "delivery_ratio_by_node.uav_1>=0.95" \
+    --require "app_packets_delivered_by_node.uav_1>=1000" \
     --require "app_packets_sent_by_node.uav_4>=1080"   # 240 s x 5 Hz, less 10%
 }
 
@@ -639,7 +648,8 @@ w4_relay_kill() {
     --require "pose_sample_count>=1000" \
     --require "min_pairwise_separation_m>=10" \
     --require "separation_violations==0" \
-    --require "collision_contacts==0"
+    --require "collision_contacts==0" \
+    --require "contact_monitor_samples>=1000"
 }
 
 w4_link_loss() {
@@ -713,6 +723,7 @@ w4_queue_drain() {
     --require "observations.unexpected_count==0" \
     --require "observations.evicted==0" \
     --require "observations.expired==0" \
+    --require "observations.deferred==0" \
     --require "observations.peak_queue_depth<=512" \
     --require "observations.peak_queue_depth>=450" \
     --require "observations.backlog_drain_s<=2.25" \
@@ -741,10 +752,17 @@ w4_encounter() {
 }
 
 w4_encounter_control() {
+  # Round 9 finding 7. The safe encounter requires both vehicles to finish and
+  # a pose sample floor; its control required neither, so a pair that violated
+  # separation early and then went nowhere satisfied it. The comparison only
+  # means something if both runs fly the same crossing, so the control carries
+  # the same completion requirements as the run it is the control for.
   run_scenario scenarios/encounter_noyield.yaml
   check_run scenarios/encounter_noyield.yaml \
     --require "separation_violations>=1" \
-    --require "contact_monitor_samples>0"
+    --require "contact_monitor_samples>0" \
+    --require "pose_sample_count>=1000" \
+    --require "vehicles_completed==2"
   gsay "W4: the control violated separation, so the yield rule caused the safe result"
 }
 
