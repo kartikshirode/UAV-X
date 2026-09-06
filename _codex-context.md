@@ -1,10 +1,10 @@
 # Codex context, UAV-X Stage 1
 
-Everything a reviewer needs before reading a line of the plan. Written 29 August 2026, updated 1 September after week 1 was built. Paste this first, then `_codex-prompt.md`.
+Everything a reviewer needs before reading a line of the plan. Written 29 August 2026, updated 6 September with three weeks built and accepted. Paste this first, then `_codex-prompt.md`.
 
 Nothing here restates a threshold or a parameter. Those live in `scripts/gate.sh` and `stage-1/architecture.md`, and this file's job is to say what the project is and what has already been decided, so a round does not spend itself rediscovering the shape.
 
-**Round 8 was a fix round, and it worked.** Rounds 2 through 7 reported findings and stopped; the author edited. Round 8 found 19 problems, laid out three approaches for each in `_design-options-round8.md`, made the changes itself and iterated to green. Round 9 runs the same way. `_codex-prompt.md` has the procedure.
+**Round 9 reports. It does not edit.** Round 8 was a fix round and it worked: 19 problems found, three approaches written down for each in `_design-options-round8.md`, changes made, iterated to green. Round 9 goes back to review only, for one reason. There is an implementation now, the author is inside week 4, and four of this project's defects were introduced by the fix for an earlier finding. Two agents editing the same tree at this stage is how the fifth gets made. Find the problems, work the options, hand back the list; the author applies them. `_codex-prompt.md` has the procedure.
 
 ## The competition
 
@@ -16,7 +16,7 @@ Build an autonomous UAV swarm that surveys a disaster location, holds end-to-end
 
 Five things go in that email: a 6 to 8 page technical proposal with the software architecture, a working proof-of-concept simulation, the source code, installation instructions, and a demo video.
 
-Roughly 15 teams qualify from Stage 1, out of 55 registered as of 31 August. Stage 1 qualifiers get INR 1 Lakh each.
+Roughly 15 teams qualify from Stage 1, out of 88 registered as of 6 September, up from 17 when the record was first captured. Stage 1 qualifiers get INR 1 Lakh each.
 
 ### How it is judged
 
@@ -45,21 +45,23 @@ Execution is an autonomous agent loop. One tick runs one plan week; inside a wee
 
 **That is why the plan has to be rigid.** Anything left ambiguous becomes a coin flip made by an agent with no context, and a wrong flip costs days out of 28. Judge everything by "can an agent execute this without guessing", not by "is this reasonable for a human".
 
-## Where things stand on 1 September
+## Where things stand on 6 September
 
-Rounds 1 through 8 are done, 77 problems raised and all fixed. `.claude/review-status.json` holds the state; the documents deliberately do not carry it.
+Rounds 1 through 8 are done, 77 problems raised and all fixed. `.claude/review-status.json` holds that state; the documents deliberately do not carry it.
 
 **The environment is up and pinned.** Ubuntu 22.04.5, ROS 2 Humble, Gazebo Classic 11.10.2, PX4 v1.15.4, uXRCE-DDS agent v2.4.3, every one by SHA in `stage-1/setup/versions.lock`. `scripts/sitl_multi.sh` brings up 4 vehicles headless with a ROS namespace each.
 
-**The acceptance harness is finished.** 36 scripts, ten of them test suites: 48 seam fixtures, 53 submission checks, 20 rehearsal checks, 8 preflight decisions, 19 launcher geometry checks, the scenario, message, record and install-guide contracts, and a grammar suite that parses all 113 `--require` expressions in the gate.
+**Weeks 1, 2 and 3 are built and accepted**, on 4, 4 and 5 September, each against `bash scripts/gate.sh <N>` with the human preflight satisfied. The plan dated those three gates 5, 12 and 19 September, so the build is running roughly two weeks ahead of its own calendar. `docs/progress/week-1.md` through `week-3.md` say what each week found; week 1 also has an audit under `docs/audits/`.
 
-**Week 1 is built and week 1 is not accepted.** `uavx_ws` holds `uavx_msgs` with the five frozen types and `uavx_sim` with the scenario loader, the event injector, the graph capture, the resource sampler, the record writer and the runner, at 179 package tests. `scenarios/harness_check.yaml` and `scripts/run_scenario.sh` exist. Four vehicles arm, climb to separate layers, hold and land, and one scenario runs end to end and publishes a record and a graph the seam pass accepts. `uavx_eval` still does not exist; it belongs to week 2.
+`uavx_ws` holds seven packages now. `uavx_msgs` and `uavx_sim` from week 1, `uavx_eval` and `uavx_mission` from week 2, `uavx_comms` and `uavx_gcs` from week 3, `uavx_roles` from week 4, at 1017 package tests between them. Committed run records exist for `survey_baseline`, `relay_required`, `direct_only`, `relay_kill` and `link_loss`.
 
-**Week 1 found 17 defects in the acceptance harness and 0 in the plan.** They are listed in `docs/progress/week-1.md`. The worst was a missing boolean case in the `--require` grammar, which made 17 gate expressions unsatisfiable by any record the schema would also accept, and those expressions carry weeks 3 and 4. The second worst is that the seam pass had never run over a real ROS graph; all 48 fixtures were written by hand, and the first captured graph failed on three endpoints. The fourteenth is that no gate ran any of the fixture suites that prove the checkers work; they run in preflight now. Three more came out of the week's own audit, which is `docs/audits/week-1.md` and is worth reading before this file. A reviewer should read that list before trusting any checker here, including the ones the reviews already approved.
+**Week 4 is half built.** 4.1, the roles package, and the two fault scenarios 4.2 `relay_kill` and 4.3 `link_loss` pass their chunk gates on live runs. 4.4 `queue_drain` is blocked, and it is the first job of this round. 4.5 through 4.8 have not started: the encounter pair, the integrated run, and the freeze and package.
 
-**The plan is four weeks and 25 chunks**, 30 August to 26 September. It was five weeks until 29 August; the first four days produced no implementation, so the packaging tail was distributed into the weeks rather than cutting scope. `stage-1/plan.md`, section "Why four weeks and not five", has the reasoning. Every chunk has its own gate: `bash scripts/gate.sh 1.3` runs one, `bash scripts/gate.sh chunks` lists all 25.
+**Week 4 has changed what several record fields mean**, and that is the second thing to look at. Since the week 3 records were accepted, the observations block gained a split between packets deferred by their own origin and packets evicted from somebody else's queue; the drain bound was scoped to the members an outage cut off; the recovery numbers stopped counting the vehicle the fault was applied to as evidence of recovery; a router started keeping the history of its route rather than the latest value; a commanded blackout window is now bounded by the command as well as measured; and the retry interval changed, which changes how much traffic a recovery produces. The week 1 to 3 records were read under the older meanings and have not been reread under these.
 
-**Human steps still block everything.** `gate_preflight` refuses to start any week without `submission/human-preflight.json`, which needs registration, the WhatsApp clarification channel, the organiser email, an eligibility declaration, a delivery route and a compliance sign-off. Registration closed on 1 September and the block now requires the issued id, `UAVX-` and 12 upper case hex characters, because a date and an address can both be typed by somebody who never registered. The other five are open. This is the author's to do and is not a finding.
+**What the submission still owes.** 4 of the 9 required runs have no record: `queue_drain`, `encounter`, `encounter_noyield`, `mission_integrated`. `check_submission.py` reports 8 missing package items, the whole tail from `proposal.pdf` to the attachment manifest. The proposal is 1 of its 4 sections drafted, and the two owed from weeks 1 and 2 were never written, which is the one standing rule the build has already broken. The only video in `submission/` is the dry run rehearsal.
+
+**Human steps.** Registration, the eligibility declaration, the clarification channel and the compliance sign-off are all done and dated in `submission/human-preflight.json`. The organiser email went on 4 September and the answers are still outstanding, so the video length cap and the attachments-against-link route are the author's assumption rather than a published rule. None of this is a finding.
 
 ## What the eight rounds were mostly about
 
