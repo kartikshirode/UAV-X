@@ -652,7 +652,23 @@ At `t = 70 s` each surveyor is 58% of the way through its strip, so there is fin
 
 The component `{uav_3, uav_4}` elects. At the assign, 6 s later, `uav_3` is 311.8 m from `uav_1` and `uav_4` is 325.0 m. `uav_3` wins, flies 150.0 m to the slot at **(330.3, 0, 75)**, and both new hops are 171.3 m.
 
-`uav_4` inherits `uav_3`'s remaining lane, finishes its own strip first, then flies the handover. The survey completes at about `t = 141 s`, inside the 240 s run with 99 s to spare.
+`uav_4` inherits `uav_3`'s remaining lane, finishes its own strip first, then flies the handover. The survey completes inside the 240 s run with time to spare, and the box finishes at 120 of 120 cells.
+
+##### How the strip actually changes hands
+
+Three hops, and only the middle one crosses a radio. `uav_3`'s mission executor gives up the unflown part of its plan the moment its own role manager sends it to a slot, and says so on a vehicle-local topic. That role manager puts the first unflown waypoint into the `ROLE_ACK` it was already sending, so nothing new crosses the mesh. Every other role manager sees that acknowledgement; the one whose vehicle is the lowest id still surveying tells its own executor to take the work.
+
+One point crosses, not a list. `RoleAssignment` carries a single position and the five message types are frozen, so the vehicle taking over rebuilds the rest of the plan from the box, the split and the mirroring, all of which it already holds. It flies the inherited lane at its own altitude rather than the leaver's, because the layers are what keep two aircraft apart when their ground tracks cross.
+
+Deciding who takes it in the role manager rather than in the executor matters. It has to be exactly one vehicle: nobody and the strip is abandoned, more than one and two aircraft fly the same lane, and both of those read as a successful handover in a record that counts cells.
+
+##### Why coverage at the kill is not the same number as progress
+
+Each surveyor is 58% of the way through its strip at `t = 70 s`. Coverage at that instant is 80%, and the two figures are not in conflict.
+
+The sensor footprint is a 6 m disc and the lanes sit 6.25 m apart, so one lane covers two of the five cell columns on its own. Both vehicles' **first** lanes therefore account for four of the five columns, and they finish at `t = 65 s`. The five seconds to the kill are spent turning, and the last column is still empty. Coverage saturates at 80% halfway through the flying and the final 20% arrives all at once.
+
+That is worth knowing before reading any coverage figure of this box. Distance flown is the honest measure of how unfinished the mission was; cells seen is the measure of whether the box got surveyed, and the two diverge in the middle of a run by design.
 
 Observations generated during the outage are **buffered and delivered once the route returns**, which is what a real BVLOS mission does, and it is why the gate asserts delivery by end of run rather than instantaneously. The outage here is the derived 28.0 s. The queue is sized for 45 s, so this run never comes close to filling it, and `queue_drain.yaml` exists to go there on purpose.
 
@@ -684,7 +700,7 @@ The slot is the balance point between `uav_1` and `uav_4`, the member that stays
 - `uav_3` flies (475, 75, 50) to (317.3, -36.8, 75): **195.0 m**, 19.5 s at 10 m/s.
 - Both new hops are 163.0 m, inside `r_full`.
 - Restored path: `uav_4 -> uav_3 -> uav_1 -> gcs`.
-- `uav_3`'s survey strip is reassigned to `uav_4`, not abandoned.
+- `uav_3`'s survey strip is reassigned to `uav_4`, not abandoned. `relay_kill` station-keeps and has no strip to move, so the reassignment is `mission_integrated`'s to show.
 
 Run duration 300 s, leaving 180 s after the kill for recovery and steady state.
 
