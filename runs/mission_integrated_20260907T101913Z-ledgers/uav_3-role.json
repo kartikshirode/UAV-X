@@ -1,0 +1,70 @@
+{
+ "acked_epoch": 1,
+ "arrival_radius_m": 5.0,
+ "arrived_at": 221.0,
+ "clock_live": true,
+ "clock_live_at_s": 116.2,
+ "commands_sent": 505,
+ "decode_failures": 0,
+ "drain_stopped_by": "window",
+ "drain_window_s": 3.0,
+ "drained_sim_s": 3.0,
+ "drained_wall_s": 3.001,
+ "dropped_waiting_for_clock": 0,
+ "encode_failures": 0,
+ "epoch": 1,
+ "granted_at": 203.5,
+ "grants": 1,
+ "grants_seen": {
+  "epoch_seen": 1,
+  "grant": {
+   "epoch": 1,
+   "lease_expires_at": 397.3,
+   "node_id": "uav_3",
+   "role": "RELAY",
+   "sender_id": "uav_4",
+   "slot": [
+    323.20130951377655,
+    17.175950656053026,
+    75.0
+   ]
+  },
+  "message_outcomes": {
+   "accepted": 1,
+   "malformed": 0,
+   "not_mine": 4,
+   "released": 0,
+   "renewed": 159,
+   "stale_epoch": 0,
+   "unknown_kind": 0
+  },
+  "node": "uav_3",
+  "released_epochs": []
+ },
+ "held_before_clock": 0,
+ "home_role": "survey",
+ "inherited_at": null,
+ "inherited_from": null,
+ "lapsed_at": null,
+ "moved": true,
+ "node": "uav_3",
+ "positions_seen": 25110,
+ "readings_before_clock": 0,
+ "released": false,
+ "released_at": null,
+ "renewals": 159,
+ "returned_at": null,
+ "returned_to_station": false,
+ "slot_commanded": [
+  323.20130951377655,
+  17.175950656053026,
+  75.0
+ ],
+ "station": null,
+ "target": [
+  323.20130951377655,
+  17.175950656053026,
+  75.0
+ ],
+ "target_gap_m": 1.519
+}
