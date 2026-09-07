@@ -103,7 +103,12 @@ class RoleManager(Node):
             "mission executor owns."))
         self.declare_parameter("role", "survey", _described(
             "the role this vehicle starts and returns to."))
-        self.declare_parameter("survey_peers", [], _described(
+        # [""] and not []. rclpy infers a parameter's type from its default
+        # and an empty list is a BYTE_ARRAY, so the first launch that passed
+        # real ids killed every role manager in the swarm with "expecting type
+        # BYTE_ARRAY". link_layer.blackout_nodes carries the same one-element
+        # default for the same reason.
+        self.declare_parameter("survey_peers", [""], _described(
             "the vehicles the survey box is split between, in any order. "
             "Empty for a scenario with no survey. It decides which staying "
             "vehicle takes an elected relay's unflown strip, and that has to "
@@ -170,7 +175,8 @@ class RoleManager(Node):
         self.acked_epoch: Optional[int] = None
         self._seq = 0
         self.surveyors = [str(v) for v
-                          in self.get_parameter("survey_peers").value]
+                          in self.get_parameter("survey_peers").value
+                          if str(v).strip()]
         # The first waypoint this vehicle's own executor gave up, waiting to
         # go out with the acknowledgement. One point, because RoleAssignment
         # carries one and the five messages are frozen; the vehicle that takes

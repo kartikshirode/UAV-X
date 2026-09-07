@@ -1586,12 +1586,15 @@ class Harness:
         self.model_entries = entries
         self.separation_floor = floor
 
-        # A survey starts the collector here, before the executors, because
-        # coverage is scored from the first pose it sees. A station-keeping
-        # run starts it after the ingress instead: the vehicles fly outward
-        # from a metre apart at layer altitudes 10 m apart, and separation
-        # measured across that describes the transit and not the scenario.
-        if self.spec is not None:
+        # A survey with no radio starts the collector here, before the
+        # executors, because it has no ingress and coverage is scored from the
+        # first pose it sees. Every scenario that talks starts it after the
+        # ingress instead: the vehicles fly outward from a metre apart at
+        # layer altitudes 10 m apart, and separation measured across that
+        # describes the transit and not the scenario. mission_integrated is
+        # both, and its survey does not begin until 25 s after the ingress
+        # ends, so nothing about its coverage is lost by waiting.
+        if self.spec is not None and self.comms is None:
             self._start_node(COLLECTOR_LABEL, collector_command(
                 self.run_id, self.scenario_relative, self.spec, entries, floor))
         flyers = [v for v in self.vehicles if v.state == "hold"]
@@ -1902,6 +1905,13 @@ class Harness:
             self._start_node(COLLECTOR_LABEL, collector_command_no_survey(
                 self.run_id, self.scenario_relative, self.model_entries,
                 self.separation_floor))
+        else:
+            # A survey that also talks. Same collector, started here rather
+            # than before the ingress, so the box it scores and the separation
+            # it watches both cover the run and not the transit into it.
+            self._start_node(COLLECTOR_LABEL, collector_command(
+                self.run_id, self.scenario_relative, self.spec,
+                self.model_entries, self.separation_floor))
 
         self.ledger_paths[LINK_LABEL] = self.ledger_dir / "link_layer.json"
         self._start_node(LINK_LABEL, link_layer_command(
