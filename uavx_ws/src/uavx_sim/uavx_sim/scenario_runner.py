@@ -95,6 +95,7 @@ from uavx_sim.comms import (COMMS_BLACKOUT, KILL, CommsError,
                             gcs_command, link_layer_command, read_ledger,
                             role_manager_command, role_managers_of,
                             router_command, station_gap, station_node_command,
+                            survey_epoch_command,
                             track_epoch_command, track_node_command,
                             GCS_LEDGER_KEYS, ROLE_LEDGER_KEYS,
                             ROUTER_LEDGER_KEYS)
@@ -1126,6 +1127,14 @@ class Harness:
         self.scenario_relative = None
         self.nodes = []
         self.metrics_payload = None
+        self.metrics_payload_s = None
+        # Chunk 4.7. What the box looked like when the relay died. Read at the
+        # instant the first fault fires and never afterwards, because the
+        # claim the gate rests on is that the mission was genuinely unfinished
+        # at that moment and a figure taken later describes a different one.
+        self.coverage_at_fault = None
+        self.coverage_at_fault_s = None
+        self.coverage_at_fault_read_s = None
         self.metrics_final = False
         self.metrics_messages = 0
         self.metrics_foreign = 0
@@ -1512,6 +1521,11 @@ class Harness:
             return
         self.metrics_messages += 1
         self.metrics_payload = payload
+        # When this reading was taken, so a figure quoted off it can say how
+        # old it was. The collector publishes every few seconds and the kill
+        # lands at one instant, and a coverage number for that instant that
+        # is quietly five seconds stale is a number nobody measured.
+        self.metrics_payload_s = self.sim_now
         if message.final:
             self.metrics_final = True
 
@@ -1585,6 +1599,8 @@ class Harness:
             try:
                 line = (None if self.comms is None
                         else self.comms.track_of(vehicle.name))
+                plan = (None if self.comms is None
+                        else self.comms.survey_of(vehicle.name))
                 if self.comms is None:
                     command = mission_node_command(
                         vehicle.name, self.spawn_of(vehicle.name),
@@ -1594,6 +1610,20 @@ class Harness:
                     command = track_node_command(
                         vehicle.name, self.spawn_of(vehicle.name), line,
                         list(self.scenario.vehicles))
+                elif plan is not None:
+                    # Chunk 4.7. A surveying vehicle in a scenario that also
+                    # talks. Every scenario before this one either surveyed
+                    # with the radio off or held a point with it on, so this
+                    # branch did not exist and mission_integrated's surveyors
+                    # were handed to the station branch, which refused them
+                    # for having no station. The box is split between the
+                    # vehicles that fly it and not the fleet, and the
+                    # observations belong to the router on this aircraft.
+                    command = mission_node_command(
+                        vehicle.name, self.spawn_of(vehicle.name),
+                        vehicle.hover_alt_m, self.spec,
+                        list(self.comms.surveyors),
+                        start_north=plan.start_north, observations=False)
                 else:
                     command = station_node_command(
                         vehicle.name, self.spawn_of(vehicle.name),
@@ -1669,8 +1699,8 @@ class Harness:
                   f"offboard and will hover for the run", flush=True)
 
     # -------------------------------------------------------------- tracks
-    def start_tracks(self):
-        """Tell every track executor where the scenario's zero is.
+    def start_clocks(self):
+        """Tell every executor with a schedule where the scenario's zero is.
 
         Nothing knows that until now. The nodes were launched during bring-up
         and the ingress runs for as long as the last vehicle takes to reach
@@ -1683,17 +1713,58 @@ class Harness:
         a call that takes two seconds to arrive costs nothing: the vehicles
         have 20 s of scenario time before either of them is due to move.
         """
-        if self.comms is None or not self.comms.tracks:
+        if self.comms is None:
             return
+        paced = (() if self.spec is None or self.spec.survey_speed_mps is None
+                 else self.comms.surveyors)
         for vehicle in sorted(self.comms.tracks):
-            done = self._run_tool(track_epoch_command(vehicle, self.zero_s))
-            if done is None or done.returncode != 0:
-                detail = "" if done is None else (done.stdout + done.stderr).strip()
-                why = detail or "the parameter set did not finish"
-                raise HarnessFailure(
-                    f"could not start {vehicle}'s track: {why}", EXIT_CHILD)
-        print(f"  {len(self.comms.tracks)} track(s) started together at "
-              f"scenario zero", flush=True)
+            self._start_clock(vehicle, "track",
+                              track_epoch_command(vehicle, self.zero_s))
+        for vehicle in sorted(paced):
+            self._start_clock(vehicle, "survey",
+                              survey_epoch_command(vehicle, self.zero_s))
+        if self.comms.tracks:
+            print(f"  {len(self.comms.tracks)} track(s) started together at "
+                  f"scenario zero", flush=True)
+        if paced:
+            print(f"  {len(paced)} survey(s) paced at "
+                  f"{self.spec.survey_speed_mps:.1f} m/s from "
+                  f"t={self.spec.start_s:.0f}s", flush=True)
+
+    def read_coverage_at_fault(self):
+        """Take the coverage reading the moment the first fault lands.
+
+        The collector publishes every few seconds and this reads whatever it
+        last said, so the record carries the simulated time of that reading
+        beside the figure. A coverage fraction attributed to t = 70 s that was
+        actually measured at t = 66 s is the kind of number this repository
+        exists to refuse, and the two fields together make it checkable rather
+        than plausible.
+        """
+        if self.coverage_at_fault is not None or self.spec is None:
+            return
+        faults = [float(event.at_s) for event in self.scenario.injected_events]
+        if not faults or self.sim_now < min(faults):
+            return
+        if self.metrics_payload is None:
+            return
+        try:
+            reading = coverage_from_payload(self.metrics_payload)
+        except SurveyError:
+            # The collector's payload is checked properly at the end of the
+            # run, where a bad one fails the record rather than one metric.
+            return
+        self.coverage_at_fault = reading["coverage_fraction"]
+        self.coverage_at_fault_s = min(faults)
+        self.coverage_at_fault_read_s = self.metrics_payload_s
+
+    def _start_clock(self, vehicle, kind, command):
+        done = self._run_tool(command)
+        if done is None or done.returncode != 0:
+            detail = "" if done is None else (done.stdout + done.stderr).strip()
+            why = detail or "the parameter set did not finish"
+            raise HarnessFailure(
+                f"could not start {vehicle}'s {kind}: {why}", EXIT_CHILD)
 
     def track_completion(self):
         """How many vehicles finished the work the scenario gave them.
@@ -2046,7 +2117,7 @@ class Harness:
 
         self.sampler = ResourceSampler(root_pid=os.getpid())
         self.zero_s = first
-        self.start_tracks()
+        self.start_clocks()
         self.sim_now = 0.0
         self.open_capture()
         next_pose = 0.0
@@ -2084,6 +2155,7 @@ class Harness:
 
             self.injector.tick(self.sim_now)
             self.injector.poll_observations(self.sim_now)
+            self.read_coverage_at_fault()
 
             if self.sim_now >= next_resource:
                 next_resource = self.sim_now + RESOURCE_PERIOD_S
@@ -2572,6 +2644,11 @@ def run(options):
             injected_event_count=harness.injector.count_observed(),
             graph_snapshot_sha256=graph_sha,
             coverage=coverage,
+            mission={
+                "coverage_fraction_at_kill": harness.coverage_at_fault,
+                "coverage_at_kill_s": harness.coverage_at_fault_s,
+                "coverage_at_kill_read_s": harness.coverage_at_fault_read_s,
+            },
             delivery=delivery,
             safety=safety,
             yielding=yielding,
