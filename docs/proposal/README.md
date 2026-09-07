@@ -8,10 +8,10 @@ what holds it to that.
 
 | Section | Week | State |
 | --- | --- | --- |
-| Architecture | 1 | owed |
-| Mission and coverage | 2 | owed |
+| [Software architecture](week-1-architecture.md) | 1 | drafted |
+| [Mission and coverage](week-2-mission.md) | 2 | drafted |
 | [Communication architecture](week-3-communication.md) | 3 | drafted |
-| Fault recovery and the integrated run | 4 | not yet |
+| Fault recovery and the integrated run | 4 | waiting on its run |
 
 Every number in a section names the run it came off. A figure that cannot cite
 a run under `runs/` does not go in.
