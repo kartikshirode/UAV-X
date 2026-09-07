@@ -52,7 +52,8 @@ from uavx_gcs import ledger as led
 from uavx_mission import frames
 
 from uavx_sim import work
-from uavx_sim.survey import SurveyError, home_of, ros_args, strip_plans
+from uavx_sim.survey import (SurveyError, home_of, mirrored_of,
+                            ros_args, strip_plans)
 
 # The three roles a router will start in, as `uavx_comms.router_node` spells
 # them. architecture.md section 6 gives each vehicle one in the common
@@ -131,6 +132,10 @@ class CommsSpec:
     # run starts, which end to launch its executor pointing at, and who the
     # box was split between.
     strips: Mapping[str, object] = field(default_factory=dict)
+    # Whether consecutive strips are flown from opposite ends. Carried beside
+    # the strips because a vehicle that inherits a neighbour's work rebuilds
+    # the neighbour's path, and which end it started from is half of it.
+    mirrored: bool = False
 
     def track_of(self, vehicle_id: str):
         return self.tracks.get(vehicle_id)
@@ -183,6 +188,7 @@ class CommsSpec:
                        for name, line in sorted(self.tracks.items())},
             "strips": {name: plan.as_record()
                        for name, plan in sorted(self.strips.items())},
+            "mirrored": self.mirrored,
         }
 
 
@@ -269,7 +275,8 @@ def comms_spec(raw: Mapping, vehicles: Sequence[str],
                      observation_origins=_origins(
                          block.get("observation_origins"), vehicles),
                      tracks=tracks,
-                     strips=strips)
+                     strips=strips,
+                     mirrored=mirrored_of(raw))
 
 
 def _origins(block, vehicles: Sequence[str]) -> Optional[Tuple[str, ...]]:
@@ -539,6 +546,12 @@ def role_manager_command(vehicle_id: str, spawn_row, spec: CommsSpec,
         "role": spec.role_of(vehicle_id),
         "ledger_path": str(ledger_path),
     }
+    if spec.surveyors:
+        # Who the box is split between, so this vehicle can work out whether
+        # it is the one to take over an elected relay's strip. Left out for a
+        # scenario that surveys nothing, where the node's own empty default
+        # says the same thing and the launcher cannot render an empty list.
+        parameters["survey_peers"] = list(spec.surveyors)
     if station is not None:
         if len(station) != 3 or not all(_finite(v) for v in station):
             raise CommsError(

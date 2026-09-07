@@ -1160,7 +1160,8 @@ def build_record(*, run_id, scenario_path, scenario_sha256, seed, commit_sha,
             if key in recovery:
                 record[key] = recovery[key]
         for key in ("relay_slot", "handback", "route_restored_after_blackout",
-                    "outage_count_after_release"):
+                    "outage_count_after_release", "strip_reassigned_to",
+                    "strip_reassigned_from", "strip_reassigned_at_s"):
             if key in recovery:
                 record[key] = recovery[key]
     return validate_record(record)

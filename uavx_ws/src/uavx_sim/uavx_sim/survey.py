@@ -362,7 +362,8 @@ def ros_args(parameters: Mapping, namespace: Optional[str] = None) -> list:
 def mission_node_command(vehicle_id: str, spawn_row, altitude_m,
                          spec: SurveySpec, vehicles: Sequence[str],
                          start_north: bool = False,
-                         observations: bool = True) -> list:
+                         observations: bool = True,
+                         mirrored: bool = False) -> list:
     """`ros2 run uavx_mission mission_executor` for one vehicle.
 
     The node goes in the vehicle's own namespace so the graph names it
@@ -394,6 +395,7 @@ def mission_node_command(vehicle_id: str, spawn_row, altitude_m,
         "survey_altitude_m": float(altitude_m),
         "home_enu": list(home_of(spawn_row)),
         "start_north": bool(start_north),
+        "mirrored": bool(mirrored),
         "observations": bool(observations),
         "survey_start_s": float(spec.start_s),
     }

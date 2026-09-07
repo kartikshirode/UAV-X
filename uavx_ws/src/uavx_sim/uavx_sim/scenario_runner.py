@@ -1623,7 +1623,8 @@ class Harness:
                         vehicle.name, self.spawn_of(vehicle.name),
                         vehicle.hover_alt_m, self.spec,
                         list(self.comms.surveyors),
-                        start_north=plan.start_north, observations=False)
+                        start_north=plan.start_north, observations=False,
+                        mirrored=self.comms.mirrored)
                 else:
                     command = station_node_command(
                         vehicle.name, self.spawn_of(vehicle.name),

@@ -70,7 +70,7 @@ SAFETY_KEYS = ("min_pairwise_separation_m", "separation_violations",
 
 # The times in a role manager's file, in the node's clock.
 ROLE_TIME_KEYS = ("granted_at", "arrived_at", "released_at", "lapsed_at",
-                  "returned_at")
+                  "returned_at", "inherited_at")
 
 KILL = "kill"
 COMMS_BLACKOUT = "comms_blackout"
