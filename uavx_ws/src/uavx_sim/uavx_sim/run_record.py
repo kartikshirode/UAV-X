@@ -110,6 +110,18 @@ MIN_DURATION_FRACTION = 0.95
 COVERAGE_FIELDS = ("coverage_fraction", "coverage_source",
                    "coverage_cells_total", "coverage_cells_seen")
 
+# Chunk 4.7. What the mission looked like when the relay died, and who picked
+# up the work the relay dropped. Separate from the coverage block above
+# because that one is all four or none and these are a scenario's own: eight
+# of the nine runs have no fault landing on a survey in progress.
+#
+# The read time is beside the figure on purpose. The collector publishes every
+# few seconds, the kill lands at one instant, and a coverage fraction
+# attributed to that instant that was measured four seconds earlier is a
+# number nobody took.
+MISSION_FIELDS = ("coverage_fraction_at_kill", "coverage_at_kill_s",
+                  "coverage_at_kill_read_s", "strip_reassigned_to")
+
 # Chunk 3.4. The four fields a run with its radio on carries beside the two
 # packet counts the schema has always required. All four or none, for the
 # same reason coverage is: a ratio with no per node rows cannot be argued
@@ -346,6 +358,45 @@ def _text_problem(record, key, pattern=None, minimum_length=0):
     return None
 
 
+def _mission_problems(record) -> list:
+    """The figures a run takes at the moment its fault lands.
+
+    Absent on eight of the nine scenarios and that is a real answer, so
+    nothing here is required. What is checked is that a figure which is
+    present makes sense beside the ones around it: a box cannot have been
+    more covered when the relay died than it was at the end of the run, and a
+    strip cannot be handed to a vehicle the run never flew.
+    """
+    problems = []
+    at_kill = record.get("coverage_fraction_at_kill")
+    if at_kill is not None:
+        if not (_is_number(at_kill) and 0.0 <= at_kill <= 1.0):
+            problems.append(f"coverage_fraction_at_kill is {at_kill!r}, not a "
+                            f"number between 0 and 1")
+        else:
+            final = record.get("coverage_fraction")
+            if _is_number(final) and at_kill > final + 1e-9:
+                problems.append(
+                    f"coverage_fraction_at_kill {at_kill} is above the "
+                    f"{final} the run finished on. Coverage only grows, so "
+                    f"one of the two readings is of a different run")
+    for key in ("coverage_at_kill_s", "coverage_at_kill_read_s"):
+        value = record.get(key)
+        if value is not None and not _is_number(value):
+            problems.append(f"{key} is {value!r}, not a simulated time")
+    taker = record.get("strip_reassigned_to")
+    if taker is not None:
+        flown = record.get("vehicle_ids_observed") or []
+        if not isinstance(taker, str) or not taker:
+            problems.append(f"strip_reassigned_to is {taker!r}, not a vehicle")
+        elif taker not in flown:
+            problems.append(
+                f"strip_reassigned_to is {taker!r} and the run flew "
+                f"{', '.join(flown) or 'nobody'}. Work handed to a vehicle "
+                f"that was not there is work nobody flew")
+    return problems
+
+
 def _coverage_problems(record) -> list:
     """All four coverage fields, agreeing with each other, or none of them.
 
@@ -500,6 +551,7 @@ def validate_record(record) -> dict:
         problems.append("ended_at is earlier than started_at")
 
     problems += _coverage_problems(record)
+    problems += _mission_problems(record)
     problems += _delivery_problems(record)
     problems += _safety_problems(record)
     problems += _observation_problems(record)
@@ -977,7 +1029,7 @@ def build_record(*, run_id, scenario_path, scenario_sha256, seed, commit_sha,
                  injected_event_observed, injected_event_count,
                  graph_snapshot_sha256=None, coverage=None, delivery=None,
                  safety=None, observations=None, recovery=None,
-                 yielding=None):
+                 yielding=None, mission=None):
     """Assemble one record and validate it before anybody can write it.
 
     Every argument is keyword only and every one of them is required. A
@@ -1061,6 +1113,13 @@ def build_record(*, run_id, scenario_path, scenario_sha256, seed, commit_sha,
         for key in COVERAGE_FIELDS:
             if key in coverage:
                 record[key] = coverage[key]
+    if mission is not None:
+        if not isinstance(mission, dict):
+            raise RecordError(f"mission is {mission!r}, not the block the "
+                              f"runner assembles at the fault")
+        for key in MISSION_FIELDS:
+            if key in mission and mission[key] is not None:
+                record[key] = mission[key]
     if yielding is not None:
         if not isinstance(yielding, dict):
             raise RecordError(

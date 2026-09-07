@@ -588,8 +588,9 @@ UNTYPED_GATE_PATHS = {
     # W3, the communication and relay claim.
     "delivery_ratio_by_node", "relay_role_holder", "relay_role_moved",
     "time_to_reconnect_s", "observations_set_equal", "min_pairwise_separation_m",
-    # W4, fault recovery and safety.
-    "coverage_fraction_at_kill", "strip_reassigned_to", "relay_role_released",
+    # W4, fault recovery and safety. coverage_fraction_at_kill and
+    # strip_reassigned_to were typed by chunk 4.7 and left this list.
+    "relay_role_released",
     "route_restored_after_blackout", "mover_returned_to_station",
     "outage_count_after_release",
     "delivery_ratio_after_recovery", "separation_violations",

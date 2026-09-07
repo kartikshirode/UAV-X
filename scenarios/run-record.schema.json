@@ -1,706 +1,727 @@
 {
- "$schema": "https://json-schema.org/draft/2020-12/schema",
- "title": "UAV-X run record",
- "description": "Provenance contract for runs/*.jsonl. Round 2 finding 5: nothing tied runs/latest.jsonl to the scenario that had just run, so a stale green file survived a crashed simulation and a metrics writer that never saw a vehicle could satisfy a gate. uavx_eval.check validates this block before reading any metric. A metric can only be trusted after its provenance is. Round 3 finding 6: packet counts and injected events were optional, and there was no duration, so a short run with no events could satisfy every requirement. They are required now. Round 6 finding 5: observations, handback and relay_slot were defined here and required by nothing, so the run that proves the communication mark could omit all three and still validate. They are required per scenario through the allOf block at the end, which is why jsonschema_mini now implements if and then.",
- "type": "object",
- "required": [
-  "run_id",
-  "scenario_path",
-  "scenario_sha256",
-  "seed",
-  "commit_sha",
-  "started_at",
-  "ended_at",
-  "completion",
-  "vehicle_ids_observed",
-  "pose_sample_count",
-  "versions",
-  "metrics",
-  "app_packets_sent_by_node",
-  "app_packets_delivered_by_node",
-  "injected_events",
-  "requested_duration_s",
-  "elapsed_sim_s",
-  "clock_source",
-  "source_tree_sha256",
-  "resources"
- ],
- "additionalProperties": true,
- "properties": {
-  "run_id": {
-   "type": "string",
-   "minLength": 8,
-   "description": "Unique per run. The filename is runs/<run_id>.jsonl."
-  },
-  "scenario_path": {
-   "type": "string",
-   "description": "Repo-relative path of the scenario. The checker rejects a mismatch against what the gate asked for, which is what stops a previous scenario's record passing a later gate."
-  },
-  "scenario_sha256": {
-   "type": "string",
-   "pattern": "^[0-9a-f]{64}$",
-   "description": "Hash of the scenario file as actually read, so an edited scenario cannot reuse an old result."
-  },
-  "seed": {
-   "type": "integer",
-   "description": "RNG seed taken from the scenario. Same seed and same commit must reproduce the run exactly."
-  },
-  "commit_sha": {
-   "type": "string",
-   "pattern": "^[0-9a-f]{40}$",
-   "description": "Repo HEAD at launch."
-  },
-  "started_at": {
-   "type": "string",
-   "format": "date-time"
-  },
-  "ended_at": {
-   "type": "string",
-   "format": "date-time"
-  },
-  "completion": {
-   "enum": [
-    "complete",
-    "crashed",
-    "timeout",
-    "killed"
-   ],
-   "description": "Only 'complete' is accepted. latest.jsonl is published by atomic rename after every process exits cleanly, never by append."
-  },
-  "vehicle_ids_observed": {
-   "type": "array",
-   "items": {
-    "type": "string"
-   },
-   "minItems": 2,
-   "description": "Must match the scenario's vehicle list. A run that saw two of four vehicles is not the run the gate asked for."
-  },
-  "pose_sample_count": {
-   "type": "integer",
-   "minimum": 1,
-   "description": "Zero means nothing was ever observed, which is how 'no samples' masquerades as 'no separation violations'."
-  },
-  "coverage_fraction": {
-   "type": "number",
-   "minimum": 0,
-   "maximum": 1,
-   "description": "Chunk 2.4. Cells of the frozen box whose centre fell inside the sensor footprint of at least one sampled pose, over the cell count. Present only on a run that surveys. Equal to coverage_cells_seen over coverage_cells_total, and the writer refuses a record where it is not."
-  },
-  "coverage_source": {
-   "type": "string",
-   "enum": [
-    "pose_samples"
-   ],
-   "description": "Where the fraction came from. The gate asserts the literal, because a coverage figure computed off the planned path and one computed off flown poses are the same type and mean opposite things. The collector writes it and nothing else may."
-  },
-  "coverage_cells_total": {
-   "type": "integer",
-   "minimum": 1,
-   "description": "The denominator: how many cells the frozen box tiles into."
-  },
-  "coverage_cells_seen": {
-   "type": "integer",
-   "minimum": 0,
-   "description": "The numerator: cells at least one sampled pose covered."
-  },
-  "app_packets_sent_by_node": {
-   "type": "object",
-   "additionalProperties": {
-    "type": "integer",
-    "minimum": 0
-   },
-   "description": "Denominators. A zero denominator makes any ratio meaningless and is rejected rather than treated as 1.0."
-  },
-  "app_packets_delivered_by_node": {
-   "type": "object",
-   "additionalProperties": {
-    "type": "integer",
-    "minimum": 0
-   }
-  },
-  "delivered_hops_by_node": {
-   "type": "object",
-   "additionalProperties": {
-    "type": "number"
-   },
-   "description": "Mean hop count of DELIVERED APPLICATION packets only. HELLO and LSA traffic must not be counted; including it lets a swarm with no relaying show a hop count above 1."
-  },
-  "injected_events": {
-   "type": "array",
-   "description": "Every event the scenario asked for, with the time it was actually observed. An event that never fired fails the gate instead of leaving a default reconnect time in place.",
-   "items": {
-    "type": "object",
-    "required": [
-     "type",
-     "target",
-     "requested_t",
-     "observed_t"
-    ],
-    "properties": {
-     "type": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UAV-X run record",
+  "description": "Provenance contract for runs/*.jsonl. Round 2 finding 5: nothing tied runs/latest.jsonl to the scenario that had just run, so a stale green file survived a crashed simulation and a metrics writer that never saw a vehicle could satisfy a gate. uavx_eval.check validates this block before reading any metric. A metric can only be trusted after its provenance is. Round 3 finding 6: packet counts and injected events were optional, and there was no duration, so a short run with no events could satisfy every requirement. They are required now. Round 6 finding 5: observations, handback and relay_slot were defined here and required by nothing, so the run that proves the communication mark could omit all three and still validate. They are required per scenario through the allOf block at the end, which is why jsonschema_mini now implements if and then.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "scenario_path",
+    "scenario_sha256",
+    "seed",
+    "commit_sha",
+    "started_at",
+    "ended_at",
+    "completion",
+    "vehicle_ids_observed",
+    "pose_sample_count",
+    "versions",
+    "metrics",
+    "app_packets_sent_by_node",
+    "app_packets_delivered_by_node",
+    "injected_events",
+    "requested_duration_s",
+    "elapsed_sim_s",
+    "clock_source",
+    "source_tree_sha256",
+    "resources"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "minLength": 8,
+      "description": "Unique per run. The filename is runs/<run_id>.jsonl."
+    },
+    "scenario_path": {
+      "type": "string",
+      "description": "Repo-relative path of the scenario. The checker rejects a mismatch against what the gate asked for, which is what stops a previous scenario's record passing a later gate."
+    },
+    "scenario_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Hash of the scenario file as actually read, so an edited scenario cannot reuse an old result."
+    },
+    "seed": {
+      "type": "integer",
+      "description": "RNG seed taken from the scenario. Same seed and same commit must reproduce the run exactly."
+    },
+    "commit_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "Repo HEAD at launch."
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ended_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completion": {
       "enum": [
-       "kill",
-       "comms_blackout",
-       "gps_degrade"
-      ]
-     },
-     "target": {
-      "type": "string"
-     },
-     "requested_t": {
+        "complete",
+        "crashed",
+        "timeout",
+        "killed"
+      ],
+      "description": "Only 'complete' is accepted. latest.jsonl is published by atomic rename after every process exits cleanly, never by append."
+    },
+    "vehicle_ids_observed": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 2,
+      "description": "Must match the scenario's vehicle list. A run that saw two of four vehicles is not the run the gate asked for."
+    },
+    "pose_sample_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Zero means nothing was ever observed, which is how 'no samples' masquerades as 'no separation violations'."
+    },
+    "coverage_fraction": {
       "type": "number",
       "minimum": 0,
-      "description": "Scenario time the event was asked for."
-     },
-     "observed_t": {
-      "type": [
-       "number",
-       "null"
+      "maximum": 1,
+      "description": "Chunk 2.4. Cells of the frozen box whose centre fell inside the sensor footprint of at least one sampled pose, over the cell count. Present only on a run that surveys. Equal to coverage_cells_seen over coverage_cells_total, and the writer refuses a record where it is not."
+    },
+    "coverage_source": {
+      "type": "string",
+      "enum": [
+        "pose_samples"
       ],
+      "description": "Where the fraction came from. The gate asserts the literal, because a coverage figure computed off the planned path and one computed off flown poses are the same type and mean opposite things. The collector writes it and nothing else may."
+    },
+    "coverage_cells_total": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The denominator: how many cells the frozen box tiles into."
+    },
+    "coverage_cells_seen": {
+      "type": "integer",
       "minimum": 0,
-      "description": "Scenario time the effect was first seen on the target, or null when it never was. Null is the honest answer and is what keeps the event out of injected_event_count."
-     },
-     "restore_at_s": {
-      "type": [
-       "number",
-       "null"
-      ],
+      "description": "The numerator: cells at least one sampled pose covered."
+    },
+    "coverage_fraction_at_kill": {
+      "type": "number",
       "minimum": 0,
-      "description": "Scenario time the fault was told to lift, or null for a fault with no end. Only a comms_blackout has one: the radio restores itself after a frozen hold rather than waiting for the harness to notice the vehicle is back. It bounds the outage window, so it sits in the record beside the two moments that were measured."
-     }
-    }
-   }
-  },
-  "versions": {
-   "type": "object",
-   "description": "Every ENFORCED key from stage-1/setup/versions.lock, read at run time. Round 4 finding 8: this block named four of them, so a run could be labelled with an incomplete version object and attributed to a stack it did not come off. The ROS middleware version belongs here more than most: rmw_fastrtps carries every message this project measures. The observed_ keys in the lock are context for a human and are deliberately not required.",
-   "required": [
-    "ubuntu_version",
-    "ros_distro",
-    "ros_desktop_version",
-    "ros_core_version",
-    "ros_rclpy_version",
-    "ros_rclcpp_version",
-    "ros_rmw_fastrtps_cpp_version",
-    "gazebo_package",
-    "gazebo_version",
-    "px4_sha",
-    "xrce_agent_sha",
-    "px4_msgs_sha",
-    "px4_ros_com_sha"
-   ],
-   "additionalProperties": true
-  },
-  "metrics": {
-   "type": "object",
-   "description": "The numbers the gates assert on. Present only after every provenance field above has validated.",
-   "additionalProperties": true
-  },
-  "outage_duration_s": {
-   "type": "number",
-   "minimum": 0,
-   "description": "How long the swarm was cut off, in scenario seconds. The observations window: it opens when the fault landed and closes when the route came back or when the fault was lifted, whichever happened first. queue_drain holds it open for the 45 s the 512 packet queue is sized against, and a swarm that reconnected early closes it early and falls short."
-  },
-  "requested_duration_s": {
-   "type": "number",
-   "minimum": 1,
-   "description": "Duration the scenario asked for. Without it a 20 second run can send the minimum packet count and claim completion instead of running the frozen duration."
-  },
-  "elapsed_sim_s": {
-   "type": "number",
-   "minimum": 1,
-   "description": "Simulated time actually elapsed. uavx_eval.check rejects a run shorter than 95% of requested_duration_s."
-  },
-  "clock_source": {
-   "enum": [
-    "ros_sim_time"
-   ],
-   "description": "All numeric event, protocol and metric timestamps use ROS simulated time from /clock. Only started_at and ended_at use wall time."
-  },
-  "source_tree_sha256": {
-   "type": "string",
-   "pattern": "^[0-9a-f]{64}$",
-   "description": "Hash of the source that can change what a simulation does, from scripts/source_tree_hash.py: uavx_ws/, scenarios/, scripts/ and stage-1/setup/. Deliberately narrower than the repository, so editing a sentence of prose does not invalidate a week of runs, and deliberately wider than commit_sha, which ignores uncommitted code. The final package check requires this to equal the source_tree_sha256 in submission/source-manifest.json, which ties the evidence to the code being submitted."
-  },
-  "contact_monitor_samples": {
-   "type": "integer",
-   "minimum": 0,
-   "description": "Zero contacts means nothing if no monitor was attached. The safety gate requires this above zero."
-  },
-  "yield_events_by_node": {
-   "type": "object",
-   "additionalProperties": {
-    "type": "integer",
-    "minimum": 0
-   },
-   "description": "How many times each vehicle decided to give way. Zero on every vehicle in eight of the nine scenarios and on the lower id in the ninth, which is a real answer and not a missing one. The encounter gate requires at least one naming uav_4."
-  },
-  "yield_hold_seconds": {
-   "type": "number",
-   "minimum": 0,
-   "description": "Total simulated seconds the swarm spent holding for predicted conflicts. Above zero is what separates the rule acting from a pair that never converged."
-  },
-  "vehicles_completed": {
-   "type": "integer",
-   "minimum": 0,
-   "description": "Vehicles that reached the end of the work the scenario gave them, counted only where that work ends at a named point. A vehicle that held and never released is safe by every other number in this record and is not counted here."
-  },
-  "observations": {
-   "type": "object",
-   "description": "Round 5 finding 5 asked what delivered-once means. Round 6 finding 5 is right that counts alone cannot answer it: a record saying generated 450 and unique_delivered 450 is satisfied by 450 deliveries of the wrong 450 packets. The two id sets go in, and the evaluator recomputes equality from them rather than trusting the arithmetic in the file. RFC 9171 makes the same separation, identity by source plus creation sequence on one side and delivery reports on the other.",
-   "required": [
-    "generated_ids",
-    "delivered_ids",
-    "generated",
-    "unique_delivered",
-    "duplicated",
-    "expired",
-    "evicted",
-    "peak_queue_depth",
-    "backlog_drain_s",
-    "control_queue_max_delay_s",
-    "outage_start_s",
-    "outage_end_s",
-    "generated_during_outage",
-    "delivered_after_restore",
-    "drain_start_s",
-    "drain_end_s",
-    "delivery_complete_s",
-    "ledger"
-   ],
-   "properties": {
-    "generated_ids": {
-     "type": "array",
-     "items": {
+      "maximum": 1,
+      "description": "Coverage at the instant the run's first injected fault landed. Absent on a run whose fault does not interrupt a survey."
+    },
+    "coverage_at_kill_s": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Simulated time of that fault, which is what the figure is attributed to."
+    },
+    "coverage_at_kill_read_s": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Simulated time of the collector payload the figure was read off. Beside the figure because the collector publishes every few seconds and the fault lands at one instant."
+    },
+    "strip_reassigned_to": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
-     },
-     "description": "Every observation id created in this run, as origin:sequence. Round 7 finding 4: this and delivered_ids both allowed the empty array, and set equality between two empty sets is true, so a node that produced nothing satisfied the delivered-once claim exactly as well as one that worked.",
-     "minItems": 1
+      "minLength": 1,
+      "description": "The vehicle that took over the survey work the elected relay dropped. Absent on a run where no surveyor was elected."
     },
-    "delivered_ids": {
-     "type": "array",
-     "items": {
-      "type": "string",
-      "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
-     },
-     "description": "origin_id:sequence for every observation the GCS accepted, deduplicated. Set equality with generated_ids is the claim.",
-     "minItems": 1
-    },
-    "generated": {
-     "type": "integer",
-     "minimum": 1
-    },
-    "unique_delivered": {
-     "type": "integer",
-     "minimum": 1
-    },
-    "duplicated": {
-     "type": "integer",
-     "minimum": 0,
-     "description": "arrivals of an id the GCS already held. Not a failure; a number the record has to carry so unique_delivered cannot be inflated by retries."
-    },
-    "expired": {
-     "type": "integer",
-     "minimum": 0
-    },
-    "evicted": {
-     "type": "integer",
-     "minimum": 0
-    },
-    "deferred": {
-     "type": "integer",
-     "minimum": 0,
-     "description": "Observations pushed out of a queue that were not lost, because the node that minted them still held them until the destination acknowledged them. Reported beside evicted rather than folded into it: a queue too small for the outage it was given and a design that loses data produce the same number otherwise. queue_drain requires zero, because that is the scenario whose outage the queue is sized for; link_loss holds the route down for 120 s against a queue sized for 45 and defers 703, which is the honest report of a queue being asked for more than it was built for."
-    },
-    "backlog": {
-     "type": "integer",
-     "minimum": 0,
-     "description": "The largest number of observations any cut off member was still holding at the moment its route came back. backlog_drain_s is the time the last of that set took to leave, so this is the size the bound was measured over."
-    },
-    "backlog_by_node": {
-     "type": "object",
-     "description": "The same count per member, so a backlog that split across two nodes instead of funnelling to one is visible rather than hidden inside a maximum."
-    },
-    "drain_counted_for": {
-     "type": "array",
-     "items": {
-      "type": "string"
-     },
-     "description": "The members the drain bound was measured over, which are the ones the outage cut off. drain_by_node carries every node, including the gated vehicle whose own store empties when its radio returns; that is a different event with a different cause and folding it in reports a two minute drain for a design that promises 2.25 s."
-    },
-    "peak_queue_depth": {
-     "type": "integer",
-     "minimum": 0,
-     "description": "deepest any node's store-and-forward queue got, against the 512 packet size."
-    },
-    "backlog_drain_s": {
-     "type": "number",
-     "minimum": 0,
-     "description": "route restored to the local observation queue becoming empty. Derived bound is 2.25 s: 450 packets at 200 per second. End-to-end delivery has its own later timestamp because link latency does not disappear."
-    },
-    "control_queue_max_delay_s": {
-     "type": "number",
-     "minimum": 0,
-     "description": "worst time a HELLO, LSA or role message waited behind anything. Observations never delay control, so this stays small however deep the backlog got."
-    },
-    "missing_ids": {
-     "type": "array",
-     "items": {
-      "type": "string",
-      "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
-     },
-     "description": "generated and never uniquely delivered. Empty is the claim, and it is what the evaluator prints when equality fails."
-    },
-    "unexpected_ids": {
-     "type": "array",
-     "items": {
-      "type": "string",
-      "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
-     },
-     "description": "delivered but never generated. Empty is the claim."
-    },
-    "outage_start_s": {
-     "type": "number",
-     "minimum": 0
-    },
-    "outage_end_s": {
-     "type": "number",
-     "minimum": 0
-    },
-    "generated_during_outage": {
-     "type": "integer",
-     "minimum": 0,
-     "description": "ids created between outage_start_s and outage_end_s. Round 7 finding 8: generated>=450 could be met by producing them before the route went down, which tests nothing about a queue holding data through an outage."
-    },
-    "delivered_after_restore": {
-     "type": "integer",
-     "minimum": 0,
-     "description": "observations created during the outage and accepted by the GCS at or after drain_start_s. The submission checker derives this from ledger."
-    },
-    "drain_start_s": {
-     "type": "number",
-     "minimum": 0,
-     "description": "when the route came back, which is when the drain clock starts."
-    },
-    "drain_end_s": {
-     "type": "number",
-     "minimum": 0,
-     "description": "when the local observation queue became empty. backlog_drain_s must equal drain_end_s minus drain_start_s."
-    },
-    "delivery_complete_s": {
-     "type": "number",
-     "minimum": 0,
-     "description": "when the GCS accepted the last observation created during the outage. This is the end-to-end clock and may be later than drain_end_s."
-    },
-    "ledger": {
-     "type": "array",
-     "minItems": 1,
-     "description": "One row per generated observation. Round 8 found that aggregate outage counts did not prove which ids were created or delivered inside the claimed windows.",
-     "items": {
+    "app_packets_sent_by_node": {
       "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "description": "Denominators. A zero denominator makes any ratio meaningless and is rejected rather than treated as 1.0."
+    },
+    "app_packets_delivered_by_node": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "delivered_hops_by_node": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      },
+      "description": "Mean hop count of DELIVERED APPLICATION packets only. HELLO and LSA traffic must not be counted; including it lets a swarm with no relaying show a hop count above 1."
+    },
+    "injected_events": {
+      "type": "array",
+      "description": "Every event the scenario asked for, with the time it was actually observed. An event that never fired fails the gate instead of leaving a default reconnect time in place.",
+      "items": {
+        "type": "object",
+        "required": [
+          "type",
+          "target",
+          "requested_t",
+          "observed_t"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "kill",
+              "comms_blackout",
+              "gps_degrade"
+            ]
+          },
+          "target": {
+            "type": "string"
+          },
+          "requested_t": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Scenario time the event was asked for."
+          },
+          "observed_t": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Scenario time the effect was first seen on the target, or null when it never was. Null is the honest answer and is what keeps the event out of injected_event_count."
+          },
+          "restore_at_s": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Scenario time the fault was told to lift, or null for a fault with no end. Only a comms_blackout has one: the radio restores itself after a frozen hold rather than waiting for the harness to notice the vehicle is back. It bounds the outage window, so it sits in the record beside the two moments that were measured."
+          }
+        }
+      }
+    },
+    "versions": {
+      "type": "object",
+      "description": "Every ENFORCED key from stage-1/setup/versions.lock, read at run time. Round 4 finding 8: this block named four of them, so a run could be labelled with an incomplete version object and attributed to a stack it did not come off. The ROS middleware version belongs here more than most: rmw_fastrtps carries every message this project measures. The observed_ keys in the lock are context for a human and are deliberately not required.",
       "required": [
-       "id",
-       "created_at_s",
-       "delivered_at_s"
+        "ubuntu_version",
+        "ros_distro",
+        "ros_desktop_version",
+        "ros_core_version",
+        "ros_rclpy_version",
+        "ros_rclcpp_version",
+        "ros_rmw_fastrtps_cpp_version",
+        "gazebo_package",
+        "gazebo_version",
+        "px4_sha",
+        "xrce_agent_sha",
+        "px4_msgs_sha",
+        "px4_ros_com_sha"
+      ],
+      "additionalProperties": true
+    },
+    "metrics": {
+      "type": "object",
+      "description": "The numbers the gates assert on. Present only after every provenance field above has validated.",
+      "additionalProperties": true
+    },
+    "outage_duration_s": {
+      "type": "number",
+      "minimum": 0,
+      "description": "How long the swarm was cut off, in scenario seconds. The observations window: it opens when the fault landed and closes when the route came back or when the fault was lifted, whichever happened first. queue_drain holds it open for the 45 s the 512 packet queue is sized against, and a swarm that reconnected early closes it early and falls short."
+    },
+    "requested_duration_s": {
+      "type": "number",
+      "minimum": 1,
+      "description": "Duration the scenario asked for. Without it a 20 second run can send the minimum packet count and claim completion instead of running the frozen duration."
+    },
+    "elapsed_sim_s": {
+      "type": "number",
+      "minimum": 1,
+      "description": "Simulated time actually elapsed. uavx_eval.check rejects a run shorter than 95% of requested_duration_s."
+    },
+    "clock_source": {
+      "enum": [
+        "ros_sim_time"
+      ],
+      "description": "All numeric event, protocol and metric timestamps use ROS simulated time from /clock. Only started_at and ended_at use wall time."
+    },
+    "source_tree_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Hash of the source that can change what a simulation does, from scripts/source_tree_hash.py: uavx_ws/, scenarios/, scripts/ and stage-1/setup/. Deliberately narrower than the repository, so editing a sentence of prose does not invalidate a week of runs, and deliberately wider than commit_sha, which ignores uncommitted code. The final package check requires this to equal the source_tree_sha256 in submission/source-manifest.json, which ties the evidence to the code being submitted."
+    },
+    "contact_monitor_samples": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Zero contacts means nothing if no monitor was attached. The safety gate requires this above zero."
+    },
+    "yield_events_by_node": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "description": "How many times each vehicle decided to give way. Zero on every vehicle in eight of the nine scenarios and on the lower id in the ninth, which is a real answer and not a missing one. The encounter gate requires at least one naming uav_4."
+    },
+    "yield_hold_seconds": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Total simulated seconds the swarm spent holding for predicted conflicts. Above zero is what separates the rule acting from a pair that never converged."
+    },
+    "vehicles_completed": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Vehicles that reached the end of the work the scenario gave them, counted only where that work ends at a named point. A vehicle that held and never released is safe by every other number in this record and is not counted here."
+    },
+    "observations": {
+      "type": "object",
+      "description": "Round 5 finding 5 asked what delivered-once means. Round 6 finding 5 is right that counts alone cannot answer it: a record saying generated 450 and unique_delivered 450 is satisfied by 450 deliveries of the wrong 450 packets. The two id sets go in, and the evaluator recomputes equality from them rather than trusting the arithmetic in the file. RFC 9171 makes the same separation, identity by source plus creation sequence on one side and delivery reports on the other.",
+      "required": [
+        "generated_ids",
+        "delivered_ids",
+        "generated",
+        "unique_delivered",
+        "duplicated",
+        "expired",
+        "evicted",
+        "peak_queue_depth",
+        "backlog_drain_s",
+        "control_queue_max_delay_s",
+        "outage_start_s",
+        "outage_end_s",
+        "generated_during_outage",
+        "delivered_after_restore",
+        "drain_start_s",
+        "drain_end_s",
+        "delivery_complete_s",
+        "ledger"
       ],
       "properties": {
-       "id": {
-        "type": "string",
-        "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
-       },
-       "created_at_s": {
-        "type": "number",
-        "minimum": 0
-       },
-       "delivered_at_s": {
-        "type": [
-         "number",
-         "null"
-        ]
-       }
+        "generated_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
+          },
+          "description": "Every observation id created in this run, as origin:sequence. Round 7 finding 4: this and delivered_ids both allowed the empty array, and set equality between two empty sets is true, so a node that produced nothing satisfied the delivered-once claim exactly as well as one that worked.",
+          "minItems": 1
+        },
+        "delivered_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
+          },
+          "description": "origin_id:sequence for every observation the GCS accepted, deduplicated. Set equality with generated_ids is the claim.",
+          "minItems": 1
+        },
+        "generated": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "unique_delivered": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "duplicated": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "arrivals of an id the GCS already held. Not a failure; a number the record has to carry so unique_delivered cannot be inflated by retries."
+        },
+        "expired": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "evicted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deferred": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Observations pushed out of a queue that were not lost, because the node that minted them still held them until the destination acknowledged them. Reported beside evicted rather than folded into it: a queue too small for the outage it was given and a design that loses data produce the same number otherwise. queue_drain requires zero, because that is the scenario whose outage the queue is sized for; link_loss holds the route down for 120 s against a queue sized for 45 and defers 703, which is the honest report of a queue being asked for more than it was built for."
+        },
+        "backlog": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The largest number of observations any cut off member was still holding at the moment its route came back. backlog_drain_s is the time the last of that set took to leave, so this is the size the bound was measured over."
+        },
+        "backlog_by_node": {
+          "type": "object",
+          "description": "The same count per member, so a backlog that split across two nodes instead of funnelling to one is visible rather than hidden inside a maximum."
+        },
+        "drain_counted_for": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The members the drain bound was measured over, which are the ones the outage cut off. drain_by_node carries every node, including the gated vehicle whose own store empties when its radio returns; that is a different event with a different cause and folding it in reports a two minute drain for a design that promises 2.25 s."
+        },
+        "peak_queue_depth": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "deepest any node's store-and-forward queue got, against the 512 packet size."
+        },
+        "backlog_drain_s": {
+          "type": "number",
+          "minimum": 0,
+          "description": "route restored to the local observation queue becoming empty. Derived bound is 2.25 s: 450 packets at 200 per second. End-to-end delivery has its own later timestamp because link latency does not disappear."
+        },
+        "control_queue_max_delay_s": {
+          "type": "number",
+          "minimum": 0,
+          "description": "worst time a HELLO, LSA or role message waited behind anything. Observations never delay control, so this stays small however deep the backlog got."
+        },
+        "missing_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
+          },
+          "description": "generated and never uniquely delivered. Empty is the claim, and it is what the evaluator prints when equality fails."
+        },
+        "unexpected_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
+          },
+          "description": "delivered but never generated. Empty is the claim."
+        },
+        "outage_start_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "outage_end_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "generated_during_outage": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "ids created between outage_start_s and outage_end_s. Round 7 finding 8: generated>=450 could be met by producing them before the route went down, which tests nothing about a queue holding data through an outage."
+        },
+        "delivered_after_restore": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "observations created during the outage and accepted by the GCS at or after drain_start_s. The submission checker derives this from ledger."
+        },
+        "drain_start_s": {
+          "type": "number",
+          "minimum": 0,
+          "description": "when the route came back, which is when the drain clock starts."
+        },
+        "drain_end_s": {
+          "type": "number",
+          "minimum": 0,
+          "description": "when the local observation queue became empty. backlog_drain_s must equal drain_end_s minus drain_start_s."
+        },
+        "delivery_complete_s": {
+          "type": "number",
+          "minimum": 0,
+          "description": "when the GCS accepted the last observation created during the outage. This is the end-to-end clock and may be later than drain_end_s."
+        },
+        "ledger": {
+          "type": "array",
+          "minItems": 1,
+          "description": "One row per generated observation. Round 8 found that aggregate outage counts did not prove which ids were created or delivered inside the claimed windows.",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "created_at_s",
+              "delivered_at_s"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
+              },
+              "created_at_s": {
+                "type": "number",
+                "minimum": 0
+              },
+              "delivered_at_s": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        "backlog_custodian": {
+          "type": "string",
+          "pattern": "^uav_[0-9]+$",
+          "description": "Lowest-id member that collected retained copies while the component had no GCS route. Required for queue_drain."
+        },
+        "custodied_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
+          },
+          "description": "Observation ids created during the outage and held by backlog_custodian."
+        },
+        "custodied": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Size of custodied_ids, recomputed by the evaluator and submission checker."
+        }
       }
-     }
     },
-    "backlog_custodian": {
-     "type": "string",
-     "pattern": "^uav_[0-9]+$",
-     "description": "Lowest-id member that collected retained copies while the component had no GCS route. Required for queue_drain."
-    },
-    "custodied_ids": {
-     "type": "array",
-     "minItems": 1,
-     "items": {
-      "type": "string",
-      "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
-     },
-     "description": "Observation ids created during the outage and held by backlog_custodian."
-    },
-    "custodied": {
-     "type": "integer",
-     "minimum": 1,
-     "description": "Size of custodied_ids, recomputed by the evaluator and submission checker."
-    }
-   }
-  },
-  "handback": {
-   "type": "object",
-   "description": "Round 5 finding 1: the claim is that the recovered path carried data BEFORE the relay moved, and without timestamps and a named path, break-before-make and make-before-break produce identical records. Round 6 finding 7: the transaction also needs an owner. The coordinator rule is a property of the disconnected component, and by the time the handback runs the component has merged, so ownership is carried from the election rather than recomputed. The owner is never the relay.",
-   "required": [
-    "epoch",
-    "epoch_owner",
-    "staying_member",
-    "prepared_path",
-    "confirmed_observation_id",
-    "release_sender",
-    "confirmed_at",
-    "release_at",
-    "observation_gap_count"
-   ],
-   "properties": {
-    "epoch": {
-     "type": "integer",
-     "minimum": 0
-    },
-    "epoch_owner": {
-     "type": "string",
-     "minLength": 3,
-     "description": "the node that opened the epoch and carried it to release. Must not be the relay."
-    },
-    "staying_member": {
-     "type": "string",
-     "minLength": 3,
-     "description": "the member whose route the owner evaluated. In link_loss, uav_4."
-    },
-    "prepared_path": {
-     "type": "array",
-     "items": {
-      "type": "string"
-     },
-     "minItems": 2,
-     "description": "the non-relay path named in PREPARE_RELEASE. The relay must not appear in it."
-    },
-    "prepared_path_computations": {
-     "type": "integer",
-     "minimum": 0,
-     "description": "consecutive computations the prepared path won before PREPARE_RELEASE. Route hysteresis is 2, and a path that appears once as the radio comes back is not one to hand a vehicle back on."
-    },
-    "confirmed_observation_id": {
-     "type": "string",
-     "pattern": "^[A-Za-z0-9_]+:[0-9]+$",
-     "description": "the observation the GCS acknowledged over the prepared path. This one id is what turns make-before-break from an intention into a fact."
-    },
-    "release_sender": {
-     "type": "string",
-     "minLength": 3,
-     "description": "who sent RELEASE. Must be epoch_owner; a release from anyone else is the stale-owner case the design forbids."
-    },
-    "confirmed_at": {
-     "type": "number"
-    },
-    "release_at": {
-     "type": "number",
-     "description": "later than confirmed_at, which is the whole make-before-break claim."
-    },
-    "observation_gap_count": {
-     "type": "integer",
-     "minimum": 0
-    },
-    "acknowledged_ids": {
-     "type": "array",
-     "items": {
-      "type": "string",
-      "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
-     }
-    }
-   }
-  },
-  "relay_slot": {
-   "type": "object",
-   "description": "Round 5 finding 4: the slot clearance rule was never exercised by an accepted scenario, so nothing proved a future implementation would call it. The commanded slot and the clearance it was checked against go in the record. Required of the three fault scenarios that elect a relay and not of queue_drain, which forbids the election on purpose so that nothing shortens the outage the queue is sized against: no role manager runs there, seam_manifests.json says so too, and a slot in that record would be a point no component ever chose.",
-   "required": [
-    "commanded",
-    "clearance_m",
-    "band_reserved"
-   ],
-   "properties": {
-    "commanded": {
-     "type": "array",
-     "items": {
-      "type": "number"
-     },
-     "minItems": 3
-    },
-    "clearance_m": {
-     "type": "number",
-     "minimum": 0
-    },
-    "band_reserved": {
-     "type": "boolean"
-    },
-    "raised_from": {
-     "type": [
-      "array",
-      "null"
-     ],
-     "items": {
-      "type": "number"
-     }
-    }
-   }
-  },
-  "graph_snapshot_sha256": {
-   "type": "string",
-   "pattern": "^[0-9a-f]{64}$",
-   "description": "sha256 of the ROS graph snapshot captured during this run. Round 6 finding 6: uavx_invalidate_latest deleted only latest.jsonl, so a run that missed its graph capture was certified against the previous scenario's graph. The seam check compares this against the file it was handed, so a reused snapshot fails rather than passes."
-  },
-  "resources": {
-   "type": "object",
-   "description": "Peak memory and swap, sampled through the run. The plan has asked for this since W1 and the schema never carried it, so nothing could have checked it. Four PX4 instances plus gzserver plus our nodes have to fit in roughly 11 GB of WSL memory and nobody has measured them under load. A run that swaps is a run whose timings mean nothing, which matters because time_to_reconnect_s is a graded number.",
-   "required": [
-    "peak_rss_mib",
-    "swap_used_mib",
-    "samples"
-   ],
-   "properties": {
-    "peak_rss_mib": {
-     "type": "number",
-     "minimum": 0,
-     "description": "highest total resident set across all simulator and swarm processes."
-    },
-    "swap_used_mib": {
-     "type": "number",
-     "minimum": 0,
-     "description": "zero is the claim. Anything above it means the box was over budget."
-    },
-    "samples": {
-     "type": "integer",
-     "minimum": 0,
-     "description": "how many times it was sampled. Zero samples and a healthy peak read identically."
-    },
-    "peak_at_s": {
-     "type": "number",
-     "minimum": 0
-    }
-   }
-  },
-  "injected_event_observed": {
-   "type": "boolean",
-   "description": "True only when every injected event was seen to take effect on its target. Chunk 1.4: an injector that logs an intention satisfies any check that asks whether the event is listed, so the record separates the request from the observation and this flag reports the second. Untyped until chunk 1.7, which meant a record could carry the string 'true' and no schema pass would notice."
-  },
-  "injected_event_count": {
-   "type": "integer",
-   "minimum": 0,
-   "description": "How many injected events were observed to take effect, not how many were requested. injected_events carries the per event detail."
-  }
- },
- "allOf": [
-  {
-   "if": {
-    "properties": {
-     "scenario_path": {
-      "enum": [
-       "scenarios/queue_drain.yaml"
-      ]
-     }
-    },
-    "required": [
-     "scenario_path"
-    ]
-   },
-   "then": {
-    "properties": {
-     "observations": {
+    "handback": {
+      "type": "object",
+      "description": "Round 5 finding 1: the claim is that the recovered path carried data BEFORE the relay moved, and without timestamps and a named path, break-before-make and make-before-break produce identical records. Round 6 finding 7: the transaction also needs an owner. The coordinator rule is a property of the disconnected component, and by the time the handback runs the component has merged, so ownership is carried from the election rather than recomputed. The owner is never the relay.",
       "required": [
-       "backlog_custodian",
-       "custodied_ids",
-       "custodied"
-      ]
-     }
+        "epoch",
+        "epoch_owner",
+        "staying_member",
+        "prepared_path",
+        "confirmed_observation_id",
+        "release_sender",
+        "confirmed_at",
+        "release_at",
+        "observation_gap_count"
+      ],
+      "properties": {
+        "epoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "epoch_owner": {
+          "type": "string",
+          "minLength": 3,
+          "description": "the node that opened the epoch and carried it to release. Must not be the relay."
+        },
+        "staying_member": {
+          "type": "string",
+          "minLength": 3,
+          "description": "the member whose route the owner evaluated. In link_loss, uav_4."
+        },
+        "prepared_path": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 2,
+          "description": "the non-relay path named in PREPARE_RELEASE. The relay must not appear in it."
+        },
+        "prepared_path_computations": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "consecutive computations the prepared path won before PREPARE_RELEASE. Route hysteresis is 2, and a path that appears once as the radio comes back is not one to hand a vehicle back on."
+        },
+        "confirmed_observation_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_]+:[0-9]+$",
+          "description": "the observation the GCS acknowledged over the prepared path. This one id is what turns make-before-break from an intention into a fact."
+        },
+        "release_sender": {
+          "type": "string",
+          "minLength": 3,
+          "description": "who sent RELEASE. Must be epoch_owner; a release from anyone else is the stale-owner case the design forbids."
+        },
+        "confirmed_at": {
+          "type": "number"
+        },
+        "release_at": {
+          "type": "number",
+          "description": "later than confirmed_at, which is the whole make-before-break claim."
+        },
+        "observation_gap_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "acknowledged_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+:[0-9]+$"
+          }
+        }
+      }
+    },
+    "relay_slot": {
+      "type": "object",
+      "description": "Round 5 finding 4: the slot clearance rule was never exercised by an accepted scenario, so nothing proved a future implementation would call it. The commanded slot and the clearance it was checked against go in the record. Required of the three fault scenarios that elect a relay and not of queue_drain, which forbids the election on purpose so that nothing shortens the outage the queue is sized against: no role manager runs there, seam_manifests.json says so too, and a slot in that record would be a point no component ever chose.",
+      "required": [
+        "commanded",
+        "clearance_m",
+        "band_reserved"
+      ],
+      "properties": {
+        "commanded": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 3
+        },
+        "clearance_m": {
+          "type": "number",
+          "minimum": 0
+        },
+        "band_reserved": {
+          "type": "boolean"
+        },
+        "raised_from": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "graph_snapshot_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256 of the ROS graph snapshot captured during this run. Round 6 finding 6: uavx_invalidate_latest deleted only latest.jsonl, so a run that missed its graph capture was certified against the previous scenario's graph. The seam check compares this against the file it was handed, so a reused snapshot fails rather than passes."
+    },
+    "resources": {
+      "type": "object",
+      "description": "Peak memory and swap, sampled through the run. The plan has asked for this since W1 and the schema never carried it, so nothing could have checked it. Four PX4 instances plus gzserver plus our nodes have to fit in roughly 11 GB of WSL memory and nobody has measured them under load. A run that swaps is a run whose timings mean nothing, which matters because time_to_reconnect_s is a graded number.",
+      "required": [
+        "peak_rss_mib",
+        "swap_used_mib",
+        "samples"
+      ],
+      "properties": {
+        "peak_rss_mib": {
+          "type": "number",
+          "minimum": 0,
+          "description": "highest total resident set across all simulator and swarm processes."
+        },
+        "swap_used_mib": {
+          "type": "number",
+          "minimum": 0,
+          "description": "zero is the claim. Anything above it means the box was over budget."
+        },
+        "samples": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "how many times it was sampled. Zero samples and a healthy peak read identically."
+        },
+        "peak_at_s": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "injected_event_observed": {
+      "type": "boolean",
+      "description": "True only when every injected event was seen to take effect on its target. Chunk 1.4: an injector that logs an intention satisfies any check that asks whether the event is listed, so the record separates the request from the observation and this flag reports the second. Untyped until chunk 1.7, which meant a record could carry the string 'true' and no schema pass would notice."
+    },
+    "injected_event_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "How many injected events were observed to take effect, not how many were requested. injected_events carries the per event detail."
     }
-   }
   },
-  {
-   "if": {
-    "properties": {
-     "scenario_path": {
-      "enum": [
-       "scenarios/relay_kill.yaml",
-       "scenarios/link_loss.yaml",
-       "scenarios/mission_integrated.yaml",
-       "scenarios/queue_drain.yaml"
-      ]
-     }
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "scenario_path": {
+            "enum": [
+              "scenarios/queue_drain.yaml"
+            ]
+          }
+        },
+        "required": [
+          "scenario_path"
+        ]
+      },
+      "then": {
+        "properties": {
+          "observations": {
+            "required": [
+              "backlog_custodian",
+              "custodied_ids",
+              "custodied"
+            ]
+          }
+        }
+      }
     },
-    "required": [
-     "scenario_path"
-    ]
-   },
-   "then": {
-    "required": [
-     "observations"
-    ]
-   }
-  },
-  {
-   "if": {
-    "properties": {
-     "scenario_path": {
-      "enum": [
-       "scenarios/link_loss.yaml"
-      ]
-     }
+    {
+      "if": {
+        "properties": {
+          "scenario_path": {
+            "enum": [
+              "scenarios/relay_kill.yaml",
+              "scenarios/link_loss.yaml",
+              "scenarios/mission_integrated.yaml",
+              "scenarios/queue_drain.yaml"
+            ]
+          }
+        },
+        "required": [
+          "scenario_path"
+        ]
+      },
+      "then": {
+        "required": [
+          "observations"
+        ]
+      }
     },
-    "required": [
-     "scenario_path"
-    ]
-   },
-   "then": {
-    "required": [
-     "handback"
-    ]
-   }
-  },
-  {
-   "if": {
-    "properties": {
-     "scenario_path": {
-      "enum": [
-       "scenarios/relay_kill.yaml",
-       "scenarios/link_loss.yaml",
-       "scenarios/mission_integrated.yaml"
-      ]
-     }
+    {
+      "if": {
+        "properties": {
+          "scenario_path": {
+            "enum": [
+              "scenarios/link_loss.yaml"
+            ]
+          }
+        },
+        "required": [
+          "scenario_path"
+        ]
+      },
+      "then": {
+        "required": [
+          "handback"
+        ]
+      }
     },
-    "required": [
-     "scenario_path"
-    ]
-   },
-   "then": {
-    "required": [
-     "relay_slot"
-    ]
-   }
-  },
-  {
-   "if": {
-    "properties": {
-     "scenario_path": {
-      "enum": [
-       "scenarios/relay_required.yaml",
-       "scenarios/mission_integrated.yaml"
-      ]
-     }
+    {
+      "if": {
+        "properties": {
+          "scenario_path": {
+            "enum": [
+              "scenarios/relay_kill.yaml",
+              "scenarios/link_loss.yaml",
+              "scenarios/mission_integrated.yaml"
+            ]
+          }
+        },
+        "required": [
+          "scenario_path"
+        ]
+      },
+      "then": {
+        "required": [
+          "relay_slot"
+        ]
+      }
     },
-    "required": [
-     "scenario_path"
-    ]
-   },
-   "then": {
-    "required": [
-     "graph_snapshot_sha256"
-    ]
-   }
-  }
- ]
+    {
+      "if": {
+        "properties": {
+          "scenario_path": {
+            "enum": [
+              "scenarios/relay_required.yaml",
+              "scenarios/mission_integrated.yaml"
+            ]
+          }
+        },
+        "required": [
+          "scenario_path"
+        ]
+      },
+      "then": {
+        "required": [
+          "graph_snapshot_sha256"
+        ]
+      }
+    }
+  ]
 }
