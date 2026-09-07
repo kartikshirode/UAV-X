@@ -54,13 +54,16 @@ class Recorder:
 class Plan:
     """A mission executor that always wants the same waypoint."""
 
-    def __init__(self, target=(465.0, 60.0, 50.0)):
-        self.target = target
+    def __init__(self, wanted=(465.0, 60.0, 50.0)):
+        self.wanted = wanted
         self.asked = 0
 
     def update(self, here):
         self.asked += 1
-        return self.target
+        return self.wanted
+
+    def target(self):
+        return self.wanted
 
 
 class Executor:
@@ -73,6 +76,10 @@ class Executor:
     on_yield_hold = mission_node.MissionNode.on_yield_hold
     on_position = mission_node.MissionNode.on_position
     publish_control_mode = mission_node.MissionNode.publish_control_mode
+    # Chunk 4.7 put the lane pace on the same heartbeat. These cases run
+    # unpaced, which is every scenario before mission_integrated, so the real
+    # method is borrowed and returns without doing anything.
+    advance_survey = mission_node.MissionNode.advance_survey
 
     def __init__(self, work=mission_node.SURVEY):
         self.work = work
@@ -83,6 +90,10 @@ class Executor:
         self.positions_seen = 0
         self.last_setpoint = None
         self.mission = Plan()
+        self.pace_mps = 0.0
+        self.survey_start_s = 0.0
+        self.paced = None
+        self._paced_last_s = None
         self.control_mode = Recorder()
         self.setpoint = Recorder()
         self.advanced = 0
@@ -121,7 +132,7 @@ def approx(point):
 def test_a_surveyor_flies_its_plan_when_nothing_is_holding_it():
     node = Executor()
     node.at(400.0, 20.0, 50.0)
-    assert node.commanded() == approx(node.mission.target)
+    assert node.commanded() == approx(node.mission.wanted)
 
 
 def test_a_held_surveyor_is_commanded_to_where_it_is():
@@ -163,7 +174,7 @@ def test_releasing_puts_the_plan_back_on_the_next_heartbeat():
     node.at(402.0, 20.0, 50.0)
     assert node.commanded() == approx((402.0, 20.0, 50.0))
     node.told(False)
-    assert node.commanded() == approx(node.mission.target)
+    assert node.commanded() == approx(node.mission.wanted)
 
 
 def test_a_release_does_not_wait_for_the_next_position_report():
@@ -174,7 +185,7 @@ def test_a_release_does_not_wait_for_the_next_position_report():
     node.at(402.0, 20.0, 50.0)
     node.told(False)
     assert node.hold_point is None
-    assert node.commanded() == approx(node.mission.target)
+    assert node.commanded() == approx(node.mission.wanted)
 
 
 def test_a_second_hold_latches_the_second_place():

@@ -37,6 +37,9 @@ puts it back in the frame the survey box is frozen in.
 
 from __future__ import annotations
 
+import math
+from typing import Optional
+
 import rclpy
 from px4_msgs.msg import OffboardControlMode, TrajectorySetpoint, VehicleLocalPosition
 from rclpy.node import Node
@@ -133,6 +136,15 @@ class MissionNode(Node):
         # comparison of those ids, so the collision would not look like a
         # fault; it would look like a delivery.
         self.declare_parameter("observations", True)
+        # Chunk 4.7. How fast the plan advances along a survey lane, and when
+        # it starts. A pace of zero hands PX4 the waypoint and lets it fly
+        # there at its own limit, which is what survey_baseline wants and what
+        # every scenario before this one did. mission_integrated needs the
+        # lanes slower than the transit to a relay slot, and one PX4 parameter
+        # cannot be two speeds.
+        self.declare_parameter("survey_speed_mps", 0.0)
+        self.declare_parameter("survey_start_s", 0.0)
+        self.declare_parameter("survey_epoch_s", 0.0)
         # Chunk 4.5. The straight line this vehicle flies, for the encounter
         # pair and for nothing else. A speed of zero means this vehicle has no
         # track, which is every vehicle in the other eight scenarios.
@@ -252,6 +264,15 @@ class MissionNode(Node):
         # through the conflict it is meant to be waiting out. A track vehicle
         # never has one, because its hold is its clock stopping.
         self.hold_point = None
+        # Chunk 4.7. The point this vehicle is actually commanded to while it
+        # surveys, which walks towards the executor's waypoint at the pace the
+        # scenario named. None until the first position report, because it
+        # starts where the ingress left the aircraft and nothing else knows
+        # where that is.
+        self.paced = None
+        self._paced_last_s = None
+        self.pace_mps = float(self.get_parameter("survey_speed_mps").value)
+        self.survey_start_s = float(self.get_parameter("survey_start_s").value)
         self.track_time_s = 0.0
         self.track_complete = False
         self._track_last_s = None
@@ -364,6 +385,53 @@ class MissionNode(Node):
         self.last_setpoint = [float(v) for v in
                               frames.frozen_to_px4(point, self.home)]
 
+    def survey_time_s(self, now: float) -> Optional[float]:
+        """Scenario seconds, or None while nobody has said where zero is.
+
+        The runner sends the epoch after the ingress, in the same call it
+        makes to a track vehicle and for the same reason: the scenario's clock
+        starts when the last vehicle reaches the start of its own work, and
+        nothing knows that at launch.
+        """
+        epoch = float(self.get_parameter("survey_epoch_s").value)
+        return None if epoch <= 0.0 else now - epoch
+
+    def advance_survey(self, now: float) -> None:
+        """Walk the commanded point along the plan at the scenario's pace.
+
+        Nothing happens for a vehicle whose scenario names one speed. It is
+        handed the waypoint and PX4 flies there, which is what survey_baseline
+        measured and what its coverage figure was taken off.
+
+        A held vehicle does not advance. The pace is the plan's clock and
+        giving way stops it, so the leg after a hold is the same leg later,
+        which is the rule chunk 4.5 wrote for a track and the same rule here.
+        """
+        if self.work != SURVEY or self.pace_mps <= 0.0 or self.paced is None:
+            return
+        elapsed = 0.0 if self._paced_last_s is None else max(
+            0.0, now - self._paced_last_s)
+        self._paced_last_s = now
+        if self.holding or self.slot_target is not None:
+            return
+        started = self.survey_time_s(now)
+        if started is None or started < self.survey_start_s:
+            # Holding the head of its first lane until the scenario says go.
+            return
+        target = self.mission.target()
+        if target is None:
+            return
+        gap = math.dist(self.paced, target)
+        step = self.pace_mps * elapsed
+        if gap <= step or gap <= 0.0:
+            self.paced = tuple(float(v) for v in target)
+        else:
+            share = step / gap
+            self.paced = tuple(float(a + (b - a) * share)
+                               for a, b in zip(self.paced, target))
+        self.last_setpoint = [float(v) for v in
+                              frames.frozen_to_px4(self.paced, self.home)]
+
     def stamp(self) -> int:
         """Microseconds, the way every PX4 message here is timestamped."""
         return self.get_clock().now().nanoseconds // 1000
@@ -381,7 +449,9 @@ class MissionNode(Node):
         # position callback. The callback depends on PX4 publishing; a gap in
         # that topic would stop a track vehicle mid leg and the record would
         # read it as a yield.
-        self.advance_track(self.get_clock().now().nanoseconds / 1e9)
+        moment = self.get_clock().now().nanoseconds / 1e9
+        self.advance_track(moment)
+        self.advance_survey(moment)
 
         mode = OffboardControlMode()
         mode.timestamp = self.stamp()
@@ -432,7 +502,16 @@ class MissionNode(Node):
             # aircraft is now and neither has anything to advance here.
             return
         target = self.mission.update(here)
+        if self.paced is None:
+            # Where the ingress left it, which is the head of its first lane
+            # and the only place a paced survey may start from.
+            self.paced = here
         if target is None:
+            return
+        if self.pace_mps > 0.0:
+            # The heartbeat walks the commanded point there. Placing it on the
+            # waypoint here as well would put the vehicle back at PX4's limit
+            # every time a position arrived.
             return
         self.last_setpoint = [float(v) for v in
                               frames.frozen_to_px4(target, self.home)]
@@ -482,6 +561,12 @@ class MissionNode(Node):
         if self.work == STATION:
             self.last_setpoint = [float(v) for v in
                                   frames.frozen_to_px4(self.station, self.home)]
+        if self.work == SURVEY and self.pace_mps > 0.0:
+            # The commanded point restarts from the aircraft rather than from
+            # where the lane had got to before the role manager took it. The
+            # survey index has not moved, so this is the same leg, resumed
+            # from wherever the slot left the vehicle.
+            self.paced = None
         # A track vehicle needs nothing here. advance_track stops deferring to
         # the slot on its next tick and puts the commanded point back on the
         # line, at the place the schedule says it should be by now.
