@@ -403,8 +403,10 @@ class MissionNode(Node):
         The executor keeps what it has already flown, so the two vehicles
         cover the strip exactly once between them.
         """
-        if self.work != SURVEY or self.inherited_from is not None:
+        if self.work != SURVEY:
             return
+        # Idempotent by construction: hand_over returns the unflown suffix and
+        # empties it, so a second call on a moved slot returns nothing.
         work = self.mission.hand_over()
         if not work:
             return
