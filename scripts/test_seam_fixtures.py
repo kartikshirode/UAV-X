@@ -213,6 +213,43 @@ def _other_yield_hold(g):
     return g
 
 
+@case("a vehicle-local survey handover in its own namespace",
+      "mission_integrated", 4, None)
+def _own_survey_handover(g):
+    """Chunk 4.7. The two halves of a strip handover, on one aircraft.
+
+    The executor says what it is dropping and the role manager beside it says
+    what to take, and what crosses between two aircraft is the point riding in
+    a role acknowledgement over the radio. Both topics are in this vehicle's
+    own namespace and neither carries a SwarmPacket, which is the shape the
+    role slot and the yield hold already have.
+    """
+    g["/uav_3/mission_executor"]["publishers"].append(
+        ep("/uav_3/survey_handed", "uavx_msgs/msg/RoleAssignment"))
+    g["/uav_3/role_manager"]["subscribers"].append(
+        ep("/uav_3/survey_handed", "uavx_msgs/msg/RoleAssignment"))
+    g["/uav_3/role_manager"]["publishers"].append(
+        ep("/uav_3/survey_inherit", "uavx_msgs/msg/RoleAssignment"))
+    g["/uav_3/mission_executor"]["subscribers"].append(
+        ep("/uav_3/survey_inherit", "uavx_msgs/msg/RoleAssignment"))
+    return g
+
+
+@case("a survey handover sent straight into another vehicle",
+      "mission_integrated", 4, "the namespace of uav_4")
+def _other_survey_handover(g):
+    """Handing work to a neighbour without the radio carrying it.
+
+    This is the shortcut the design exists to prevent. One aircraft writing
+    into another's executor delivers the handover with no hop, no latency and
+    no chance of the fade band dropping it, and the run would report a
+    reassignment the mesh never carried.
+    """
+    g["/uav_3/mission_executor"]["publishers"].append(
+        ep("/uav_4/survey_inherit", "uavx_msgs/msg/RoleAssignment"))
+    return g
+
+
 @case("a harness graph with no runner in it", "harness_check", 1,
       "/scenario_runner is absent")
 def _no_runner(g):
