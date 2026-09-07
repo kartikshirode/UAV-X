@@ -395,6 +395,17 @@ def mission_node_command(vehicle_id: str, spawn_row, altitude_m,
         "survey_altitude_m": float(altitude_m),
         "home_enu": list(home_of(spawn_row)),
         "start_north": bool(start_north),
+        # A paced survey reads the simulated clock, because both the pace and
+        # the start time are in scenario seconds and the epoch it is given is
+        # a simulated instant. Without it the node compares a Unix timestamp
+        # against a 25 s start, finds it larger, and flies the lanes from the
+        # moment the ingress ends. The run that found this covered the box and
+        # reported 88% of it already seen when the relay died.
+        #
+        # A survey with one speed keeps the wall clock. It has no start time
+        # to wait for, and its PX4 timestamps are what survey_baseline
+        # measured its coverage against.
+        "use_sim_time": spec.survey_speed_mps is not None,
         "mirrored": bool(mirrored),
         "observations": bool(observations),
         "survey_start_s": float(spec.start_s),
@@ -408,7 +419,8 @@ def mission_node_command(vehicle_id: str, spawn_row, altitude_m,
 
 def collector_command(run_id: str, scenario_path: str, spec: SurveySpec,
                       model_entries: Sequence[str],
-                      min_separation_m: float) -> list:
+                      min_separation_m: float,
+                      publish_period_s: Optional[float] = None) -> list:
     """`ros2 run uavx_eval metrics_collector` for this run.
 
     `use_sim_time` is on, because every `_s` value in the record is ROS
@@ -429,6 +441,12 @@ def collector_command(run_id: str, scenario_path: str, spec: SurveySpec,
         "min_separation_m": float(min_separation_m),
         "model_map": list(model_entries),
     }
+    if publish_period_s is not None:
+        if not _finite(publish_period_s) or publish_period_s <= 0:
+            raise SurveyError(
+                f"publish_period_s is {publish_period_s!r} and must be a "
+                f"positive number of simulated seconds")
+        parameters["publish_period_s"] = float(publish_period_s)
     parameters.update(spec.collector_parameters())
     return (["ros2", "run", "uavx_eval", "metrics_collector"]
             + ros_args(parameters))

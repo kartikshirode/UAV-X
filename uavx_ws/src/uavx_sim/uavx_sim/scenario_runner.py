@@ -1596,7 +1596,8 @@ class Harness:
         # ends, so nothing about its coverage is lost by waiting.
         if self.spec is not None and self.comms is None:
             self._start_node(COLLECTOR_LABEL, collector_command(
-                self.run_id, self.scenario_relative, self.spec, entries, floor))
+                self.run_id, self.scenario_relative, self.spec, entries, floor,
+                publish_period_s=self._collector_period()))
         flyers = [v for v in self.vehicles if v.state == "hold"]
         for vehicle in flyers:
             try:
@@ -1735,15 +1736,26 @@ class Harness:
                   f"{self.spec.survey_speed_mps:.1f} m/s from "
                   f"t={self.spec.start_s:.0f}s", flush=True)
 
+    def _collector_period(self):
+        """How often the collector publishes, in simulated seconds.
+
+        A run with a fault in it quotes a coverage figure for the instant that
+        fault landed, and the figure can be no better than the payload it is
+        read off. A run with no fault quotes coverage at the end, where the
+        period costs nothing, so it keeps the collector's own default.
+        """
+        return 1.0 if self.scenario.injected_events else None
+
     def read_coverage_at_fault(self):
         """Take the coverage reading the moment the first fault lands.
 
-        The collector publishes every few seconds and this reads whatever it
-        last said, so the record carries the simulated time of that reading
-        beside the figure. A coverage fraction attributed to t = 70 s that was
-        actually measured at t = 66 s is the kind of number this repository
-        exists to refuse, and the two fields together make it checkable rather
-        than plausible.
+        The first payload the collector publishes at or after the fault, and
+        not the last one before it. Coverage only grows, so an earlier reading
+        is below the truth and the gate that reads this asks for an upper
+        bound: taking the reading before would pass a run that was over the
+        line when the relay died. The collector is put on a one second period
+        for any scenario that injects a fault, so the reading this waits for
+        is at most a second late, and the record carries its time either way.
         """
         if self.coverage_at_fault is not None or self.spec is None:
             return
@@ -1751,6 +1763,8 @@ class Harness:
         if not faults or self.sim_now < min(faults):
             return
         if self.metrics_payload is None:
+            return
+        if self.metrics_payload_s is None or self.metrics_payload_s < min(faults):
             return
         try:
             reading = coverage_from_payload(self.metrics_payload)
@@ -1911,7 +1925,8 @@ class Harness:
             # it watches both cover the run and not the transit into it.
             self._start_node(COLLECTOR_LABEL, collector_command(
                 self.run_id, self.scenario_relative, self.spec,
-                self.model_entries, self.separation_floor))
+                self.model_entries, self.separation_floor,
+                publish_period_s=self._collector_period()))
 
         self.ledger_paths[LINK_LABEL] = self.ledger_dir / "link_layer.json"
         self._start_node(LINK_LABEL, link_layer_command(
