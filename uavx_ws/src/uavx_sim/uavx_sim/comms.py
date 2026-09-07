@@ -52,7 +52,7 @@ from uavx_gcs import ledger as led
 from uavx_mission import frames
 
 from uavx_sim import work
-from uavx_sim.survey import SurveyError, home_of, ros_args
+from uavx_sim.survey import SurveyError, home_of, ros_args, strip_plans
 
 # The three roles a router will start in, as `uavx_comms.router_node` spells
 # them. architecture.md section 6 gives each vehicle one in the common
@@ -125,9 +125,23 @@ class CommsSpec:
     # the run starts, what to launch its executor with, and what to compare
     # its finishing position against.
     tracks: Mapping[str, work.Track] = field(default_factory=dict)
+    # The lane path each surveying vehicle flies, empty for the eight
+    # scenarios that survey nothing or that survey with the radio off. Held
+    # for the same three reasons the tracks are: where to fly it before the
+    # run starts, which end to launch its executor pointing at, and who the
+    # box was split between.
+    strips: Mapping[str, object] = field(default_factory=dict)
 
     def track_of(self, vehicle_id: str):
         return self.tracks.get(vehicle_id)
+
+    def survey_of(self, vehicle_id: str):
+        return self.strips.get(vehicle_id)
+
+    @property
+    def surveyors(self) -> Tuple[str, ...]:
+        """The vehicles the survey box is split between, in plan order."""
+        return tuple(sorted(self.strips))
 
     def observes(self, vehicle_id: str) -> bool:
         if self.observation_origins is None:
@@ -167,6 +181,8 @@ class CommsSpec:
                                     else list(self.observation_origins)),
             "tracks": {name: line.as_record()
                        for name, line in sorted(self.tracks.items())},
+            "strips": {name: plan.as_record()
+                       for name, plan in sorted(self.strips.items())},
         }
 
 
@@ -237,13 +253,23 @@ def comms_spec(raw: Mapping, vehicles: Sequence[str],
     # no longer the same length and the pair no longer arrive together.
     for vehicle, line in tracks.items():
         stations[vehicle] = line.start
+    # And a surveying vehicle's is the head of its first lane, for the same
+    # reason. One rule covers all three kinds of work: the ingress flies every
+    # vehicle to the start of whatever it has been given to do. mission_integrated
+    # is where the rule was missing, and the run died at the gate with
+    # "uav_3 has no station" after two healthy aircraft had already climbed.
+    strips = strip_plans(raw, [v for v in vehicles if jobs[v] == work.SURVEY],
+                         altitudes)
+    for vehicle, plan in strips.items():
+        stations[vehicle] = plan.head
     return CommsSpec(forwarding=bool(block["forwarding"]),
                      elections_enabled=bool(block["elections_enabled"]),
                      roles={v: str(roles[v]) for v in vehicles},
                      stations=stations,
                      observation_origins=_origins(
                          block.get("observation_origins"), vehicles),
-                     tracks=tracks)
+                     tracks=tracks,
+                     strips=strips)
 
 
 def _origins(block, vehicles: Sequence[str]) -> Optional[Tuple[str, ...]]:
@@ -432,6 +458,21 @@ def track_epoch_command(vehicle_id: str, epoch_s: float) -> list:
             f"time, and zero is the value that means the run has not started")
     return ["ros2", "param", "set", f"/{vehicle_id}/mission_executor",
             "track_epoch_s", f"{float(epoch_s):.6f}"]
+
+
+def survey_epoch_command(vehicle_id: str, epoch_s: float) -> list:
+    """The same call for a surveying vehicle, and for the same reason.
+
+    A survey with a pace has a start time in scenario seconds, and scenario
+    zero is not known until the ingress ends. Until this arrives the vehicle
+    holds the head of its first lane, which is where the ingress put it.
+    """
+    if not _finite(epoch_s) or epoch_s <= 0:
+        raise CommsError(
+            f"the scenario zero is {epoch_s!r}. It is a positive simulated "
+            f"time, and zero is the value that means the run has not started")
+    return ["ros2", "param", "set", f"/{vehicle_id}/mission_executor",
+            "survey_epoch_s", f"{float(epoch_s):.6f}"]
 
 
 def router_command(vehicle_id: str, spawn_row, station, spec: CommsSpec,

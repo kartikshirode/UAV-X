@@ -32,7 +32,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Mapping, Optional, Sequence
+from typing import Dict, Mapping, Optional, Sequence, Tuple
+
+# The planner the vehicles actually fly, imported rather than restated. The
+# runner needs the head of each lane path before it launches anything and the
+# executor needs the whole path once it is up, and a second implementation
+# here would agree with that one until one of them was fixed.
+from uavx_mission.boustrophedon import plan_path
+from uavx_mission.partition import partition, strip_of
+from uavx_mission.survey_area import SurveyArea
 
 # The six numbers that describe a survey box, in the names
 # uavx_eval.metrics_collector declares them under. architecture.md section 6
@@ -66,7 +74,17 @@ def _finite(value) -> bool:
 
 @dataclass(frozen=True)
 class SurveySpec:
-    """One survey box and the speed it is flown at."""
+    """One survey box, the speeds it is flown at and when it starts.
+
+    Two speeds, because mission_integrated needs them to differ. `cruise` is
+    the vehicle's limit and goes to PX4 as a parameter; `survey` is the pace
+    the plan advances at and is the executor's business. A scenario naming one
+    speed hands PX4 the waypoint and lets it fly there as fast as it likes,
+    which is what survey_baseline does and what it should do. A scenario
+    naming two cannot: the lanes have to be flown slower than the transit to
+    the relay slot, and the only way to fly slower than the vehicle's limit is
+    to move the commanded point at that speed.
+    """
 
     origin_x: float
     origin_y: float
@@ -75,6 +93,8 @@ class SurveySpec:
     cell_m: float
     footprint_m: float
     cruise_speed_mps: Optional[float]
+    survey_speed_mps: Optional[float] = None
+    start_s: float = 0.0
 
     @property
     def cell_count(self) -> int:
@@ -100,6 +120,8 @@ class SurveySpec:
         out = {key: float(getattr(self, key)) for key in SURVEY_KEYS}
         out["cell_count"] = self.cell_count
         out["cruise_speed_mps"] = self.cruise_speed_mps
+        out["survey_speed_mps"] = self.survey_speed_mps
+        out["start_s"] = self.start_s
         return out
 
 
@@ -138,14 +160,115 @@ def survey_spec(raw: Mapping) -> Optional[SurveySpec]:
                 f"a {values['cell_m']} m cell does not divide the "
                 f"{values[axis]} m {axis}, so the box has no cell count and "
                 f"no fraction of it means anything")
-    speed = block.get("cruise_speed_mps")
-    if speed is not None:
-        if not _finite(speed) or speed <= 0:
+    speeds = {}
+    for key in ("cruise_speed_mps", "survey_speed_mps"):
+        speed = block.get(key)
+        if speed is not None:
+            if not _finite(speed) or speed <= 0:
+                raise SurveyError(
+                    f"survey.{key} is {speed!r} and must be a positive number "
+                    f"of metres per second")
+            speed = float(speed)
+        speeds[key] = speed
+    if (speeds["survey_speed_mps"] is not None
+            and speeds["cruise_speed_mps"] is not None
+            and speeds["survey_speed_mps"] > speeds["cruise_speed_mps"]):
+        raise SurveyError(
+            f"survey.survey_speed_mps is {speeds['survey_speed_mps']} and "
+            f"survey.cruise_speed_mps is {speeds['cruise_speed_mps']}. The "
+            f"lane pace cannot be above the limit the vehicle is given, or "
+            f"the plan asks for a speed PX4 will not fly and the run is off "
+            f"its schedule from the first lane")
+    start_s = block.get("start_s", 0.0)
+    if not _finite(start_s) or start_s < 0:
+        raise SurveyError(
+            f"survey.start_s is {start_s!r}. It is when the lanes begin in "
+            f"scenario seconds, and a survey that starts before the run does "
+            f"is scored against a box it was already flying")
+    return SurveySpec(start_s=float(start_s), **speeds, **values)
+
+
+# ----------------------------------------------------------------- the lanes
+@dataclass(frozen=True)
+class StripPlan:
+    """One surveying vehicle's own lane path, in the frozen frame."""
+
+    vehicle_id: str
+    start_north: bool
+    path: Tuple[Tuple[float, float, float], ...]
+
+    @property
+    def head(self) -> Tuple[float, float, float]:
+        """Where this vehicle's work begins, which is where the ingress puts it."""
+        return self.path[0]
+
+    def as_record(self) -> dict:
+        return {"start_north": self.start_north,
+                "waypoints": [list(w) for w in self.path]}
+
+
+def mirrored_of(raw: Mapping) -> bool:
+    """Whether consecutive strips are flown from opposite ends.
+
+    mission_integrated says true and it is not decoration. Mirrored, the two
+    surveyors sit either side of the centre line for the whole survey, which
+    keeps uav_3 nearer the attachment node by at least 13 m. Flown from the
+    same end they would be level with each other, the election margin would be
+    the 0.8 m that separates the station-keeping candidates in relay_kill, and
+    in SITL that is a coin toss rather than a result.
+    """
+    block = raw.get("survey") if isinstance(raw, Mapping) else None
+    if not isinstance(block, Mapping):
+        return False
+    value = block.get("mirrored", False)
+    if not isinstance(value, bool):
+        raise SurveyError(
+            f"survey.mirrored is {value!r} and must be true or false")
+    return value
+
+
+def strip_plans(raw: Mapping, surveyors: Sequence[str],
+                altitudes: Mapping) -> Dict[str, StripPlan]:
+    """The lane path each surveying vehicle flies, before anything is launched.
+
+    The runner needs these early for two reasons. The ingress flies every
+    vehicle to the start of its own work and refuses to start the run until
+    they are all there, and for a surveyor that place is the head of its first
+    lane. And the executor has to be told which end to start from, which is a
+    property of the whole set rather than of one vehicle.
+
+    Built with the executor's own partition and planner. A vehicle whose
+    ingress point came from one implementation and whose plan came from
+    another would hold at a place its first waypoint is not, and the run would
+    open with every surveyor flying a leg the design does not contain.
+    """
+    spec = survey_spec(raw)
+    if spec is None or not surveyors:
+        return {}
+    mirrored = mirrored_of(raw)
+    area = SurveyArea.from_corner(
+        (spec.origin_x, spec.origin_y), spec.width_m, spec.height_m,
+        spec.cell_m, spec.footprint_m)
+    ordered = sorted(surveyors)
+    strips = partition(area, list(ordered))
+    out: Dict[str, StripPlan] = {}
+    for index, vehicle in enumerate(ordered):
+        altitude = altitudes.get(vehicle)
+        if not _finite(altitude) or altitude <= 0:
             raise SurveyError(
-                f"survey.cruise_speed_mps is {speed!r} and must be a positive "
-                f"number of metres per second")
-        speed = float(speed)
-    return SurveySpec(cruise_speed_mps=speed, **values)
+                f"{vehicle} surveys at {altitude!r} m. The lane path is flown "
+                f"at one altitude and the scenario names none for it in "
+                f"hover_altitudes_m")
+        # Alternating rather than the first one turned round, so a mirrored
+        # survey with more than two vehicles still puts every neighbouring
+        # pair on opposite ends of their strips.
+        start_north = bool(mirrored and index % 2 == 0)
+        path = plan_path(strip_of(strips, vehicle), area.sensor_radius_m,
+                         float(altitude), start_north=start_north)
+        out[vehicle] = StripPlan(
+            vehicle_id=vehicle, start_north=start_north,
+            path=tuple(tuple(float(v) for v in w) for w in path))
+    return out
 
 
 # ------------------------------------------------------------- the manifest
@@ -237,23 +360,45 @@ def ros_args(parameters: Mapping, namespace: Optional[str] = None) -> list:
 
 
 def mission_node_command(vehicle_id: str, spawn_row, altitude_m,
-                         spec: SurveySpec, vehicles: Sequence[str]) -> list:
+                         spec: SurveySpec, vehicles: Sequence[str],
+                         start_north: bool = False,
+                         observations: bool = True) -> list:
     """`ros2 run uavx_mission mission_executor` for one vehicle.
 
     The node goes in the vehicle's own namespace so the graph names it
     `/<vehicle>/mission_executor`, which is the name scripts/seam_manifests.json
     expects per vehicle. Its topics are absolute and built from `vehicle_id`
     inside the node, so the namespace changes the node name and nothing else.
+
+    `vehicles` is who the box is split between and not who is in the air.
+    survey_baseline flies all four over the whole box, mission_integrated
+    splits it between two while the other two hold the chain up, and passing
+    the fleet there would cut the box into four strips of which two would
+    never be flown.
+
+    `observations` is false for a vehicle that also runs a router, because
+    identity is (origin, sequence) and two processes on one aircraft minting
+    sequences from zero collide. See the node's own parameter.
     """
     if not _finite(altitude_m) or altitude_m <= 0:
         raise SurveyError(f"{vehicle_id} has no survey altitude; the scenario "
                           f"names none for it in hover_altitudes_m")
+    if vehicle_id not in vehicles:
+        raise SurveyError(
+            f"{vehicle_id} is being sent to survey a box split between "
+            f"{', '.join(vehicles) or 'nobody'}. It has no strip of its own "
+            f"and the executor would refuse the plan on start-up")
     parameters = {
         "vehicle_id": vehicle_id,
         "swarm_vehicles": list(vehicles),
         "survey_altitude_m": float(altitude_m),
         "home_enu": list(home_of(spawn_row)),
+        "start_north": bool(start_north),
+        "observations": bool(observations),
+        "survey_start_s": float(spec.start_s),
     }
+    if spec.survey_speed_mps is not None:
+        parameters["survey_speed_mps"] = float(spec.survey_speed_mps)
     parameters.update(spec.mission_parameters())
     return (["ros2", "run", "uavx_mission", "mission_executor"]
             + ros_args(parameters, namespace=vehicle_id))
