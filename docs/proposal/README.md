@@ -11,7 +11,7 @@ what holds it to that.
 | [Software architecture](week-1-architecture.md) | 1 | drafted |
 | [Mission and coverage](week-2-mission.md) | 2 | drafted |
 | [Communication architecture](week-3-communication.md) | 3 | drafted |
-| Fault recovery and the integrated run | 4 | waiting on its run |
+| [Fault recovery and the integrated run](week-4-recovery.md) | 4 | drafted |
 
 Every number in a section names the run it came off. A figure that cannot cite
 a run under `runs/` does not go in.
