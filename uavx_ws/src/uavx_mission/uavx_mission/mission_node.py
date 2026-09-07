@@ -245,6 +245,13 @@ class MissionNode(Node):
             Bool, f"/{self.vehicle_id}/yield_hold", self.on_yield_hold, 10)
         self.holding = False
         self.hold_seconds = 0.0
+        # Where the aircraft was when it started giving way, in the frozen
+        # frame, or None when it is not holding. Latched once on the rising
+        # edge rather than followed live: a setpoint that chases the current
+        # position every cycle lets a decelerating vehicle drift the whole way
+        # through the conflict it is meant to be waiting out. A track vehicle
+        # never has one, because its hold is its clock stopping.
+        self.hold_point = None
         self.track_time_s = 0.0
         self.track_complete = False
         self._track_last_s = None
@@ -312,8 +319,17 @@ class MissionNode(Node):
                      speed_mps=speed)
 
     def on_yield_hold(self, msg: Bool) -> None:
-        """This vehicle's router saying whether it has to give way."""
+        """This vehicle's router saying whether it has to give way.
+
+        The release happens here and the latch happens in `on_position`, which
+        is the only place that knows where the aircraft is. Clearing the point
+        on the message rather than on the next position report means a vehicle
+        whose PX4 estimate has gone quiet is released anyway, instead of
+        holding a point until a topic it does not control comes back.
+        """
         self.holding = bool(msg.data)
+        if not self.holding:
+            self.hold_point = None
 
     def advance_track(self, now: float) -> None:
         """Move the commanded point along the line, unless the vehicle is held.
@@ -372,11 +388,18 @@ class MissionNode(Node):
         mode.position = True
         self.control_mode.publish(mode)
 
-        if self.last_setpoint is None:
+        # A vehicle giving way is commanded to where it stopped, and the
+        # plan underneath keeps its own idea of where it was going. So a
+        # release needs nothing restored: the next heartbeat is already
+        # flying the strip, the station or the slot again.
+        point = self.last_setpoint
+        if self.hold_point is not None:
+            point = frames.frozen_to_px4(self.hold_point, self.home)
+        if point is None:
             return
         setpoint = TrajectorySetpoint()
         setpoint.timestamp = mode.timestamp
-        setpoint.position = list(self.last_setpoint)
+        setpoint.position = [float(v) for v in point]
         self.setpoint.publish(setpoint)
 
     def on_position(self, msg: VehicleLocalPosition) -> None:
@@ -389,6 +412,14 @@ class MissionNode(Node):
         is live.
         """
         self.positions_seen += 1
+        here = frames.px4_to_frozen((msg.x, msg.y, msg.z), self.home)
+        # Giving way is stopping, and this vehicle stops wherever it happens
+        # to be rather than where its plan wanted it. Latched once: `holding`
+        # stays true for the length of the hold and this runs on every
+        # position report, so the second one through here must leave the first
+        # one's point alone.
+        if self.work != TRACK and self.holding and self.hold_point is None:
+            self.hold_point = here
         if self.slot_target is not None:
             # Chunk 4.2. This vehicle has been sent somewhere by its own role
             # manager, so it is not flying its own work. Advancing the plan
@@ -400,7 +431,6 @@ class MissionNode(Node):
             # track advances on its own timer, so neither depends on where the
             # aircraft is now and neither has anything to advance here.
             return
-        here = frames.px4_to_frozen((msg.x, msg.y, msg.z), self.home)
         target = self.mission.update(here)
         if target is None:
             return
