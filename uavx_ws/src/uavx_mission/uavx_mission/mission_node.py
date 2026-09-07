@@ -87,6 +87,12 @@ CONTROL_MODE_HZ = 20.0
 OBSERVATION_LIFETIME_S = 300.0
 OBSERVATION_BYTES = 256
 
+# How near a handed-over point has to be to a waypoint of the rebuilt plan for
+# the two to be the same waypoint. Both sides compute it from the same frozen
+# box with the same partition, so they agree exactly and this only has to
+# survive a float32 round trip through the message.
+HANDOVER_TOLERANCE_M = 0.5
+
 # PX4 publishes its estimates best effort with a small queue. A reliable
 # subscription simply never matches it, and the node then sits waiting for a
 # position that is being published a metre away.
@@ -143,6 +149,11 @@ class MissionNode(Node):
         # lanes slower than the transit to a relay slot, and one PX4 parameter
         # cannot be two speeds.
         self.declare_parameter("survey_speed_mps", 0.0)
+        # Whether consecutive strips are flown from opposite ends. Needed here
+        # and not only in the runner, because a vehicle inheriting a
+        # neighbour's work has to rebuild the neighbour's lane path and which
+        # end it started from is half of what that path is.
+        self.declare_parameter("mirrored", False)
         self.declare_parameter("survey_start_s", 0.0)
         self.declare_parameter("survey_epoch_s", 0.0)
         # Chunk 4.5. The straight line this vehicle flies, for the encounter
@@ -189,6 +200,10 @@ class MissionNode(Node):
         self.work = (TRACK if self.track is not None else
                      STATION if self.station is not None else SURVEY)
 
+        self.surveyors = [str(v) for v
+                          in self.get_parameter("swarm_vehicles").value]
+        self.mirrored = bool(self.get_parameter("mirrored").value)
+        self.inherited_from = None
         sw = [float(v) for v in self.get_parameter("area_sw_m").value]
         area = SurveyArea.from_corner(
             (sw[0], sw[1]),
@@ -196,9 +211,11 @@ class MissionNode(Node):
             float(self.get_parameter("area_height_m").value),
             float(self.get_parameter("cell_m").value),
             float(self.get_parameter("sensor_radius_m").value))
+        self.area = area
+        self.strips = None
         if self.work == SURVEY:
-            strips = partition(
-                area, list(self.get_parameter("swarm_vehicles").value))
+            strips = partition(area, list(self.surveyors))
+            self.strips = strips
             strip = strip_of(strips, self.vehicle_id)
             path = plan_path(
                 strip,
@@ -255,6 +272,16 @@ class MissionNode(Node):
         # seam rules allow.
         self.create_subscription(
             Bool, f"/{self.vehicle_id}/yield_hold", self.on_yield_hold, 10)
+        # Chunk 4.7. The two halves of a survey handover, both vehicle-local
+        # and both in this vehicle's own namespace. What this executor is
+        # dropping goes out on the first; what somebody else dropped comes in
+        # on the second, having crossed the radio as part of that vehicle's
+        # role acknowledgement.
+        self.handed = self.create_publisher(
+            RoleAssignment, f"/{self.vehicle_id}/survey_handed", 10)
+        self.create_subscription(
+            RoleAssignment, f"/{self.vehicle_id}/survey_inherit",
+            self.on_survey_inherit, 10)
         self.holding = False
         self.hold_seconds = 0.0
         # Where the aircraft was when it started giving way, in the frozen
@@ -271,6 +298,10 @@ class MissionNode(Node):
         # where that is.
         self.paced = None
         self._paced_last_s = None
+        # The last position this vehicle reported, in the frozen frame. The
+        # pace starts from it rather than from a waypoint, so a survey resumed
+        # after a hold or after a relay slot carries on from the aircraft.
+        self.here = None
         self.pace_mps = float(self.get_parameter("survey_speed_mps").value)
         self.survey_start_s = float(self.get_parameter("survey_start_s").value)
         self.track_time_s = 0.0
@@ -292,6 +323,15 @@ class MissionNode(Node):
         if self.work == STATION:
             self.last_setpoint = [float(v) for v in
                                   frames.frozen_to_px4(self.station, self.home)]
+        if self.work == SURVEY and self.pace_mps > 0.0:
+            # The head of its first lane, which is where the ingress has to
+            # fly it before the run starts. A paced survey does not command
+            # anything of its own until the scenario's clock arrives, and the
+            # scenario's clock does not arrive until the ingress ends, so a
+            # vehicle with nothing here holds over its spawn and the two wait
+            # for each other until the ingress deadline.
+            self.last_setpoint = [float(v) for v in
+                                  frames.frozen_to_px4(path[0], self.home)]
         if self.work == TRACK:
             # The head of the line, which is also where the ingress flew it.
             # Holding here until the scenario's clock arrives is what keeps
@@ -338,6 +378,83 @@ class MissionNode(Node):
         return Track(start=start, end=end,
                      start_s=float(self.get_parameter("track_start_s").value),
                      speed_mps=speed)
+
+    def peer_path(self, peer: str):
+        """Rebuild another surveyor's lane path, at this vehicle's altitude.
+
+        Every input is already here: the box, the vehicles it is split between
+        and whether the strips are mirrored. Nothing about the other aircraft
+        is asked for over the radio except how far it got, which is the one
+        thing this vehicle cannot work out for itself.
+        """
+        if self.strips is None or peer not in self.surveyors:
+            return ()
+        ordered = sorted(self.surveyors)
+        start_north = bool(self.mirrored and ordered.index(peer) % 2 == 0)
+        return plan_path(
+            strip_of(self.strips, peer), self.area.sensor_radius_m,
+            float(self.get_parameter("survey_altitude_m").value),
+            start_north=start_north)
+
+    def hand_over_survey(self, epoch: int) -> None:
+        """Give up the unflown part of this strip and say where it starts.
+
+        Called once, when the role manager first sends this vehicle to a slot.
+        The executor keeps what it has already flown, so the two vehicles
+        cover the strip exactly once between them.
+        """
+        if self.work != SURVEY or self.inherited_from is not None:
+            return
+        work = self.mission.hand_over()
+        if not work:
+            return
+        message = RoleAssignment()
+        message.epoch = int(epoch)
+        message.node_id = self.vehicle_id
+        message.role = RoleAssignment.RELAY
+        message.slot = [float(v) for v in work[0]]
+        message.sender_id = self.vehicle_id
+        self.handed.publish(message)
+        self.get_logger().info(
+            f"{self.vehicle_id} handed over {len(work)} waypoint(s) from "
+            f"{work[0][0]:.1f}, {work[0][1]:.1f}")
+
+    def on_survey_inherit(self, msg: RoleAssignment) -> None:
+        """Take on a departed surveyor's unflown work, behind this vehicle's own.
+
+        The role manager on this aircraft has already decided that this
+        vehicle is the one to take it. What is left here is turning one
+        waypoint back into the rest of a plan.
+        """
+        peer = str(msg.node_id)
+        if self.work != SURVEY or not peer or peer == self.vehicle_id:
+            return
+        if self.inherited_from is not None:
+            return
+        try:
+            point = station.station_of(list(msg.slot))
+        except station.StationError as exc:
+            self.get_logger().error(f"unusable handover: {exc}")
+            return
+        if point is None:
+            return
+        path = self.peer_path(peer)
+        # Matched in the horizontal only. The leaver flew its lane in its own
+        # layer and this vehicle will fly the rest of it in this one.
+        at = next((i for i, w in enumerate(path)
+                   if abs(w[0] - point[0]) < HANDOVER_TOLERANCE_M
+                   and abs(w[1] - point[1]) < HANDOVER_TOLERANCE_M), None)
+        if at is None:
+            self.get_logger().error(
+                f"{peer} handed over work starting at {point[0]:.1f}, "
+                f"{point[1]:.1f}, which is not a waypoint of the strip this "
+                f"vehicle would have planned for it. Nothing inherited")
+            return
+        self.mission.inherit(path[at:])
+        self.inherited_from = peer
+        self.get_logger().info(
+            f"{self.vehicle_id} inherited {len(path) - at} waypoint(s) of "
+            f"{peer}'s strip, behind its own")
 
     def on_yield_hold(self, msg: Bool) -> None:
         """This vehicle's router saying whether it has to give way.
@@ -407,17 +524,28 @@ class MissionNode(Node):
         giving way stops it, so the leg after a hold is the same leg later,
         which is the rule chunk 4.5 wrote for a track and the same rule here.
         """
-        if self.work != SURVEY or self.pace_mps <= 0.0 or self.paced is None:
+        if self.work != SURVEY or self.pace_mps <= 0.0:
+            return
+        started = self.survey_time_s(now)
+        if (started is None or started < self.survey_start_s
+                or self.holding or self.slot_target is not None):
+            # Either the run has not reached this survey's start, or somebody
+            # else has the aircraft. Either way the pace is not running, and
+            # dropping the mark means the next tick measures from itself
+            # rather than charging the whole wait to one step.
+            self._paced_last_s = None
+            return
+        if self.paced is None:
+            if self.here is None:
+                return
+            # Wherever the ingress left it, which is the head of its first
+            # lane, or wherever a relay slot left it on the way back.
+            self.paced = self.here
+            self._paced_last_s = now
             return
         elapsed = 0.0 if self._paced_last_s is None else max(
             0.0, now - self._paced_last_s)
         self._paced_last_s = now
-        if self.holding or self.slot_target is not None:
-            return
-        started = self.survey_time_s(now)
-        if started is None or started < self.survey_start_s:
-            # Holding the head of its first lane until the scenario says go.
-            return
         target = self.mission.target()
         if target is None:
             return
@@ -483,6 +611,7 @@ class MissionNode(Node):
         """
         self.positions_seen += 1
         here = frames.px4_to_frozen((msg.x, msg.y, msg.z), self.home)
+        self.here = here
         # Giving way is stopping, and this vehicle stops wherever it happens
         # to be rather than where its plan wanted it. Latched once: `holding`
         # stays true for the length of the hold and this runs on every
@@ -502,10 +631,6 @@ class MissionNode(Node):
             # aircraft is now and neither has anything to advance here.
             return
         target = self.mission.update(here)
-        if self.paced is None:
-            # Where the ingress left it, which is the head of its first lane
-            # and the only place a paced survey may start from.
-            self.paced = here
         if target is None:
             return
         if self.pace_mps > 0.0:
@@ -548,6 +673,13 @@ class MissionNode(Node):
         self.slot_target = target
         self.slot_commands += 1
         if target is not None:
+            if self.work == SURVEY:
+                # Suspended rather than cancelled, and then the unflown part
+                # given away. The executor keeps its place either way, so a
+                # release puts this vehicle back on the waypoint it was flying
+                # to whether or not anybody took the rest.
+                self.mission.assign_relay(target)
+                self.hand_over_survey(msg.epoch)
             self.last_setpoint = [float(v) for v in
                                   frames.frozen_to_px4(target, self.home)]
             self.get_logger().info(
@@ -561,6 +693,8 @@ class MissionNode(Node):
         if self.work == STATION:
             self.last_setpoint = [float(v) for v in
                                   frames.frozen_to_px4(self.station, self.home)]
+        if self.work == SURVEY:
+            self.mission.release()
         if self.work == SURVEY and self.pace_mps > 0.0:
             # The commanded point restarts from the aircraft rather than from
             # where the lane had got to before the role manager took it. The
