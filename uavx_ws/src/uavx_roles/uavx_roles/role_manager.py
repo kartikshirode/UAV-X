@@ -103,6 +103,11 @@ class RoleManager(Node):
             "mission executor owns."))
         self.declare_parameter("role", "survey", _described(
             "the role this vehicle starts and returns to."))
+        self.declare_parameter("survey_peers", [], _described(
+            "the vehicles the survey box is split between, in any order. "
+            "Empty for a scenario with no survey. It decides which staying "
+            "vehicle takes an elected relay's unflown strip, and that has to "
+            "be exactly one of them or the work is flown twice."))
         self.declare_parameter("ledger_path", "", _described(
             "where to write what this vehicle's role did. Empty writes "
             "nothing."))
@@ -137,6 +142,15 @@ class RoleManager(Node):
         self.create_subscription(SwarmPacket, swarm + "/rx", self.on_rx, 50)
         self.command = self.create_publisher(
             RoleAssignment, "/" + self.vehicle_id + "/role_slot", 10)
+        # Chunk 4.7. Two vehicle-local topics carrying the survey handover.
+        # The executor beside this process says what it is dropping on the
+        # first, and this process tells it what to take on the second, having
+        # heard the other half over the radio.
+        self.inherit = self.create_publisher(
+            RoleAssignment, "/" + self.vehicle_id + "/survey_inherit", 10)
+        self.create_subscription(
+            RoleAssignment, "/" + self.vehicle_id + "/survey_handed",
+            self.on_handed, 10)
         self.create_subscription(
             VehicleLocalPosition, px4 + "/out/vehicle_local_position",
             self.on_position, PX4_QOS)
@@ -155,6 +169,13 @@ class RoleManager(Node):
         self.commands_sent = 0
         self.acked_epoch: Optional[int] = None
         self._seq = 0
+        self.surveyors = [str(v) for v
+                          in self.get_parameter("survey_peers").value]
+        # The first waypoint this vehicle's own executor gave up, waiting to
+        # go out with the acknowledgement. One point, because RoleAssignment
+        # carries one and the five messages are frozen; the vehicle that takes
+        # the work rebuilds the rest of the plan from the box it already has.
+        self.handed_point = None
 
         self.create_timer(1.0 / COMMAND_HZ, self.tick)
 
@@ -193,6 +214,8 @@ class RoleManager(Node):
             return
         if incoming.kind != pk.KIND_ROLE:
             return
+        if isinstance(incoming.payload, dict)                 and incoming.payload.get("kind") == election.ROLE_ACK:
+            self.hand_on(incoming.payload, now)
         outcome = self.tracker.apply(incoming.payload, now)
         if outcome == gr.ACCEPTED and self.tracker.grant is not None:
             held = self.tracker.grant
@@ -208,6 +231,55 @@ class RoleManager(Node):
             self.get_logger().info(
                 f"{self.vehicle_id} released, returning to {self.station}")
             self.publish_command(now)
+
+    # ------------------------------------------------------- the survey work
+    def on_handed(self, message: RoleAssignment) -> None:
+        """This vehicle's executor giving up the rest of its strip."""
+        point = tuple(float(v) for v in message.slot)
+        if not all(v == v for v in point):
+            return
+        self.handed_point = point
+
+    def takes_over(self, leaver: str) -> bool:
+        """Whether this vehicle is the one to fly what `leaver` dropped.
+
+        The lowest id of the surveyors that are still surveying. It has to be
+        exactly one of them: nobody and the strip is abandoned, more than one
+        and two aircraft fly the same lane at two altitudes, and both of those
+        read as a successful handover in a run record that counts cells.
+        """
+        if self.home_role != election.ROLE_SURVEY:
+            return False
+        staying = sorted(v for v in self.surveyors if v != leaver)
+        return bool(staying) and staying[0] == self.vehicle_id
+
+    def hand_on(self, payload, now: float) -> None:
+        """Somebody else's acknowledgement, carrying the work it gave up."""
+        leaver = str(payload.get("node_id") or "")
+        slot = payload.get("handover")
+        if not leaver or leaver == self.vehicle_id or slot is None:
+            return
+        if self.trace.inherited_from is not None:
+            return
+        try:
+            point = [float(v) for v in slot]
+        except (TypeError, ValueError):
+            return
+        if len(point) != 3 or not all(v == v for v in point):
+            return
+        if not self.takes_over(leaver):
+            return
+        message = RoleAssignment()
+        message.epoch = int(payload.get("epoch") or self.tracker.epoch)
+        message.node_id = leaver
+        message.role = int(election.ROLE_RELAY)
+        message.slot = point
+        message.sender_id = self.vehicle_id
+        self.inherit.publish(message)
+        self.trace.inherited(leaver, now)
+        self.get_logger().info(
+            f"{self.vehicle_id} taking over {leaver}'s strip from "
+            f"{point[0]:.1f}, {point[1]:.1f}")
 
     # ---------------------------------------------------------- what it wants
     def target(self, now: float):
@@ -239,6 +311,12 @@ class RoleManager(Node):
         self._seq += 1
         body = {"kind": election.ROLE_ACK, "epoch": int(epoch),
                 "node_id": self.vehicle_id}
+        if self.handed_point is not None:
+            # The work this vehicle gave up, riding out with the message that
+            # says it has arrived. Sent here rather than the moment the
+            # executor dropped it, because this is the packet the swarm was
+            # already going to carry and a second one would be a new kind.
+            body["handover"] = [float(v) for v in self.handed_point]
         outgoing = pk.control(self.vehicle_id, pk.KIND_ROLE, now, body,
                               sequence=self._seq)
         try:

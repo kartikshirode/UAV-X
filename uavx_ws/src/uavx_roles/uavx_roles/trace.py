@@ -41,6 +41,27 @@ class RoleTrace:
         self.lapsed_at: Optional[float] = None
         self.grants = 0
         self.renewals = 0
+        # Chunk 4.7. Whose survey strip this vehicle took over, and when.
+        # architecture.md section 4 step 5 says the elected relay's strip is
+        # handed to the members that stay rather than abandoned, and a run
+        # that finished the box because one vehicle happened to cover it
+        # anyway looks the same in a coverage figure as one that flew the
+        # handover. This is the difference.
+        self.inherited_from: Optional[str] = None
+        self.inherited_at: Optional[float] = None
+
+    # --------------------------------------------------------- the survey
+    def inherited(self, leaver: str, now: float) -> None:
+        """This vehicle took on the strip the elected relay gave up.
+
+        Once. A repeated acknowledgement from the same epoch is the same
+        handover arriving twice, and recording the second would say the work
+        moved again.
+        """
+        if self.inherited_from is not None:
+            return
+        self.inherited_from = str(leaver)
+        self.inherited_at = float(now)
 
     # ------------------------------------------------------------- the role
     def granted(self, epoch: int, slot: Optional[Point], now: float) -> None:
@@ -120,6 +141,8 @@ class RoleTrace:
             "moved": self.moved,
             "released": self.gave_it_back,
             "returned_to_station": self.came_home,
+            "inherited_from": self.inherited_from,
+            "inherited_at": stamp(self.inherited_at),
         }
 
 
@@ -147,6 +170,18 @@ def swarm_trace(rows) -> dict:
         "mover_returned_to_station": bool(holder
                                           and holder.get("returned_to_station")),
     }
+    takers = [row for row in rows if row.get("inherited_from")]
+    if len(takers) > 1:
+        raise ValueError(
+            "two vehicles report having taken over the same strip: "
+            + ", ".join(sorted(str(row.get("node")) for row in takers))
+            + ". Work flown twice covers the box and hides a swarm that "
+              "cannot decide who owns it")
+    if takers:
+        out["strip_reassigned_to"] = takers[0].get("node")
+        out["strip_reassigned_from"] = takers[0].get("inherited_from")
+        if takers[0].get("inherited_at") is not None:
+            out["strip_reassigned_at_s"] = takers[0].get("inherited_at")
     if holder is not None:
         out["relay_role_epoch"] = holder.get("epoch")
         out["relay_role_granted_at_s"] = holder.get("granted_at")
