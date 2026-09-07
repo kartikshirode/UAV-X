@@ -143,6 +143,21 @@ class CommsSpec:
     def survey_of(self, vehicle_id: str):
         return self.strips.get(vehicle_id)
 
+    def holds(self, vehicle_id: str):
+        """The point this vehicle stays at, or None if its work moves it.
+
+        A different question from `station_of`, which answers where the
+        ingress puts a vehicle before the run starts. All three kinds of work
+        begin at a named point and two of them then leave it, so a role
+        manager handed that point flies the aircraft back to it for the whole
+        run and the survey never happens. mission_integrated found this with
+        two surveyors pinned to the heads of their lanes and 4 of 120 cells
+        covered; encounter did not, because it runs no role managers.
+        """
+        if vehicle_id in self.tracks or vehicle_id in self.strips:
+            return None
+        return self.stations.get(vehicle_id)
+
     @property
     def surveyors(self) -> Tuple[str, ...]:
         """The vehicles the survey box is split between, in plan order."""

@@ -675,11 +675,16 @@ class MissionNode(Node):
         self.slot_target = target
         self.slot_commands += 1
         if target is not None:
-            if self.work == SURVEY:
+            if self.work == SURVEY and msg.role == RoleAssignment.RELAY:
                 # Suspended rather than cancelled, and then the unflown part
                 # given away. The executor keeps its place either way, so a
                 # release puts this vehicle back on the waypoint it was flying
                 # to whether or not anybody took the rest.
+                #
+                # Only on a relay grant. Any other point this vehicle is sent
+                # to is somewhere to be, not a reason to give its strip away,
+                # and the first version handed the whole plan over on the
+                # first message its role manager ever sent.
                 self.mission.assign_relay(target)
                 self.hand_over_survey(msg.epoch)
             self.last_setpoint = [float(v) for v in

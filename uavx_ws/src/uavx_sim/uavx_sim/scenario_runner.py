@@ -1943,7 +1943,7 @@ class Harness:
             self._start_node(label, role_manager_command(
                 vehicle.name, self.spawn_of(vehicle.name), self.comms,
                 self.ledger_paths[label],
-                station=self.comms.stations.get(vehicle.name)))
+                station=self.comms.holds(vehicle.name)))
 
         self.ledger_paths[GCS_LABEL] = self.ledger_dir / "gcs.json"
         self._start_node(GCS_LABEL, gcs_command(
